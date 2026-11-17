@@ -1,6 +1,6 @@
 //! The flat variable-length file record CPZ1 and CPZ2 share (CPZ3 inherited it):
 //! length, size, offset, offset high, checksum, key, NUL-terminated name.
-use super::Entry;
+use super::{Entry, LookupTable, fold_into, fold_vec};
 use crate::FormatError;
 
 pub(super) fn word(bytes: &[u8]) -> u32 {
@@ -74,52 +74,60 @@ pub(super) fn records(
     Ok((entries, keys))
 }
 
-/// The original comparison: ASCII letters fold, Shift-JIS pairs compare exactly.
-fn fold(name: &[u8]) -> Vec<u8> {
-    let mut key = name.to_vec();
-    let mut at = 0;
-    while at < key.len() {
-        if matches!(key[at], 0x81..=0x9f | 0xe0..=0xfc) {
-            at += 2;
-        } else {
-            key[at] = key[at].to_ascii_uppercase();
-            at += 1;
-        }
-    }
-    key
+/// Precomputed lookup tables for flat CPZ1/CPZ2 indexes, supporting $O(1)$ exact
+/// `find` and case-folded `lookup`, plus allocation-free stored-name `lookup_prefix`.
+#[derive(Debug, Default)]
+pub(super) struct FlatLookup {
+    table: LookupTable,
+    folded_names: Vec<Box<[u8]>>,
 }
 
-pub(super) fn find(entries: &[Entry], name: &[u8]) -> Result<usize, FormatError> {
-    let mut matches = entries.iter().enumerate().filter(|(_, e)| e.name == name);
-    let first = matches
-        .next()
-        .ok_or(FormatError("CPZ filename not found"))?
-        .0;
-    if matches.next().is_some() {
-        return Err(FormatError("ambiguous CPZ basename"));
-    }
-    Ok(first)
-}
-
-/// First entry whose name equals `name` (or, with `prefix`, starts with it),
-/// folding ASCII case on both sides. Stored names keep their mixed case.
-pub(super) fn lookup(
-    entries: &[Entry],
-    name: &[u8],
-    prefix: bool,
-) -> Result<Option<usize>, FormatError> {
-    if name.contains(&0) {
-        return Err(FormatError("invalid CPZ lookup name"));
-    }
-    let key = fold(name);
-    Ok(entries.iter().position(|e| {
-        let stored = fold(&e.name);
-        if prefix {
-            stored.starts_with(&key)
-        } else {
-            stored == key
+impl FlatLookup {
+    pub(super) fn from_entries(entries: &[Entry]) -> Self {
+        let folded_names = entries
+            .iter()
+            .map(|e| fold_vec(&e.name).into_boxed_slice())
+            .collect();
+        Self {
+            table: LookupTable::from_entries(entries),
+            folded_names,
         }
-    }))
+    }
+
+    pub(super) fn find(&self, name: &[u8]) -> Result<usize, FormatError> {
+        self.table
+            .find(name, "CPZ filename not found", "ambiguous CPZ basename")
+    }
+
+    /// First entry whose name equals `name`, folding ASCII case on both sides.
+    pub(super) fn lookup(&self, name: &[u8]) -> Result<Option<usize>, FormatError> {
+        if name.contains(&0) {
+            return Err(FormatError("invalid CPZ lookup name"));
+        }
+        Ok(self.table.lookup(name))
+    }
+
+    /// First entry whose name starts with `stem`, folding ASCII case on both sides.
+    pub(super) fn lookup_prefix(&self, stem: &[u8]) -> Result<Option<usize>, FormatError> {
+        if stem.contains(&0) {
+            return Err(FormatError("invalid CPZ lookup name"));
+        }
+        if stem.len() <= 64 {
+            let mut buf = [0u8; 64];
+            let key = &mut buf[..stem.len()];
+            fold_into(stem, key);
+            Ok(self
+                .folded_names
+                .iter()
+                .position(|stored| stored.starts_with(key)))
+        } else {
+            let key = fold_vec(stem);
+            Ok(self
+                .folded_names
+                .iter()
+                .position(|stored| stored.starts_with(&key)))
+        }
+    }
 }
 
 pub(super) fn read_raw<R: std::io::Read + std::io::Seek>(

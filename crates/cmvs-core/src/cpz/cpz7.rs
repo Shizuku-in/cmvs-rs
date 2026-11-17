@@ -4,7 +4,7 @@
 //! All supported games use the same decoder with per-archive parameters.
 //!
 //! Reference: Darkness-TX
-use super::{ArchiveError, Entry, crypto, data_checksum};
+use super::{ArchiveError, Entry, LookupTable, crypto, data_checksum};
 use crate::FormatError;
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -60,6 +60,7 @@ pub struct Cpz7Layout {
 pub struct Cpz7Index {
     pub layout: Cpz7Layout,
     entries: Vec<Entry>,
+    lookup: LookupTable,
     entry_keys: Vec<(u32, u32)>,
     keys: crypto::Keys,
     pub(super) parameters: Cpz7Parameters,
@@ -222,9 +223,11 @@ impl Cpz7Index {
                 return Err(FormatError("CPZ7 file count/length mismatch").into());
             }
         }
+        let lookup = LookupTable::from_entries(&entries);
         Ok(Self {
             layout,
             entries,
+            lookup,
             entry_keys,
             keys,
             parameters,
@@ -238,19 +241,8 @@ impl Cpz7Index {
 
     /// Basename lookup only; duplicate basenames require selecting an entry index.
     pub fn find(&self, name: &[u8]) -> Result<usize, FormatError> {
-        let mut matches = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.name == name);
-        let first = matches
-            .next()
-            .ok_or(FormatError("CPZ7 filename not found"))?
-            .0;
-        if matches.next().is_some() {
-            return Err(FormatError("ambiguous CPZ7 basename"));
-        }
-        Ok(first)
+        self.lookup
+            .find(name, "CPZ7 filename not found", "ambiguous CPZ7 basename")
     }
 
     /// First entry in archive order matching ASCII-folded query bytes.
@@ -259,17 +251,7 @@ impl Cpz7Index {
         if name.len() > 4096 || name.contains(&0) {
             return Err(FormatError("invalid CPZ7 lookup name"));
         }
-        let mut key = name.to_vec();
-        let mut at = 0;
-        while at < key.len() {
-            if matches!(key[at], 0x81..=0x9f | 0xe0..=0xfc) {
-                at += 2;
-            } else {
-                key[at] = key[at].to_ascii_lowercase();
-                at += 1;
-            }
-        }
-        Ok(self.entries.iter().position(|entry| entry.name == key))
+        Ok(self.lookup.lookup(name))
     }
 
     pub fn read_entry<R: Read + Seek>(

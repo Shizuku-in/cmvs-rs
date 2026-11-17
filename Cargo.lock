@@ -325,6 +325,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmvs-bench"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
+ "cmvs-font",
+ "cmvs-video",
+]
+
+[[package]]
 name = "cmvs-console"
 version = "0.1.0"
 dependencies = [

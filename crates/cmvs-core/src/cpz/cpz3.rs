@@ -1,5 +1,5 @@
 //! CPZ3's flat index and shared index/resource cipher.
-use super::{ArchiveError, Entry};
+use super::{ArchiveError, Entry, LookupTable};
 use crate::FormatError;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -95,6 +95,7 @@ impl Cpz3Layout {
 pub struct Cpz3Index {
     pub layout: Cpz3Layout,
     entries: Vec<Entry>,
+    lookup: LookupTable,
     entry_keys: Vec<u32>,
 }
 
@@ -158,9 +159,11 @@ impl Cpz3Index {
         }
         // The original stops at file_count. Real indexes can have a large
         // encrypted padding region; data_offset includes that whole region.
+        let lookup = LookupTable::from_entries(&entries);
         Ok(Self {
             layout,
             entries,
+            lookup,
             entry_keys,
         })
     }
@@ -170,19 +173,8 @@ impl Cpz3Index {
     }
 
     pub fn find(&self, name: &[u8]) -> Result<usize, FormatError> {
-        let mut matches = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.name == name);
-        let first = matches
-            .next()
-            .ok_or(FormatError("CPZ3 filename not found"))?
-            .0;
-        if matches.next().is_some() {
-            return Err(FormatError("ambiguous CPZ3 basename"));
-        }
-        Ok(first)
+        self.lookup
+            .find(name, "CPZ3 filename not found", "ambiguous CPZ3 basename")
     }
 
     /// Fold ASCII query bytes, preserving Shift-JIS pairs, and select the first match.
@@ -190,8 +182,7 @@ impl Cpz3Index {
         if name.len() >= 64 || name.contains(&0) {
             return Err(FormatError("invalid CPZ3 lookup name"));
         }
-        let key = super::lookup_key(name)?;
-        Ok(self.entries.iter().position(|e| e.name == key))
+        Ok(self.lookup.lookup(name))
     }
 
     pub fn read_entry<R: Read + Seek>(

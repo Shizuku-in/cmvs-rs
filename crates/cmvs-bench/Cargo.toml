@@ -1,0 +1,20 @@
+[package]
+name = "cmvs-bench"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Zero-dependency microbenchmark suite for CMVS engine hot paths"
+
+[[bin]]
+name = "cmvs-bench"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+cmvs-core = { path = "../cmvs-core" }
+cmvs-video = { path = "../cmvs-video" }
+cmvs-font = { path = "../cmvs-font" }

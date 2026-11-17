@@ -1,6 +1,6 @@
 //! Bounded CPZ5 decoding with packing modes 5 through 9.
 //! Header checksum and encrypted index MD5 are always verified.
-use super::{ArchiveError, Entry, crypto, data_checksum};
+use super::{ArchiveError, Entry, LookupTable, crypto, data_checksum};
 use crate::FormatError;
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -240,6 +240,7 @@ pub struct Cpz5Index {
     pub layout: Cpz5Layout,
     pub mode: Cpz5Mode,
     entries: Vec<Entry>,
+    lookup: LookupTable,
     entry_keys: Vec<(u32, u32)>,
     keys: crypto::Keys,
     file_bytes: u64,
@@ -286,31 +287,47 @@ struct Directory {
     key: u32,
 }
 
+struct RawCpz5Index {
+    layout: Cpz5Layout,
+    file_bytes: u64,
+    header: [u8; CPZ5_HEADER_SIZE],
+    encrypted: Vec<u8>,
+}
+
 impl Cpz5Index {
     pub fn read<R: Read + Seek>(reader: &mut R) -> Result<Self, ArchiveError> {
-        // The header does not carry the packing-mode setting. Without explicit
-        // startup settings, require a unique fully bounded index interpretation.
+        // Read and authenticate the encrypted index once, then probe candidate
+        // packing modes in descending order and stop at the first valid match.
+        let mut raw = Self::read_encrypted(reader)?;
+        let mut scratch = Vec::new();
         let mut found = None;
         let mut first_error = None;
-        for mode in [
+        let candidates = [
             Cpz5Mode::Mode9,
             Cpz5Mode::Mode8,
             Cpz5Mode::Mode7,
             Cpz5Mode::Mode6,
             Cpz5Mode::Mode5,
-        ] {
-            match Self::read_with_mode(reader, mode) {
-                Ok(index) if index.entries.is_empty() => return Ok(index),
+        ];
+        for (attempt, mode) in candidates.into_iter().enumerate() {
+            let bytes = if attempt + 1 == candidates.len() {
+                raw.encrypted.as_mut_slice()
+            } else {
+                scratch.resize(raw.encrypted.len(), 0);
+                scratch.copy_from_slice(&raw.encrypted);
+                scratch.as_mut_slice()
+            };
+            match Self::decode_encrypted(
+                raw.layout.clone(),
+                raw.file_bytes,
+                &raw.header,
+                bytes,
+                mode,
+            ) {
                 Ok(index) => {
-                    if found.is_some() {
-                        return Err(FormatError(
-                            "ambiguous CPZ5 packing mode; specify startup settings",
-                        )
-                        .into());
-                    }
                     found = Some(index);
+                    break;
                 }
-                Err(error @ ArchiveError::Io(_)) => return Err(error),
                 Err(error) => {
                     if first_error.is_none() {
                         first_error = Some(error);
@@ -325,6 +342,17 @@ impl Cpz5Index {
         reader: &mut R,
         mode: Cpz5Mode,
     ) -> Result<Self, ArchiveError> {
+        let mut raw = Self::read_encrypted(reader)?;
+        Self::decode_encrypted(
+            raw.layout,
+            raw.file_bytes,
+            &raw.header,
+            &mut raw.encrypted,
+            mode,
+        )
+    }
+
+    fn read_encrypted<R: Read + Seek>(reader: &mut R) -> Result<RawCpz5Index, ArchiveError> {
         let file_bytes = reader.seek(SeekFrom::End(0))?;
         reader.seek(SeekFrom::Start(0))?;
         let mut header = [0; CPZ5_HEADER_SIZE];
@@ -337,13 +365,28 @@ impl Cpz5Index {
         if index_len > crate::MAX_PAYLOAD as u64 {
             return Err(FormatError("CPZ5 index exceeds research allocation limit").into());
         }
-        let mut bytes = vec![0; index_len as usize];
-        reader.read_exact(&mut bytes)?;
-        if crypto::md5(&bytes) != header[16..32] {
+        let mut encrypted = vec![0; index_len as usize];
+        reader.read_exact(&mut encrypted)?;
+        if crypto::md5(&encrypted) != header[16..32] {
             return Err(FormatError("CPZ5 encrypted index digest mismatch").into());
         }
-        let keys = mode.keys(&header);
-        mode.outer_index(&mut bytes, keys.key);
+        Ok(RawCpz5Index {
+            layout,
+            file_bytes,
+            header,
+            encrypted,
+        })
+    }
+
+    fn decode_encrypted(
+        layout: Cpz5Layout,
+        file_bytes: u64,
+        header: &[u8; CPZ5_HEADER_SIZE],
+        bytes: &mut [u8],
+        mode: Cpz5Mode,
+    ) -> Result<Self, ArchiveError> {
+        let keys = mode.keys(header);
+        mode.outer_index(bytes, keys.key);
         let (dirs, files) = bytes.split_at_mut(layout.directory_index_bytes as usize);
         mode.directory_index(dirs, &keys);
         let mut directories = Vec::new();
@@ -412,10 +455,12 @@ impl Cpz5Index {
                 return Err(FormatError("CPZ5 file count/length mismatch").into());
             }
         }
+        let lookup = LookupTable::from_entries(&entries);
         Ok(Self {
             layout,
             mode,
             entries,
+            lookup,
             entry_keys,
             keys,
             file_bytes,
@@ -428,19 +473,8 @@ impl Cpz5Index {
 
     /// Basename lookup only; duplicate basenames require selecting an entry index.
     pub fn find(&self, name: &[u8]) -> Result<usize, FormatError> {
-        let mut matches = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.name == name);
-        let first = matches
-            .next()
-            .ok_or(FormatError("CPZ5 filename not found"))?
-            .0;
-        if matches.next().is_some() {
-            return Err(FormatError("ambiguous CPZ5 basename"));
-        }
-        Ok(first)
+        self.lookup
+            .find(name, "CPZ5 filename not found", "ambiguous CPZ5 basename")
     }
 
     /// Fold the query and return the first matching basename in archive order.
@@ -448,8 +482,7 @@ impl Cpz5Index {
         if name.len() >= 64 || name.contains(&0) {
             return Err(FormatError("invalid CPZ5 lookup name"));
         }
-        let key = super::lookup_key(name)?;
-        Ok(self.entries.iter().position(|entry| entry.name == key))
+        Ok(self.lookup.lookup(name))
     }
 
     pub fn read_entry<R: Read + Seek>(
@@ -552,5 +585,61 @@ impl Cpz5Layout {
             data_offset,
             data_bytes: file_bytes - data_offset,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cpz::{ArchiveDirectory, ArchiveFile};
+    use std::io::Cursor;
+
+    struct CountingReader<R> {
+        inner: R,
+        bytes_read: usize,
+    }
+
+    impl<R: Read> Read for CountingReader<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.bytes_read += n;
+            Ok(n)
+        }
+    }
+
+    impl<R: Seek> Seek for CountingReader<R> {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn cpz5_open_reads_index_once_and_breaks_on_first_valid_mode() {
+        let dirs = [ArchiveDirectory {
+            name: b"pack".to_vec(),
+            files: (0..32)
+                .map(|i| ArchiveFile {
+                    name: format!("entry_{i:04}.bin").into_bytes(),
+                    data: vec![i as u8; 16],
+                })
+                .collect(),
+        }];
+        for mode in [Cpz5Mode::Mode9, Cpz5Mode::Mode5] {
+            let mut buf = Cursor::new(Vec::new());
+            Cpz5Index::write(&mut buf, mode, &dirs).unwrap();
+            let archive = buf.into_inner();
+            let layout = Cpz5Layout::parse(&archive[..CPZ5_HEADER_SIZE], archive.len() as u64)
+                .expect("valid CPZ5 header");
+
+            let mut reader = CountingReader {
+                inner: Cursor::new(&archive),
+                bytes_read: 0,
+            };
+            let index = Cpz5Index::read(&mut reader).unwrap();
+            assert_eq!(index.mode, mode);
+            // Header + encrypted index are read from the underlying stream exactly once
+            // (never 5x across candidate modes).
+            assert_eq!(reader.bytes_read as u64, layout.data_offset);
+        }
     }
 }

@@ -5,19 +5,89 @@ use crate::font_library::FontLibrary;
 use crate::glyph_cache::GlyphCache;
 use ab_glyph::{Font, FontVec, ScaleFont, point};
 use cmvs_core::{
-    FormatError, TextEncoding, render::camera::CameraHost, render::message::GlyphRasterizer,
-    render::message::MessageHost, render::message::RecordedGlyph, render::raster::RgbaImage,
-    render::scene::SceneHost, render::scene::SceneObject,
+    FormatError, TextEncoding,
+    render::camera::CameraHost,
+    render::message::{AUXILIARY_TEXTS, GlyphRasterizer, MessageHost, RecordedGlyph, TEXT_OBJECTS},
+    render::raster::RgbaImage,
+    render::scene::{SceneHost, SceneObject},
 };
 use std::{
     error::Error,
     fs::File,
+    hash::{Hash, Hasher},
     io::Read,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 const MAX_FONT: usize = 32 * 1024 * 1024;
+
+#[derive(Clone)]
+struct CachedGlyphScene {
+    fingerprint: u128,
+    objects: Vec<SceneObject>,
+}
+
+/// Deterministic two-lane 128-bit streaming hasher for visible glyph-scene state.
+struct GlyphSceneHasher {
+    lo: u64,
+    hi: u64,
+}
+
+impl GlyphSceneHasher {
+    fn new() -> Self {
+        Self {
+            lo: 0xcbf2_9ce4_8422_2325,
+            hi: 0x8422_2325_cbf2_9ce4,
+        }
+    }
+
+    fn mix64(mut x: u64) -> u64 {
+        x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        x ^ (x >> 31)
+    }
+
+    fn finish128(self) -> u128 {
+        let lo = Self::mix64(self.lo);
+        let hi = Self::mix64(self.hi ^ lo.rotate_left(17));
+        (u128::from(hi) << 64) | u128::from(lo)
+    }
+}
+
+impl Hasher for GlyphSceneHasher {
+    fn finish(&self) -> u64 {
+        Self::mix64(self.lo ^ self.hi)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let (chunks, tail) = bytes.as_chunks::<8>();
+        for chunk in chunks {
+            let word = u64::from_le_bytes(*chunk);
+            self.lo = (self.lo ^ word)
+                .rotate_left(23)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                .wrapping_add(0x517c_c1b7_2722_0a95);
+            self.hi = (self.hi.wrapping_add(word ^ 0xa076_1d64_78bd_642f))
+                .rotate_right(19)
+                .wrapping_mul(0xe703_7ed1_a0b4_28db);
+        }
+        if !tail.is_empty() {
+            let mut last = 0u64;
+            for (i, &b) in tail.iter().enumerate() {
+                last |= u64::from(b) << (i * 8);
+            }
+            last |= (tail.len() as u64) << 56;
+            self.lo = (self.lo ^ last)
+                .rotate_left(11)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            self.hi = (self.hi ^ last.rotate_left(32)).wrapping_mul(0xe703_7ed1_a0b4_28db);
+        }
+    }
+}
 
 /// The explicit font file (TTC face selected explicitly) serves the built-in default
 /// face; faces named by glyphs are resolved through `FontLibrary`.
@@ -25,7 +95,13 @@ const MAX_FONT: usize = 32 * 1024 * 1024;
 pub struct FontRenderer {
     encoding: TextEncoding,
     library: Arc<Mutex<FontLibrary>>,
+    library_generation: Arc<AtomicU64>,
     cache: GlyphCache,
+    scene_cache: Option<CachedGlyphScene>,
+    #[cfg(test)]
+    scene_cache_hits: u64,
+    #[cfg(test)]
+    glyph_build_calls: u64,
 }
 
 struct PreviewMetrics(Arc<Mutex<FontLibrary>>, TextEncoding);
@@ -283,7 +359,13 @@ impl FontRenderer {
         Ok(Self {
             encoding: TextEncoding::default(),
             library: Arc::new(Mutex::new(FontLibrary::new(Arc::new(font)))),
+            library_generation: Arc::new(AtomicU64::new(0)),
             cache: GlyphCache::default(),
+            scene_cache: None,
+            #[cfg(test)]
+            scene_cache_hits: 0,
+            #[cfg(test)]
+            glyph_build_calls: 0,
         })
     }
     /// Adds a font for characters the selected face and the default font lack.
@@ -297,6 +379,7 @@ impl FontRenderer {
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))?
             .add_fallback(Arc::new(font));
+        self.library_generation.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
     /// Uses `library` (sharing its explicit default font) for every face.
@@ -304,7 +387,13 @@ impl FontRenderer {
         Self {
             encoding: TextEncoding::default(),
             library: Arc::new(Mutex::new(library)),
+            library_generation: Arc::new(AtomicU64::new(0)),
             cache: GlyphCache::default(),
+            scene_cache: None,
+            #[cfg(test)]
+            scene_cache_hits: 0,
+            #[cfg(test)]
+            glyph_build_calls: 0,
         }
     }
     /// Select the game text encoding before installing this renderer's metrics.
@@ -314,6 +403,7 @@ impl FontRenderer {
     pub fn with_text_encoding(mut self, encoding: TextEncoding) -> Self {
         self.encoding = encoding;
         self.cache = GlyphCache::default();
+        self.scene_cache = None;
         self
     }
     /// Matches this renderer's fonts; OpenType ink bounds replace GDI's
@@ -332,6 +422,7 @@ impl FontRenderer {
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))?
             .set_user_directory(directory);
+        self.library_generation.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
     pub fn family_name(&self, face: &[u8]) -> Result<String, FormatError> {
@@ -347,6 +438,7 @@ impl FontRenderer {
             .map_err(|_| FormatError("font library lock poisoned"))?;
         let face = library.register_unicode(name)?;
         library.face(&face, self.encoding)?;
+        self.library_generation.fetch_add(1, Ordering::Relaxed);
         Ok(face)
     }
     pub fn import_font(
@@ -383,12 +475,14 @@ impl FontRenderer {
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))?;
         let key = library.import_file(bytes, index)?;
-        if let Some(name) = name {
+        let out = if let Some(name) = name {
             library.name_imported_font(&name, &key)?;
-            Ok(name)
+            name
         } else {
-            Ok(key)
-        }
+            key
+        };
+        self.library_generation.fetch_add(1, Ordering::Relaxed);
+        Ok(out)
     }
     fn font(&self, face: &[u8], ch: char) -> Result<Arc<FontVec>, FormatError> {
         self.library
@@ -501,7 +595,133 @@ impl FontRenderer {
         &mut self,
         messages: &MessageHost,
     ) -> Result<Vec<SceneObject>, FormatError> {
-        messages.build_glyph_objects(self)
+        let fingerprint = self.glyph_scene_fingerprint(messages);
+        if let (Some(fp), Some(cached)) = (fingerprint, self.scene_cache.as_ref())
+            && cached.fingerprint == fp
+        {
+            #[cfg(test)]
+            {
+                self.scene_cache_hits += 1;
+            }
+            return Ok(cached.objects.clone());
+        }
+        #[cfg(test)]
+        {
+            self.glyph_build_calls += 1;
+        }
+        let objects = messages.build_glyph_objects(self)?;
+        if let Some(fingerprint) = fingerprint {
+            self.scene_cache = Some(CachedGlyphScene {
+                fingerprint,
+                objects: objects.clone(),
+            });
+        }
+        Ok(objects)
+    }
+
+    fn glyph_scene_fingerprint(&self, messages: &MessageHost) -> Option<u128> {
+        let mut h = GlyphSceneHasher::new();
+        (
+            self.encoding,
+            self.library_generation.load(Ordering::Relaxed),
+            messages.screen_size(),
+            messages.allows_logical_text_scale(),
+        )
+            .hash(&mut h);
+
+        let mut visible_glyphs = 0usize;
+        for slot in 0..TEXT_OBJECTS {
+            let Some(text) = messages
+                .text(slot)
+                .filter(|t| t.visible && !t.glyphs.is_empty())
+            else {
+                continue;
+            };
+            let scale = f32::from_bits(text.scale_bits);
+            if !scale.is_finite() || scale < 0.0 {
+                return None;
+            }
+            (
+                0x11u8,
+                slot as u8,
+                text.scale_bits,
+                text.logical_size,
+                text.position,
+                text.layer,
+            )
+                .hash(&mut h);
+            for glyph in text.glyphs.iter().filter(|g| g.shown && g.opacity != 0) {
+                visible_glyphs += 1;
+                if visible_glyphs > 512 {
+                    return None;
+                }
+                (
+                    0x12u8,
+                    glyph.face.as_ref(),
+                    glyph.bold,
+                    glyph.revision_alpha,
+                    glyph.code,
+                    glyph.position,
+                    glyph.size,
+                    glyph.colors,
+                    glyph.gradient,
+                    glyph.outline,
+                    glyph.opacity,
+                    glyph.reveal_width,
+                )
+                    .hash(&mut h);
+            }
+            0x1fu8.hash(&mut h);
+        }
+
+        for slot in 0..AUXILIARY_TEXTS {
+            let Some(group) = messages.auxiliary_text(slot) else {
+                continue;
+            };
+            let mut attached = group.attached_glyphs().peekable();
+            if attached.peek().is_none() {
+                continue;
+            }
+            let Ok(origin) = group.glyph_origin() else {
+                return None;
+            };
+            let texture_mode = group
+                .object
+                .draw
+                .as_ref()
+                .map_or(0, |draw| draw.texture_mode);
+            (0x21u8, slot as u8, origin, texture_mode).hash(&mut h);
+            match &group.secondary_image {
+                None => 0u8.hash(&mut h),
+                Some(img) => (
+                    1u8,
+                    img.filter,
+                    img.name.as_slice(),
+                    img.pixels.cache_key(),
+                    img.alpha,
+                    img.surface,
+                )
+                    .hash(&mut h),
+            }
+            for glyph in attached {
+                (
+                    0x22u8,
+                    glyph.face.as_ref(),
+                    glyph.revision_alpha,
+                    glyph.code,
+                    glyph.position,
+                    glyph.size,
+                    glyph.colors,
+                    glyph.gradient,
+                    glyph.outline,
+                    glyph.layer,
+                )
+                    .hash(&mut h);
+            }
+            0x2fu8.hash(&mut h);
+        }
+
+        Some(h.finish128())
     }
 }
 
@@ -728,6 +948,319 @@ mod tests {
     fn invalid_font_data_or_collection_face_is_an_error() {
         assert!(FontRenderer::from_bytes(vec![], 0).is_err());
         assert!(FontRenderer::from_bytes(b"ttcf".to_vec(), 1).is_err());
+    }
+
+    fn minimal_test_ttf() -> Vec<u8> {
+        let mut cmap = Vec::new();
+        for v in [0u16, 1, 3, 1] {
+            cmap.extend(v.to_be_bytes());
+        }
+        cmap.extend(12u32.to_be_bytes());
+        for v in [
+            4u16,
+            32,
+            0,
+            4,
+            4,
+            1,
+            0,
+            0x0041,
+            0xffff,
+            0,
+            0x0041,
+            0xffff,
+            (-64i16) as u16,
+            1,
+            0,
+            0,
+        ] {
+            cmap.extend(v.to_be_bytes());
+        }
+        let mut glyf = Vec::new();
+        for v in [1i16, 0, 0, 500, 700] {
+            glyf.extend(v.to_be_bytes());
+        }
+        glyf.extend(3u16.to_be_bytes());
+        glyf.extend(0u16.to_be_bytes());
+        glyf.extend([0x01u8; 4]);
+        for v in [0i16, 500, 0, -500, 0, 0, 700, -700] {
+            glyf.extend(v.to_be_bytes());
+        }
+        let mut head = vec![0u8; 54];
+        head[..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        head[12..16].copy_from_slice(&0x5f0f_3cf5u32.to_be_bytes());
+        head[18..20].copy_from_slice(&1000u16.to_be_bytes());
+        head[38..40].copy_from_slice(&1000i16.to_be_bytes());
+        head[40..42].copy_from_slice(&1000i16.to_be_bytes());
+        head[46..48].copy_from_slice(&8u16.to_be_bytes());
+        head[48..50].copy_from_slice(&2i16.to_be_bytes());
+        let mut hhea = vec![0u8; 36];
+        hhea[..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        hhea[4..6].copy_from_slice(&800i16.to_be_bytes());
+        hhea[6..8].copy_from_slice(&(-200i16).to_be_bytes());
+        hhea[10..12].copy_from_slice(&1000u16.to_be_bytes());
+        hhea[34..36].copy_from_slice(&2u16.to_be_bytes());
+        let mut hmtx = Vec::new();
+        for (adv, lsb) in [(500u16, 0i16), (600u16, 0i16)] {
+            hmtx.extend(adv.to_be_bytes());
+            hmtx.extend(lsb.to_be_bytes());
+        }
+        let mut loca = Vec::new();
+        for off in [0u16, 0, (glyf.len() / 2) as u16] {
+            loca.extend(off.to_be_bytes());
+        }
+        let mut maxp = vec![0u8; 32];
+        maxp[..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        maxp[4..6].copy_from_slice(&2u16.to_be_bytes());
+        maxp[6..8].copy_from_slice(&4u16.to_be_bytes());
+        maxp[8..10].copy_from_slice(&1u16.to_be_bytes());
+        let mut name = Vec::new();
+        let family_utf16: Vec<u8> = "BenchFont"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect();
+        for v in [0u16, 1, 18] {
+            name.extend(v.to_be_bytes());
+        }
+        for v in [3u16, 1, 0x0409, 1, family_utf16.len() as u16, 0] {
+            name.extend(v.to_be_bytes());
+        }
+        name.extend(family_utf16);
+
+        let tables: [(&[u8; 4], Vec<u8>); 8] = [
+            (b"cmap", cmap),
+            (b"glyf", glyf),
+            (b"head", head),
+            (b"hhea", hhea),
+            (b"hmtx", hmtx),
+            (b"loca", loca),
+            (b"maxp", maxp),
+            (b"name", name),
+        ];
+        let mut sfnt = Vec::new();
+        sfnt.extend(0x0001_0000u32.to_be_bytes());
+        sfnt.extend((tables.len() as u16).to_be_bytes());
+        sfnt.extend(128u16.to_be_bytes());
+        sfnt.extend(3u16.to_be_bytes());
+        sfnt.extend(0u16.to_be_bytes());
+        let mut offset = 12 + 16 * tables.len();
+        let mut payload = Vec::new();
+        for (tag, data) in &tables {
+            sfnt.extend_from_slice(*tag);
+            sfnt.extend(0u32.to_be_bytes());
+            sfnt.extend((offset as u32).to_be_bytes());
+            sfnt.extend((data.len() as u32).to_be_bytes());
+            payload.extend_from_slice(data);
+            let pad = (4 - data.len() % 4) % 4;
+            payload.resize(payload.len() + pad, 0);
+            offset += data.len() + pad;
+        }
+        sfnt.extend(payload);
+        sfnt
+    }
+
+    fn ps2_script(code: &[u8], text: &[u8]) -> cmvs_core::format::ps3::Script {
+        let mut payload = 0u32.to_le_bytes().to_vec();
+        payload.extend_from_slice(code);
+        payload.extend_from_slice(text);
+        let mut raw = b"PS2A".to_vec();
+        for n in [
+            48,
+            0,
+            0,
+            1,
+            code.len() as u32,
+            0,
+            text.len() as u32,
+            0,
+            0,
+            payload.len() as u32,
+            0,
+        ] {
+            raw.extend(n.to_le_bytes());
+        }
+        raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        cmvs_core::format::ps3::Script::decode(&raw).unwrap()
+    }
+
+    fn push_call(code: &mut Vec<u8>, command: u16, words: &[u32]) {
+        for &word in words {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(word.to_le_bytes());
+        }
+        code.extend(command.to_le_bytes());
+    }
+
+    #[test]
+    fn idle_glyph_scene_cache_hits_and_invalidates_on_reveal_opacity_and_visibility_changes() {
+        use cmvs_core::{
+            host::input::ActionInput,
+            host::settings::TextOutputSettings,
+            profile::Semantics,
+            vm::dispatch::{self, Hosts},
+            vm::machine::{Machine, Step},
+        };
+
+        let mut font = FontRenderer::from_bytes(minimal_test_ttf(), 0).unwrap();
+        let mut messages = MessageHost::default();
+        messages.set_glyph_metrics(font.metrics());
+        messages.set_record_output(true);
+
+        // Script:
+        // 1) 0x215d create window 0 bound to text 7
+        // 2) 0x214e show window 0 (shown = 1)
+        // 3) 0x2152 output text string 0 ("AA\0") under reveal_mode 2 (width wipe)
+        // 4) 0x214a clear window 0
+        // 5) 0x2152 output text string 0 ("AA\0") under reveal_mode 1 (opacity fade)
+        // 6) 0x214e hide window 0 (shown = 0)
+        // 7) 0x214e show window 0 (shown = 1)
+        let mut code = Vec::new();
+        push_call(&mut code, 0x215d, &[720, 1280, 120, 400, 0, 0, 7, 0]);
+        push_call(&mut code, 0x214e, &[1, 0]);
+        push_call(&mut code, 0x2152, &[0, u32::MAX, 0]);
+        push_call(&mut code, 0x214a, &[0]);
+        push_call(&mut code, 0x2152, &[0, u32::MAX, 0]);
+        push_call(&mut code, 0x214e, &[0, 0]);
+        push_call(&mut code, 0x214e, &[1, 0]);
+        let script = ps2_script(&code, b"AA\0");
+        let mut vm = Machine::new(&script).unwrap();
+
+        let step_window_cmd = |vm: &mut Machine, messages: &mut MessageHost| {
+            while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            let mut hosts = Hosts {
+                messages: Some(messages),
+                ..Hosts::default()
+            };
+            let flow = dispatch::run(Semantics::Root, vm, &mut hosts).unwrap();
+            assert!(flow.is_some());
+        };
+        let step_record_text = |vm: &mut Machine, messages: &mut MessageHost| {
+            if vm.pending_system().is_none() {
+                while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            }
+            let mut input = ActionInput::default();
+            messages
+                .try_record_output(vm, &mut input, Default::default())
+                .unwrap()
+                .unwrap();
+        };
+
+        // 1) Create window 0 -> text 7 and show window 0.
+        step_window_cmd(&mut vm, &mut messages);
+        step_window_cmd(&mut vm, &mut messages);
+
+        // Configure width-wipe reveal (mode 2, duration index 1 = 200ms) and emit "AA".
+        messages.set_text_settings(TextOutputSettings {
+            bold: false,
+            revision_alpha: false,
+            speed: 3,
+            outline: 1,
+            reveal_mode: 2,
+            reveal_duration: 1,
+        });
+        step_record_text(&mut vm, &mut messages);
+
+        // Advance 50ms: first glyph is partially revealed by width.
+        messages.advance_frame(50);
+        let frame_w1 = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 1);
+        assert_eq!(font.scene_cache_hits, 0);
+        let width_1 = frame_w1[0].children[&0]
+            .draw
+            .as_ref()
+            .unwrap()
+            .source_rect()[2];
+        assert!(width_1 > 0 && width_1 < 31);
+
+        // Stationary repeat frame reuses the cached SceneObject tree without rebuilding!
+        let frame_w1_hit = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 1);
+        assert_eq!(font.scene_cache_hits, 1);
+        assert_eq!(frame_w1_hit, frame_w1);
+        assert!(std::ptr::eq(
+            frame_w1_hit[0].children[&0]
+                .image
+                .as_ref()
+                .unwrap()
+                .pixels
+                .pixels(),
+            frame_w1[0].children[&0]
+                .image
+                .as_ref()
+                .unwrap()
+                .pixels
+                .pixels()
+        ));
+
+        // Advance 100ms: `reveal_width` increases and second glyph becomes shown -> invalidates!
+        messages.advance_frame(100);
+        let frame_w2 = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 2);
+        let width_2 = frame_w2[0].children[&0]
+            .draw
+            .as_ref()
+            .unwrap()
+            .source_rect()[2];
+        assert!(width_2 > width_1);
+
+        // Finish reveal, complete 0x2152, and simulate 5 stationary wait frames at 60 fps -> 5 hits!
+        messages.advance_frame(1000);
+        step_record_text(&mut vm, &mut messages);
+        let settled = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 3);
+        let hits_before = font.scene_cache_hits;
+        for _ in 0..5 {
+            assert_eq!(font.prepare_objects(&messages).unwrap(), settled);
+        }
+        assert_eq!(font.glyph_build_calls, 3);
+        assert_eq!(font.scene_cache_hits, hits_before + 5);
+
+        // Clear window and emit "AA" under opacity-fade reveal (mode 1, duration index 1 = 200ms).
+        step_window_cmd(&mut vm, &mut messages);
+        messages.set_text_settings(TextOutputSettings {
+            bold: false,
+            revision_alpha: false,
+            speed: 3,
+            outline: 1,
+            reveal_mode: 1,
+            reveal_duration: 1,
+        });
+        step_record_text(&mut vm, &mut messages);
+
+        messages.advance_frame(50);
+        let fade_1 = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 4);
+        let opacity_1 = fade_1[0].children[&0].draw.as_ref().unwrap().opacity();
+        assert!(opacity_1 > 0 && opacity_1 < 255);
+
+        // Advancing opacity invalidates the cache and updates the glyph SceneObject opacity.
+        messages.advance_frame(80);
+        let fade_2 = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 5);
+        let opacity_2 = fade_2[0].children[&0].draw.as_ref().unwrap().opacity();
+        assert!(opacity_2 > opacity_1);
+
+        // Visibility toggle (0x214e hide -> empty glyphs, 0x214e show -> restored glyphs) invalidates!
+        messages.advance_frame(1000);
+        step_record_text(&mut vm, &mut messages);
+        let visible_objs = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 6);
+        assert!(!visible_objs.is_empty());
+
+        step_window_cmd(&mut vm, &mut messages); // 0x214e hide
+        let hidden_objs = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 7);
+        assert!(hidden_objs.is_empty());
+
+        // Repeated hidden frame also hits the cache.
+        assert!(font.prepare_objects(&messages).unwrap().is_empty());
+        assert_eq!(font.glyph_build_calls, 7);
+
+        step_window_cmd(&mut vm, &mut messages); // 0x214e show
+        let reshown_objs = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 8);
+        assert_eq!(reshown_objs, visible_objs);
     }
 }
 

@@ -37,9 +37,78 @@ mod write;
 
 use crate::FormatError;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     io::{Read, Seek, SeekFrom, Write},
 };
+
+/// Fold ASCII `A..=Z` to lowercase while preserving Shift-JIS two-byte sequences.
+pub(super) fn fold_into(name: &[u8], out: &mut [u8]) {
+    out.copy_from_slice(name);
+    let mut at = 0;
+    while at < out.len() {
+        if matches!(out[at], 0x81..=0x9f | 0xe0..=0xfc) {
+            at += 2;
+        } else {
+            out[at] = out[at].to_ascii_lowercase();
+            at += 1;
+        }
+    }
+}
+
+pub(super) fn fold_vec(name: &[u8]) -> Vec<u8> {
+    let mut out = vec![0; name.len()];
+    fold_into(name, &mut out);
+    out
+}
+
+/// Precomputed $O(1)$ exact and ASCII-case-folded lookup tables built once on open.
+#[derive(Debug, Default)]
+pub(super) struct LookupTable {
+    exact: HashMap<Box<[u8]>, Option<usize>>,
+    folded: HashMap<Box<[u8]>, usize>,
+}
+
+impl LookupTable {
+    pub(super) fn from_entries(entries: &[Entry]) -> Self {
+        let mut exact = HashMap::with_capacity(entries.len());
+        let mut folded = HashMap::with_capacity(entries.len());
+        for (i, entry) in entries.iter().enumerate() {
+            exact
+                .entry(entry.name.clone().into_boxed_slice())
+                .and_modify(|slot| *slot = None)
+                .or_insert(Some(i));
+            folded
+                .entry(fold_vec(&entry.name).into_boxed_slice())
+                .or_insert(i);
+        }
+        Self { exact, folded }
+    }
+
+    pub(super) fn find(
+        &self,
+        name: &[u8],
+        not_found: &'static str,
+        ambiguous: &'static str,
+    ) -> Result<usize, FormatError> {
+        match self.exact.get(name) {
+            Some(Some(index)) => Ok(*index),
+            Some(None) => Err(FormatError(ambiguous)),
+            None => Err(FormatError(not_found)),
+        }
+    }
+
+    pub(super) fn lookup(&self, name: &[u8]) -> Option<usize> {
+        if name.len() <= 64 {
+            let mut buf = [0u8; 64];
+            let key = &mut buf[..name.len()];
+            fold_into(name, key);
+            self.folded.get(key).copied()
+        } else {
+            let key = fold_vec(name);
+            self.folded.get(key.as_slice()).copied()
+        }
+    }
+}
 
 pub use cpz1::{CPZ1_HEADER_SIZE, Cpz1Index, Cpz1Layout};
 pub use cpz2::{CPZ2_HEADER_SIZE, Cpz2Index, Cpz2Layout};
@@ -313,6 +382,116 @@ impl ArchiveIndex {
             Self::Cpz5(index) => index.read_entry_verified(reader, entry),
             Self::Cpz6(index) => index.read_entry_verified(reader, entry),
             Self::Cpz7(index) => index.read_entry_verified(reader, entry),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn dummy_entry(name: &[u8]) -> Entry {
+        Entry {
+            directory: [].into(),
+            name: name.to_vec(),
+            size: 0,
+            offset: 0,
+            checksum_raw: 0,
+        }
+    }
+
+    #[test]
+    fn lookup_table_preserves_case_folding_shift_jis_pairs_and_first_match_order() {
+        let long_mixed = [b"Long_Resource_Name_".as_slice(), &[b'A'; 60], b".pb3"].concat();
+        let long_upper = [b"LONG_RESOURCE_NAME_".as_slice(), &[b'a'; 60], b".PB3"].concat();
+        let entries = vec![
+            dummy_entry(b"Start.ps3"),
+            dummy_entry(b"START.PS3"),
+            dummy_entry(b"start.ps3"),
+            // 0x83 0x45: trail byte 0x45 is ASCII 'E' by value, but must NOT fold to 0x65.
+            dummy_entry(b"\x83\x45Bg01.pb3"),
+            dummy_entry(b"\x83\x65Bg01.pb3"),
+            dummy_entry(b"unique.bin"),
+            dummy_entry(b"dup.bin"),
+            dummy_entry(b"dup.bin"),
+            dummy_entry(&long_mixed),
+        ];
+        let table = LookupTable::from_entries(&entries);
+
+        // Case-insensitive lookup returns the FIRST matching index in archive order.
+        assert_eq!(table.lookup(b"start.ps3"), Some(0));
+        assert_eq!(table.lookup(b"START.PS3"), Some(0));
+        assert_eq!(table.lookup(b"StArT.pS3"), Some(0));
+
+        // Shift-JIS trail bytes stay distinct while trailing ASCII still folds.
+        assert_eq!(table.lookup(b"\x83\x45bg01.PB3"), Some(3));
+        assert_eq!(table.lookup(b"\x83\x65BG01.pb3"), Some(4));
+
+        // Names longer than the 64-byte stack fast-path fold identically.
+        assert_eq!(table.lookup(&long_upper), Some(8));
+        assert_eq!(table.lookup(b"missing.ps3"), None);
+
+        // Exact `find` distinguishes case and flags exact duplicates as ambiguous.
+        assert_eq!(table.find(b"Start.ps3", "missing", "ambiguous"), Ok(0));
+        assert_eq!(table.find(b"START.PS3", "missing", "ambiguous"), Ok(1));
+        assert_eq!(table.find(b"start.ps3", "missing", "ambiguous"), Ok(2));
+        assert_eq!(table.find(b"unique.bin", "missing", "ambiguous"), Ok(5));
+        assert_eq!(
+            table.find(b"dup.bin", "missing", "ambiguous"),
+            Err(FormatError("ambiguous"))
+        );
+        assert_eq!(
+            table.find(b"absent.bin", "missing", "ambiguous"),
+            Err(FormatError("missing"))
+        );
+
+        // End-to-end verification across CPZ3, CPZ5, and CPZ6 archive indices with duplicates.
+        let mut cpz3_buf = Cursor::new(Vec::new());
+        Cpz3Index::write(
+            &mut cpz3_buf,
+            &[
+                (b"FirstOnly.ps3".to_vec(), b"one".to_vec()),
+                (b"FIRSTONLY.PS3".to_vec(), b"two".to_vec()),
+                (b"ExactDup.bin".to_vec(), b"a".to_vec()),
+                (b"ExactDup.bin".to_vec(), b"b".to_vec()),
+            ],
+        )
+        .unwrap();
+        let cpz3 = ArchiveIndex::read(&mut Cursor::new(cpz3_buf.into_inner())).unwrap();
+        assert_eq!(cpz3.lookup(b"firstonly.ps3").unwrap(), Some(0));
+        assert_eq!(cpz3.find(b"FIRSTONLY.PS3").unwrap(), 1);
+        assert!(cpz3.find(b"ExactDup.bin").is_err());
+
+        let dirs = [
+            ArchiveDirectory {
+                name: b"dir_a".to_vec(),
+                files: vec![ArchiveFile {
+                    name: b"Scene01.ps3".to_vec(),
+                    data: b"dir_a_payload".to_vec(),
+                }],
+            },
+            ArchiveDirectory {
+                name: b"dir_b".to_vec(),
+                files: vec![ArchiveFile {
+                    name: b"SCENE01.PS3".to_vec(),
+                    data: b"dir_b_payload".to_vec(),
+                }],
+            },
+        ];
+        for cpz6 in [false, true] {
+            let mut out = Cursor::new(Vec::new());
+            if cpz6 {
+                Cpz6Index::write(&mut out, &dirs).unwrap();
+            } else {
+                Cpz5Index::write(&mut out, Cpz5Mode::Mode9, &dirs).unwrap();
+            }
+            let bytes = out.into_inner();
+            let index = ArchiveIndex::read(&mut Cursor::new(&bytes)).unwrap();
+            assert_eq!(index.lookup(b"scene01.ps3").unwrap(), Some(0));
+            assert_eq!(index.lookup(b"SCENE01.PS3").unwrap(), Some(0));
+            assert_eq!(index.find(b"Scene01.ps3").unwrap(), 0);
+            assert_eq!(index.find(b"SCENE01.PS3").unwrap(), 1);
         }
     }
 }

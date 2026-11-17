@@ -37,6 +37,7 @@ mod dispatch_windows;
 mod execution;
 mod fade;
 mod floats;
+mod fuzz_parsers;
 mod gesture;
 mod history;
 mod image;

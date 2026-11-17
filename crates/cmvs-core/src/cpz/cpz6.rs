@@ -1,7 +1,7 @@
 //! Bounded CPZ6 layout, index and resource decoding. Header and index digests are not
 //! verified; resource checksums only through `read_entry_verified`.
 //! Header XOR fields follow xmoezzz/CMVS-Engine, pinned in docs/references.md.
-use super::{ArchiveError, Entry, crypto, data_checksum};
+use super::{ArchiveError, Entry, LookupTable, crypto, data_checksum, fold_vec};
 use crate::FormatError;
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -25,6 +25,7 @@ pub struct Cpz6Layout {
 pub struct Cpz6Index {
     pub layout: Cpz6Layout,
     entries: Vec<Entry>,
+    lookup: LookupTable,
     entry_keys: Vec<(u32, u32)>,
     keys: crypto::Keys,
     file_bytes: u64,
@@ -157,9 +158,11 @@ impl Cpz6Index {
                 return Err(FormatError("CPZ6 file count/length mismatch").into());
             }
         }
+        let lookup = LookupTable::from_entries(&entries);
         Ok(Self {
             layout,
             entries,
+            lookup,
             entry_keys,
             keys,
             file_bytes,
@@ -172,26 +175,19 @@ impl Cpz6Index {
 
     /// Basename lookup only; duplicate basenames require selecting an entry index.
     pub fn find(&self, name: &[u8]) -> Result<usize, FormatError> {
-        let mut matches = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.name == name);
-        let first = matches
-            .next()
-            .ok_or(FormatError("CPZ6 filename not found"))?
-            .0;
-        if matches.next().is_some() {
-            return Err(FormatError("ambiguous CPZ6 basename"));
-        }
-        Ok(first)
+        self.lookup
+            .find(name, "CPZ6 filename not found", "ambiguous CPZ6 basename")
     }
 
     /// 0x140002090 with an empty directory: the first entry, in index order across all
-    /// directories, whose stored name equals `lookup_key(name)` byte for byte.
+    /// directories, matching `lookup_key(name)` under Shift-JIS-aware ASCII folding.
     pub fn lookup(&self, name: &[u8]) -> Result<Option<usize>, FormatError> {
-        let key = lookup_key(name)?;
-        Ok(self.entries.iter().position(|entry| entry.name == key))
+        if name.len() >= 64 || name.contains(&0) {
+            return Err(FormatError(
+                "CPZ6 lookup name exceeds the original 64-byte buffer",
+            ));
+        }
+        Ok(self.lookup.lookup(name))
     }
 
     pub fn read_entry<R: Read + Seek>(
@@ -262,17 +258,7 @@ pub fn lookup_key(name: &[u8]) -> Result<Vec<u8>, FormatError> {
             "CPZ6 lookup name exceeds the original 64-byte buffer",
         ));
     }
-    let mut key = name.to_vec();
-    let mut at = 0;
-    while at < key.len() {
-        if matches!(key[at], 0x81..=0x9f | 0xe0..=0xfc) {
-            at += 2;
-        } else {
-            key[at] = key[at].to_ascii_lowercase();
-            at += 1;
-        }
-    }
-    Ok(key)
+    Ok(fold_vec(name))
 }
 
 impl Cpz6Layout {

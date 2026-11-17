@@ -55,6 +55,7 @@ impl Cpz1Layout {
 pub struct Cpz1Index {
     pub layout: Cpz1Layout,
     entries: Vec<Entry>,
+    lookup: flat::FlatLookup,
 }
 
 impl Cpz1Index {
@@ -72,7 +73,12 @@ impl Cpz1Index {
         decrypt(&mut bytes);
         let (entries, _) =
             flat::records(&bytes, layout.file_count, layout.data_offset, file_bytes)?;
-        Ok(Self { layout, entries })
+        let lookup = flat::FlatLookup::from_entries(&entries);
+        Ok(Self {
+            layout,
+            entries,
+            lookup,
+        })
     }
 
     pub fn entries(&self) -> &[Entry] {
@@ -80,17 +86,17 @@ impl Cpz1Index {
     }
 
     pub fn find(&self, name: &[u8]) -> Result<usize, FormatError> {
-        flat::find(&self.entries, name)
+        self.lookup.find(name)
     }
 
     /// First entry whose name equals `name`, folding ASCII case on both sides.
     pub fn lookup(&self, name: &[u8]) -> Result<Option<usize>, FormatError> {
-        flat::lookup(&self.entries, name, false)
+        self.lookup.lookup(name)
     }
 
     /// The original's extension-less search: first entry whose name starts with `stem`.
     pub fn lookup_prefix(&self, stem: &[u8]) -> Result<Option<usize>, FormatError> {
-        flat::lookup(&self.entries, stem, true)
+        self.lookup.lookup_prefix(stem)
     }
 
     /// CPZ1 stores no checksum, so there is no separate verified read.
