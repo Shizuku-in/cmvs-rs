@@ -21,6 +21,7 @@ import zipfile
 import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from fan_patch.launcher import cmvs_patch_command
 from ps3_inspect import lzss_decode
 
 LIMIT = 64 * 1024 * 1024
@@ -171,6 +172,10 @@ def extract_patch(archive: zipfile.ZipFile, stage: Path) -> dict[str, str]:
     return digests
 
 
+def patch_command(*args: str) -> list[str]:
+    return cmvs_patch_command("amatsutsumi", *args)
+
+
 def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
         raise ValueError("encoding must be utf-8, utf8 or gbk")
@@ -181,17 +186,11 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
     for name, expected in BASE_HASHES.items():
         if sha256(game / name) != expected:
             raise ValueError(f"Unsupported original game: {name}")
-    tool = Path(__file__).resolve().parent
-    repository = tool.parents[2]
     with tempfile.TemporaryDirectory(prefix="cmvs-amatsutsumi-") as temp:
         stage = Path(temp)
         with zipfile.ZipFile(patch) as archive:
             digests = extract_patch(archive, stage)
-        subprocess.run([
-            "cargo", "run", "--offline", "--locked", "--release", "--manifest-path",
-            str(tool / "Cargo.toml"), "--target-dir", str(repository / "target/fan-patch-amatsutsumi"),
-            "--", str(game), str(stage), encoding,
-        ], check=True)
+        subprocess.run(patch_command(str(game), str(stage), encoding), check=True)
         reports = {}
         for name in ("scripts", "images", "videos"):
             with (stage / f"{name}.tsv").open() as stream:

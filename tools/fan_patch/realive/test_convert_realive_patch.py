@@ -1,11 +1,15 @@
 """Synthetic filename precedence, character allocation and input guards."""
 from io import BytesIO
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch as mock_patch
 import warnings
 import zipfile
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import convert_realive_patch as patch
 
 
@@ -59,6 +63,18 @@ class ConverterTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 patch.convert(root / "missing", root / "patch.zip", root / "output")
             self.assertFalse((root / "output").exists())
+
+    def test_patch_command_uses_offline_cargo_or_prebuilt_binary(self):
+        args = ["game dir", "stage", "gbk"]
+        manifest = Path(__file__).resolve().parents[3] / "Cargo.toml"
+        with mock_patch.dict("os.environ", CMVS_PATCH_BIN=""):
+            self.assertEqual(patch.patch_command(*args), [
+                "cargo", "run", "--offline", "--locked", "--release",
+                "--manifest-path", str(manifest), "-p", "cmvs-patch", "--", "realive", *args,
+            ])
+        binary = "/path with spaces/cmvs-patch"
+        with mock_patch.dict("os.environ", CMVS_PATCH_BIN=binary):
+            self.assertEqual(patch.patch_command(*args), [binary, "realive", *args])
 
 
 if __name__ == "__main__":

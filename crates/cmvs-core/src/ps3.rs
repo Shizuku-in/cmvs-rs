@@ -6,7 +6,9 @@
 //!
 //! Text remains encoded bytes because the header does not identify its encoding.
 //! [`Script::from_memory_image`] reads an already-decoded save image; it must not be
-//! given an ordinary packed script file.
+//! given an ordinary packed script file. Use [`Script::encode`],
+//! [`Script::with_segments`], or [`encode_memory_image`] to write deterministic
+//! uncompressed script containers.
 use crate::{FormatError, MAX_PAYLOAD, lzss};
 
 /// Size of the on-disk and memory-image script header, in bytes.
@@ -322,5 +324,198 @@ impl Script {
             offset += bytes.len();
         }
         Ok(entries)
+    }
+
+    /// Return a new [`Script`] replacing `code` and `text` while preserving labels,
+    /// initial data, container kind, and header key.
+    ///
+    /// `code` must keep the exact byte length of [`Self::code`] so label offsets and
+    /// [`Header::entry_pc`] remain valid.
+    pub fn with_segments(&self, code: &[u8], text: &[u8]) -> Result<Self, FormatError> {
+        if code.len() != self.header.code_size as usize {
+            return Err(FormatError("script code segment length changed"));
+        }
+        let label_bytes = self.code_start();
+        let data = self.data();
+        let total = label_bytes as u64 + code.len() as u64 + data.len() as u64 + text.len() as u64;
+        if total > MAX_PAYLOAD as u64 {
+            return Err(FormatError("script exceeds research allocation limit"));
+        }
+        let total = total as usize;
+        let mut payload = Vec::with_capacity(total);
+        payload.extend_from_slice(&self.payload[..label_bytes]);
+        payload.extend_from_slice(code);
+        payload.extend_from_slice(data);
+        payload.extend_from_slice(text);
+        let mut header = self.header.clone();
+        header.text_size = text.len() as u32;
+        header.compressed_size = 0;
+        header.decoded_size = total as u32;
+        Ok(Self {
+            header,
+            payload,
+            trailing_file_bytes: 0,
+        })
+    }
+
+    /// Encode this script as a deterministic, uncompressed on-disk container.
+    ///
+    /// Preserves [`Header::container`], [`Header::version_raw`], [`Header::key`],
+    /// [`Header::entry_pc`], [`Header::reserved`], and all decoded segments, setting
+    /// `compressed_size` to `0` and applying the PS2A byte transform when needed.
+    pub fn encode(&self) -> Result<Vec<u8>, FormatError> {
+        if self.payload.len() > MAX_PAYLOAD
+            || self.payload.len() as u64 != self.header.segment_size()
+        {
+            return Err(FormatError("script segment lengths disagree"));
+        }
+        let h = &self.header;
+        let mut out = Vec::with_capacity(HEADER_SIZE + self.payload.len());
+        out.extend_from_slice(h.container.magic());
+        for word in [
+            HEADER_SIZE as u32,
+            h.version_raw,
+            h.key,
+            h.label_count,
+            h.code_size,
+            h.unknown_size,
+            h.text_size,
+            h.entry_pc,
+            0,
+            self.payload.len() as u32,
+            h.reserved,
+        ] {
+            out.extend(word.to_le_bytes());
+        }
+        match h.container {
+            Container::Ps2a => {
+                let xor = ((h.key >> 3).wrapping_add(h.key >> 24)) as u8;
+                let shift = (h.key >> 20) % 5 + 1;
+                out.extend(
+                    self.payload
+                        .iter()
+                        .map(|&b| (b.rotate_left(shift) ^ xor).wrapping_add(124)),
+                );
+            }
+            Container::Pss0 => out.extend_from_slice(&self.payload),
+        }
+        Ok(out)
+    }
+}
+
+/// Convert an unpacked script memory image into an on-disk script container.
+///
+/// Equivalent to `Script::from_memory_image(raw)?.encode()`.
+pub fn encode_memory_image(raw: &[u8]) -> Result<Vec<u8>, FormatError> {
+    Script::from_memory_image(raw)?.encode()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory_fixture(container: Container, key: u32, compressed_size: u32) -> Vec<u8> {
+        let code = [
+            0x01, 0x02, 0x20, 0x01, 0x01, 0x00, 0x00, 0x00, 0x0f, 0x02, 0x30, 0x04,
+        ];
+        let data = [7, 8, 9, 10];
+        let text = b"\0hello\0world\0";
+        let decoded_size = (4 + code.len() + data.len() + text.len()) as u32;
+        let mut raw = container.magic().to_vec();
+        for word in [
+            HEADER_SIZE as u32,
+            2,
+            key,
+            1,
+            code.len() as u32,
+            data.len() as u32,
+            text.len() as u32,
+            0,
+            compressed_size,
+            decoded_size,
+            0x55aa,
+        ] {
+            raw.extend(word.to_le_bytes());
+        }
+        raw.extend(0u32.to_le_bytes());
+        raw.extend(code);
+        raw.extend(data);
+        raw.extend(text);
+        raw
+    }
+
+    #[test]
+    fn encode_roundtrips_ps2a_keys_pss0_and_memory_images() -> Result<(), FormatError> {
+        for key in [0, 0x0010_0008, 0x1234_5678, 0x9abc_def0, u32::MAX] {
+            let mem = memory_fixture(Container::Ps2a, key, 99);
+            let from_mem = Script::from_memory_image(&mem)?;
+            let encoded = encode_memory_image(&mem)?;
+            assert_eq!(encoded, from_mem.encode()?);
+            let decoded = Script::decode(&encoded)?;
+            assert_eq!(decoded.header().container, Container::Ps2a);
+            assert_eq!(decoded.header().version_raw, 2);
+            assert_eq!(decoded.header().key, key);
+            assert_eq!(decoded.header().compressed_size, 0);
+            assert_eq!(decoded.header().reserved, 0x55aa);
+            assert_eq!(decoded.trailing_file_bytes, 0);
+            assert_eq!(decoded.labels(), from_mem.labels());
+            assert_eq!(decoded.code(), from_mem.code());
+            assert_eq!(decoded.data(), from_mem.data());
+            assert_eq!(decoded.text(), from_mem.text());
+            assert_eq!(decoded.encode()?, encoded);
+        }
+
+        let pss0_mem = memory_fixture(Container::Pss0, 0, 0);
+        let pss0_encoded = encode_memory_image(&pss0_mem)?;
+        let pss0 = Script::decode(&pss0_encoded)?;
+        assert_eq!(pss0.header().container, Container::Pss0);
+        assert_eq!(pss0.payload(), &pss0_mem[HEADER_SIZE..]);
+        assert!(encode_memory_image(&pss0_mem[..pss0_mem.len() - 1]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn compressed_ps2a_and_updated_segments_roundtrip() -> Result<(), FormatError> {
+        let key: u32 = 0x5d3f_3020;
+        let payload = [0, 0, 0, 0, 0x30, 0x04, b'a', 0];
+        let mut packed = vec![0xff];
+        packed.extend(payload);
+        let xor = ((key >> 3).wrapping_add(key >> 24)) as u8;
+        let shift = (key >> 20) % 5 + 1;
+        let mut raw = b"PS2A".to_vec();
+        for word in [
+            48u32,
+            1,
+            key,
+            1,
+            2,
+            0,
+            2,
+            0,
+            packed.len() as u32,
+            payload.len() as u32,
+            0,
+        ] {
+            raw.extend(word.to_le_bytes());
+        }
+        raw.extend(
+            packed
+                .iter()
+                .map(|&b| (b.rotate_left(shift) ^ xor).wrapping_add(124)),
+        );
+        let decoded = Script::decode(&raw)?;
+        let reencoded = decoded.encode()?;
+        let after = Script::decode(&reencoded)?;
+        assert_eq!(after.payload(), &payload);
+        assert_eq!(after.header().compressed_size, 0);
+
+        let updated = after.with_segments(&[0x30, 0x04], b"\0translated\0")?;
+        assert_eq!(updated.header().text_size, 12);
+        let roundtripped = Script::decode(&updated.encode()?)?;
+        assert_eq!(roundtripped.labels(), vec![0]);
+        assert_eq!(roundtripped.code(), &[0x30, 0x04]);
+        assert_eq!(roundtripped.text(), b"\0translated\0");
+        assert!(after.with_segments(&[0x30], b"\0").is_err());
+        Ok(())
     }
 }

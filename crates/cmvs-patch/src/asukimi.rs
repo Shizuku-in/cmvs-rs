@@ -1,7 +1,6 @@
-//! UTF-8 conversion of the digest-pinned CK-GAL patch. GBK output bypasses this helper.
-#[allow(dead_code)]
-#[path = "../rewrite_scripts.rs"]
-mod scripts;
+//! UTF-8 conversion of the digest-pinned CK-GAL Asukimi patch. GBK output bypasses this helper.
+
+use crate::common::{Result, pack_cpz3, rebuild_script, validate_utf8, write_new};
 use cmvs_core::{
     bytecode::{self, Expression, InstructionKind, Term},
     cpz::ArchiveIndex,
@@ -9,12 +8,9 @@ use cmvs_core::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fs::{self, File, OpenOptions},
-    io::Write,
+    fs::{self, File},
     path::Path,
 };
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 fn literal_positions(expr: &Expression, positions: &mut Vec<usize>) {
     for term in &expr.terms {
@@ -89,7 +85,7 @@ fn transcode(text: &[u8]) -> Result<(Vec<u8>, BTreeMap<u32, u32>)> {
         if bad {
             return Err(format!("invalid GBK at text+0x{at:x}").into());
         }
-        scripts::validate_utf8(unicode.as_bytes())?;
+        validate_utf8(unicode.as_bytes())?;
         out.extend_from_slice(unicode.as_bytes());
         at += len;
     }
@@ -146,21 +142,10 @@ fn recode(name: &[u8], original: &[u8], patched: &[u8]) -> Result<(Vec<u8>, usiz
     if layout(&code, patch.header().entry_pc, &patch.labels())? != positions {
         return Err("converted instruction layout changed".into());
     }
-    Ok((
-        scripts::rebuild_script(patched, &code, &text)?,
-        positions.len(),
-    ))
+    Ok((rebuild_script(patched, &code, &text)?, positions.len()))
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?
-        .write_all(bytes)?;
-    Ok(())
-}
-fn run(game: &Path, input: &Path, output: &Path) -> Result<()> {
+pub fn run(game: &Path, input: &Path, output: &Path) -> Result<()> {
     let mut patched_file = File::open(input.join("script.cpz"))?;
     let patched = ArchiveIndex::read(&mut patched_file)?;
     let mut original_file = File::open(game.join("data/pack/script.cpz"))?;
@@ -188,28 +173,16 @@ fn run(game: &Path, input: &Path, output: &Path) -> Result<()> {
         &fs::read(input.join("start.ps2"))?,
     )?;
     report.push_str(&format!("start.ps2\t{count}\t{}\n", startup.len()));
-    write_new(&output.join("script.cpz"), &scripts::pack(&entries)?)?;
+    write_new(&output.join("script.cpz"), &pack_cpz3(&entries)?)?;
     write_new(&output.join("start.ps2"), &startup)?;
     write_new(&output.join("scripts.tsv"), report.as_bytes())?;
     Ok(())
-}
-fn main() -> Result<()> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 3 {
-        return Err(
-            "internal helper: <original-game> <normalized-gbk-patch> <empty-output>".into(),
-        );
-    }
-    run(
-        Path::new(&args[0]),
-        Path::new(&args[1]),
-        Path::new(&args[2]),
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     fn fixture(code: &[u8], text: &[u8]) -> Vec<u8> {
         let mut header = b"PS2A".to_vec();
         for value in [
@@ -233,11 +206,13 @@ mod tests {
         header.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
         header
     }
+
     fn literal(code: &mut Vec<u8>, offset: u32) {
         code.extend([1, 2, 0x20, 1]);
         code.extend(offset.to_le_bytes());
         code.extend([15, 2, 0x30, 4]);
     }
+
     #[test]
     fn utf8_relocates_suffixes_empty_strings_and_terminators() -> Result<()> {
         let text = b"\0\xd6\xd0\xce\xc4tail\0\0";
@@ -259,6 +234,7 @@ mod tests {
         assert_eq!(after.labels(), vec![0]);
         Ok(())
     }
+
     #[test]
     fn refuses_invalid_text_mid_character_references_and_unexpected_code_edits() {
         for text in [b"\xff\0".as_slice(), b"\x81\0", b"unterminated"] {
@@ -275,6 +251,7 @@ mod tests {
         let patch = fixture(&code, b"text\0");
         assert!(recode(b"test.ps2", &original, &patch).is_err());
     }
+
     #[test]
     fn preserves_original_empty_integer_expression() -> Result<()> {
         let raw = fixture(&[0, 2, 15, 2, 0x30, 4], b"\0");
@@ -282,6 +259,7 @@ mod tests {
         assert_eq!(Script::decode(&out)?.code(), Script::decode(&raw)?.code());
         Ok(())
     }
+
     #[test]
     fn known_repairs_require_exact_original_and_patch_bytes() -> Result<()> {
         for (name, at, bad) in [

@@ -1,7 +1,9 @@
-//! PB3B image decoding, including images that depend on a reference image.
+//! PB3B image decoding and deterministic type-1 encoding.
 //!
 //! Use [`decode`] for self-contained types 1, 2, 3, 5, and 7. Types 6 and 8 need
 //! [`decode_with_base`] or [`crate::image::load`] to supply their reference image.
+//! Use [`encode`] or [`encode_rgba`] with [`EncodeDepth`] to write lossless,
+//! deterministic PB3B type-1 images (`24`-bit RGB or `32`-bit RGBA).
 //! Unsupported codecs return errors.
 
 // Format reference: pinned MIT CMVS-Engine PB3B.cpp/CPB.cpp/JBP1.cpp;
@@ -527,4 +529,163 @@ pub fn decode_with(raw: &[u8], threads: DecodeThreads) -> Result<RgbaImage, Form
     })?;
     let pixels = interleave(&planes, count);
     RgbaImage::new(u32::from(h.width), u32::from(h.height), pixels)
+}
+
+/// Channel depth for deterministic PB3B type-1 encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncodeDepth {
+    /// Three planes (`B`, `G`, `R`; `bpp = 24`). Every pixel must have `alpha == 255`.
+    Rgb24,
+    /// Four planes (`B`, `G`, `R`, `A`; `bpp = 32`).
+    Rgba32,
+}
+
+impl EncodeDepth {
+    /// Convert a PB3 header bit depth (`24` or `32`) into an [`EncodeDepth`].
+    pub fn from_bpp(bpp: u16) -> Result<Self, FormatError> {
+        match bpp {
+            24 => Ok(Self::Rgb24),
+            32 => Ok(Self::Rgba32),
+            _ => Err(FormatError("unsupported PB3 encode bit depth")),
+        }
+    }
+
+    /// Return the PB3 header bit depth (`24` or `32`).
+    pub const fn bpp(self) -> u16 {
+        match self {
+            Self::Rgb24 => 24,
+            Self::Rgba32 => 32,
+        }
+    }
+}
+
+/// Encode an [`RgbaImage`] as a deterministic, self-contained PB3B type-1 image.
+///
+/// [`EncodeDepth::Rgb24`] writes 24-bit planes and requires every pixel to be opaque
+/// (`alpha == 255`). [`EncodeDepth::Rgba32`] writes all four planes, preserving both
+/// opaque and translucent images as 32-bit PB3B.
+pub fn encode(image: &RgbaImage, depth: EncodeDepth) -> Result<Vec<u8>, FormatError> {
+    encode_rgba(image.pixels(), image.width(), image.height(), depth)
+}
+
+/// Encode top-down straight-alpha RGBA8 bytes as a deterministic PB3B type-1 image.
+///
+/// Rejects zero or `> 65535` dimensions, mismatched byte counts, non-opaque pixels
+/// when `depth` is [`EncodeDepth::Rgb24`], and outputs exceeding [`MAX_PAYLOAD`].
+pub fn encode_rgba(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    depth: EncodeDepth,
+) -> Result<Vec<u8>, FormatError> {
+    if width == 0 || height == 0 || width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
+        return Err(FormatError("PB3 dimensions exceed format bounds"));
+    }
+    let count = u64::from(width) * u64::from(height);
+    if count * 4 > MAX_PAYLOAD as u64 || count * 4 != rgba.len() as u64 {
+        return Err(FormatError("invalid or oversized PB3 RGBA buffer"));
+    }
+    if depth == EncodeDepth::Rgb24 && rgba.iter().skip(3).step_by(4).any(|&a| a != 255) {
+        return Err(FormatError("24-bit PB3 encoding requires opaque RGBA"));
+    }
+    let count = count as usize;
+    let bpp = depth.bpp();
+    let channels = usize::from(bpp / 8);
+    let flags_len = 13 + count.div_ceil(8);
+    let data_at = 52 + channels * 4 + flags_len * channels;
+    let total_size = data_at + channels * 4 + count * channels + 47;
+    if total_size > MAX_PAYLOAD {
+        return Err(FormatError("PB3 encoded image exceeds research bounds"));
+    }
+    // Store the requested channels in one literal tile with a zero header-key trailer.
+    let mut flags = Vec::with_capacity(flags_len);
+    for value in [1u32, 0, count as u32] {
+        flags.extend(value.to_le_bytes());
+    }
+    flags.resize(flags_len, 0);
+    let mut out = Vec::with_capacity(total_size);
+    out.resize(52, 0);
+    out[..4].copy_from_slice(b"PB3B");
+    out[4..8].copy_from_slice(&(total_size as u32).to_le_bytes());
+    out[8..12].copy_from_slice(&1u32.to_le_bytes());
+    out[24..28].copy_from_slice(&width.max(height).to_le_bytes());
+    for (i, value) in [1u16, width as u16, height as u16, bpp]
+        .into_iter()
+        .enumerate()
+    {
+        out[28 + i * 2..30 + i * 2].copy_from_slice(&value.to_le_bytes());
+    }
+    out[44..48].copy_from_slice(&52u32.to_le_bytes());
+    out[48..52].copy_from_slice(&(data_at as u32).to_le_bytes());
+    for _ in 0..channels {
+        out.extend((flags.len() as u32).to_le_bytes());
+    }
+    for _ in 0..channels {
+        out.extend(&flags);
+    }
+    for _ in 0..channels {
+        out.extend((count as u32).to_le_bytes());
+    }
+    for &channel in &[2, 1, 0, 3][..channels] {
+        out.extend(rgba.iter().skip(channel).step_by(4).copied());
+    }
+    out.extend([0u8; 47]);
+    debug_assert_eq!(out.len(), total_size);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_roundtrips_24bit_and_32bit_and_is_deterministic() -> Result<(), FormatError> {
+        // 5x3 = 15 pixels spans two LZSS flag bytes without filling the second byte.
+        let mut opaque_pixels = Vec::with_capacity(15 * 4);
+        for i in 0..15u8 {
+            opaque_pixels.extend([i.wrapping_mul(17), i.wrapping_mul(31), 250 - i * 10, 255]);
+        }
+        let opaque = RgbaImage::new(5, 3, opaque_pixels)?;
+        for (depth, expected_bpp) in [(EncodeDepth::Rgb24, 24), (EncodeDepth::Rgba32, 32)] {
+            let first = encode(&opaque, depth)?;
+            let second = encode_rgba(opaque.pixels(), 5, 3, depth)?;
+            assert_eq!(first, second);
+            assert_eq!(EncodeDepth::from_bpp(expected_bpp)?, depth);
+            let header = Header::parse(&first)?;
+            assert_eq!(
+                (header.kind, header.width, header.height, header.bpp),
+                (1, 5, 3, expected_bpp)
+            );
+            let decoded = decode(&first)?;
+            assert_eq!(decoded, opaque);
+        }
+
+        let translucent = RgbaImage::new(
+            2,
+            2,
+            vec![
+                255, 0, 10, 0, 20, 255, 30, 128, 40, 50, 255, 255, 60, 70, 80, 1,
+            ],
+        )?;
+        let encoded = encode(&translucent, EncodeDepth::Rgba32)?;
+        assert_eq!(Header::parse(&encoded)?.bpp, 32);
+        assert_eq!(decode(&encoded)?, translucent);
+        assert!(encode(&translucent, EncodeDepth::Rgb24).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn encode_rejects_invalid_depths_dimensions_and_buffer_lengths() {
+        assert!(EncodeDepth::from_bpp(8).is_err());
+        assert!(EncodeDepth::from_bpp(16).is_err());
+        assert!(encode_rgba(&[], 0, 1, EncodeDepth::Rgba32).is_err());
+        assert!(encode_rgba(&[], 1, 0, EncodeDepth::Rgba32).is_err());
+        assert!(encode_rgba(&[255; 4], 65536, 1, EncodeDepth::Rgba32).is_err());
+        assert!(encode_rgba(&[255; 4], 1, 65536, EncodeDepth::Rgba32).is_err());
+        assert!(encode_rgba(&[255; 3], 1, 1, EncodeDepth::Rgba32).is_err());
+        assert!(encode_rgba(&[255; 8], 1, 1, EncodeDepth::Rgba32).is_err());
+        // 4096x4096 RGBA is exactly MAX_PAYLOAD bytes, so adding PB3 headers/flags exceeds MAX_PAYLOAD.
+        let max_rgba = vec![255; MAX_PAYLOAD];
+        assert!(encode_rgba(&max_rgba, 4096, 4096, EncodeDepth::Rgba32).is_err());
+    }
 }

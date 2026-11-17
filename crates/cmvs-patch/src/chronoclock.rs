@@ -1,30 +1,25 @@
-//! Offline translation-table/BMP conversion; no patch DLL is executed.
-#[path = "../pb3_writer.rs"]
-mod images;
-#[allow(dead_code)]
-#[path = "../rewrite_scripts.rs"]
-mod scripts;
+//! Offline ChronoClock translation-table/BMP conversion; no patch DLL is executed.
 
-use cmvs_core::{cpz::ArchiveIndex, pb3, ps3::Script};
+use crate::common::{
+    OutputEncoding, Result, encode_utf8, rewrite_encoded, write_archive, write_new,
+};
+use cmvs_core::{
+    cpz::ArchiveIndex,
+    pb3::{self, EncodeDepth},
+    ps3::Script,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fs::{self, File, OpenOptions},
-    io::Write,
+    fs::{self, File},
     path::Path,
 };
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
 type StringIndex = BTreeMap<(u32, String), Vec<usize>>;
 
 struct Record {
     offset: u32,
     original: String,
     translated: Vec<u8>,
-}
-
-fn encode_utf8(text: &str) -> Result<Vec<u8>> {
-    scripts::validate_utf8(text.as_bytes())?;
-    Ok(text.as_bytes().to_vec())
 }
 
 fn japanese(bytes: &[u8]) -> Result<String> {
@@ -160,22 +155,13 @@ fn bmp_rgba(raw: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
     Ok((rgba, width, height))
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?
-        .write_all(bytes)?;
-    Ok(())
-}
-
 fn image_dimensions_match(name: &[u8], original: [u32; 2], replacement: [u32; 2]) -> bool {
     original == replacement
         // The 1.05 atlas widens the canvas without moving the shared sprites.
         || (name == b"dialog_chip.pb3" && original == [1024, 720] && replacement == [1280, 720])
 }
 
-fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<()> {
+pub fn run(game: &Path, stage: &Path, encoding: OutputEncoding) -> Result<()> {
     let mut file = File::open(game.join("data/pack/script.cpz"))?;
     let archive = ArchiveIndex::read(&mut file)?;
     let mut sources = Vec::new();
@@ -246,7 +232,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
             };
             rows.insert(entry.offset as u32, value);
         }
-        let (out, changed) = scripts::rewrite_encoded(
+        let (out, changed) = rewrite_encoded(
             raw,
             &rows,
             encoding,
@@ -266,7 +252,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
             entries.insert(i, out);
         }
     }
-    scripts::write_archive(
+    write_archive(
         &mut file,
         &archive,
         &output.join("script.cpz"),
@@ -325,7 +311,10 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
                         format!("BMP/original dimensions differ: {}", path.display()).into(),
                     );
                 }
-                let out = images::encode_rgba(&rgba, width, height)?;
+                let out = pb3::encode_rgba(&rgba, width, height, EncodeDepth::Rgba32)?;
+                if pb3::decode(&out)?.pixels() != rgba {
+                    return Err("PB3B full RGBA roundtrip differs".into());
+                }
                 report.push_str(&format!(
                     "{archive}\t{}\t{width}\t{height}\t{}\t{}\n",
                     std::str::from_utf8(&entry.name)?,
@@ -335,7 +324,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
                 entries.insert(i, out);
             }
         }
-        scripts::write_archive(&mut file, &index, &output.join(archive), &entries, &[])?;
+        write_archive(&mut file, &index, &output.join(archive), &entries, &[])?;
         println!("Rebuilt {archive}");
     }
     if pictures.len() != 92 || seen.len() != pictures.len() {
@@ -343,18 +332,6 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
     }
     write_new(&stage.join("images.tsv"), report.as_bytes())?;
     Ok(())
-}
-
-fn main() -> Result<()> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 3 {
-        return Err("internal helper: <original-game> <stage-directory> <encoding>".into());
-    }
-    run(
-        Path::new(&args[0]),
-        Path::new(&args[1]),
-        scripts::OutputEncoding::parse(&args[2])?,
-    )
 }
 
 #[cfg(test)]
@@ -420,10 +397,10 @@ mod tests {
             ]
         );
         assert_eq!(
-            pb3::decode(&images::encode_rgba(&rgba, w, h)?)?.pixels(),
+            pb3::decode(&pb3::encode_rgba(&rgba, w, h, EncodeDepth::Rgba32)?)?.pixels(),
             rgba
         );
-        assert!(images::encode_rgba(&rgba[..15], w, h).is_err());
+        assert!(pb3::encode_rgba(&rgba[..15], w, h, EncodeDepth::Rgba32).is_err());
         for at in [0, 2, 10, 14, 18, 22, 26, 28, 30, 70] {
             let mut invalid = b.clone();
             invalid[at] ^= 1;

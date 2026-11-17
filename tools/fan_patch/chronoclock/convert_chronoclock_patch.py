@@ -14,8 +14,12 @@ import json
 from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from fan_patch.launcher import cmvs_patch_command
 
 LIMIT = 64 * 1024 * 1024
 PATCH_SHA256 = "24d2872ae77177234b72adcd8b15494cea2dcc8f0c41c4c4eb6467f028ed7550"
@@ -69,6 +73,10 @@ def extract_patch(archive: zipfile.ZipFile, stage: Path, version: str) -> None:
     (stage / "汉化补丁说明.txt").write_bytes(archive.read(members["补丁使用说明.txt"]))
 
 
+def patch_command(*args: str) -> list[str]:
+    return cmvs_patch_command("chronoclock", *args)
+
+
 def convert(game: Path, patch: Path, output: Path, version: str = "1.0", encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
         raise ValueError("encoding must be utf-8, utf8 or gbk")
@@ -83,17 +91,11 @@ def convert(game: Path, patch: Path, output: Path, version: str = "1.0", encodin
             raise ValueError(f"Unsupported original game: {name}")
     if sha256(patch) != PATCH_SHA256:
         raise ValueError("Unsupported patch ZIP (SHA-256 mismatch)")
-    tool = Path(__file__).resolve().parent
-    repository = tool.parents[2]
     with tempfile.TemporaryDirectory(prefix="cmvs-chronoclock-") as temp:
         stage = Path(temp)
         with zipfile.ZipFile(patch) as archive:
             extract_patch(archive, stage, version)
-        subprocess.run([
-            "cargo", "run", "--offline", "--locked", "--release", "--manifest-path",
-            str(tool / "Cargo.toml"), "--target-dir", str(repository / "target/fan-patch-chronoclock"),
-            "--", str(game), str(stage), encoding,
-        ], check=True)
+        subprocess.run(patch_command(str(game), str(stage), encoding), check=True)
         with (stage / "scripts.tsv").open() as stream:
             scripts = list(csv.DictReader(stream, delimiter="\t"))
         with (stage / "images.tsv").open() as stream:

@@ -15,8 +15,12 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from fan_patch.launcher import cmvs_patch_command
 
 LIMIT = 64 * 1024 * 1024
 PATCH_SHA256 = "232277b268e17faa084b8e33460166803cb14dfb9499edf22a264c7b7545a60a"
@@ -121,6 +125,10 @@ def decode_mirai(raw: bytes) -> bytes:
     return bytes(out)
 
 
+def patch_command(*args: str) -> list[str]:
+    return cmvs_patch_command("miranosu", *args)
+
+
 def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
         raise ValueError("encoding must be utf-8, utf8 or gbk")
@@ -140,17 +148,14 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
         decoded = decode_mirai(archive.read(members[0]))
     if hashlib.sha256(decoded).hexdigest() != DECODED_SHA256:
         raise ValueError("Decoded translation identity mismatch")
-    tool = Path(__file__).resolve().parent
-    repository = tool.parents[2]
     # Finish script conversion/strict format checks before copying the game.
     with tempfile.TemporaryDirectory(prefix="cmvs-miranosu-") as temp:
         stage = Path(temp)
         (stage / "mirai.decoded").write_bytes(decoded)
-        subprocess.run([
-            "cargo", "run", "--offline", "--locked", "--release", "--manifest-path",
-            str(tool / "Cargo.toml"), "--target-dir", str(repository / "target/fan-patch-miranosu"),
-            "--", str(game), str(stage / "mirai.decoded"), str(stage), encoding,
-        ], check=True)
+        subprocess.run(
+            patch_command(str(game), str(stage / "mirai.decoded"), str(stage), encoding),
+            check=True,
+        )
         with (stage / "scripts.tsv").open() as stream:
             scripts = list(csv.DictReader(stream, delimiter="\t"))
         if len(scripts) != 115 or sum(int(row["strings"]) for row in scripts) != 95112:

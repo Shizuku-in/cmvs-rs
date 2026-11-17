@@ -31,7 +31,6 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 合成测试覆盖封包边界、重复哈希、末尾空字符串、文件名哈希、借位音符及 GBK 字符串引用重定位。实际补丁已完成 UTF-8/GBK 转换；87 份脚本来源完成转换，86 个脚本的静态结构检查通过，52 张图片逐像素回读一致，修改的 CPZ7 成员逐项回读通过。两种编码的桌面检查均已确认中文标题菜单及原生音频初始化。完整路线及原版存档互操作未验证。
 
 ```sh
-python3 -m unittest discover -s tools/fan_patch/aoitori -p 'test_*.py'
-cargo test --offline --locked --manifest-path tools/fan_patch/aoitori/Cargo.toml \
-  --target-dir target/fan-patch-aoitori
+python3 -I tools/fan_patch/aoitori/test_convert_aoitori_patch.py
+cargo test --offline --locked -p cmvs-patch aoitori
 ```

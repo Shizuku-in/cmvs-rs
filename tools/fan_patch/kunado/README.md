@@ -29,7 +29,6 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 合成测试覆盖补丁成员边界、资源筛选、混合编码、日文修正及字符串引用重定位。实际补丁已完成 UTF-8/GBK 转换；60 份脚本来源完成转换，59 个脚本的静态结构检查通过，48 张图片逐像素回读一致，修改的 CPZ7 成员逐项回读通过。两种编码的桌面检查均已确认中文标题菜单及原生音频初始化。完整路线及原版存档互操作未验证。
 
 ```sh
-python3 -m unittest discover -s tools/fan_patch/kunado -p 'test_*.py'
-cargo test --offline --locked --manifest-path tools/fan_patch/kunado/Cargo.toml \
-  --target-dir target/fan-patch-kunado
+python3 -I tools/fan_patch/kunado/test_convert_kunado_patch.py
+cargo test --offline --locked -p cmvs-patch kunado
 ```

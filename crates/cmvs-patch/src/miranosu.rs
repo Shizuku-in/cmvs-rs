@@ -1,16 +1,15 @@
-//! Offline script rewriting helper; invoked by convert_miranosu_patch.py.
-#[path = "../rewrite_scripts.rs"]
-mod scripts;
+//! Offline Mirai Nostalgia script rewriting helper.
+
+use crate::common::{
+    OutputEncoding, Result, rewrite_encoded, validate_utf8, write_archive, write_new,
+};
 use cmvs_core::{cpz::ArchiveIndex, ps3::Script};
-use scripts::{OutputEncoding, rewrite_encoded, validate_utf8, write_archive};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fs::{self, File, OpenOptions},
-    io::Write,
+    fs::{self, File},
     path::Path,
 };
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
 type Translations = BTreeMap<u32, BTreeMap<u32, Vec<u8>>>;
 
 fn word(data: &[u8], at: usize) -> Result<u32> {
@@ -20,22 +19,7 @@ fn word(data: &[u8], at: usize) -> Result<u32> {
             .try_into()?,
     ))
 }
-#[cfg(test)]
-fn put(data: &mut [u8], at: usize, value: u32) {
-    data[at..at + 4].copy_from_slice(&value.to_le_bytes());
-}
-#[cfg(test)]
-fn push(data: &mut Vec<u8>, value: u32) {
-    data.extend(value.to_le_bytes());
-}
-fn new_file(path: &Path, data: &[u8]) -> Result<()> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?
-        .write_all(data)?;
-    Ok(())
-}
+
 fn parse_patch(data: &[u8]) -> Result<Translations> {
     if data.len() > cmvs_core::MAX_PAYLOAD {
         return Err("patch exceeds limit".into());
@@ -83,7 +67,8 @@ fn parse_patch(data: &[u8]) -> Result<Translations> {
     }
     Ok(blocks)
 }
-fn run(game: &Path, patch: &Path, output: &Path, encoding: OutputEncoding) -> Result<()> {
+
+pub fn run(game: &Path, patch: &Path, output: &Path, encoding: OutputEncoding) -> Result<()> {
     let mut blocks = parse_patch(&fs::read(patch)?)?;
     let mut archive = File::open(game.join("data/pack/script.cpz"))?;
     let index = ArchiveIndex::read(&mut archive)?;
@@ -129,28 +114,22 @@ fn run(game: &Path, patch: &Path, output: &Path, encoding: OutputEncoding) -> Re
         &entries,
         &[],
     )?;
-    new_file(&output.join("start.ps2"), &startup)?;
-    new_file(&output.join("scripts.tsv"), report.as_bytes())?;
+    write_new(&output.join("start.ps2"), &startup)?;
+    write_new(&output.join("scripts.tsv"), report.as_bytes())?;
     Ok(())
-}
-fn main() -> Result<()> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 4 {
-        return Err(
-            "internal helper: <original-game> <decoded-mirai> <empty-output> <encoding>".into(),
-        );
-    }
-    run(
-        Path::new(&args[0]),
-        Path::new(&args[1]),
-        Path::new(&args[2]),
-        OutputEncoding::parse(&args[3])?,
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn put(data: &mut [u8], at: usize, value: u32) {
+        data[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn push(data: &mut Vec<u8>, value: u32) {
+        data.extend(value.to_le_bytes());
+    }
 
     #[test]
     fn records_skip_arbitrary_padding_but_reject_duplicate_offsets_and_truncation() -> Result<()> {

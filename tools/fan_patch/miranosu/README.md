@@ -26,7 +26,6 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 已有 GBK 运行记录覆盖标题、10 个不同消息等待，以及首次剧情存读档后继续播放。完整路线、原生音频和原版存档互操作尚未验证。新增 UTF-8 输出的验证范围见[工具总览](../README.md#验证范围)。
 
 ```bash
-python3 -m unittest discover -s tools/fan_patch/miranosu -p 'test_*.py'
-cargo test --offline --locked --manifest-path tools/fan_patch/miranosu/Cargo.toml \
-  --target-dir target/fan-patch-miranosu
+python3 -I tools/fan_patch/miranosu/test_convert_miranosu_patch.py
+cargo test --offline --locked -p cmvs-patch miranosu
 ```

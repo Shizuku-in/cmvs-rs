@@ -1,12 +1,15 @@
 """Synthetic PKP/PS2A tests, no game assets required."""
 from pathlib import Path
 import struct
+import sys
 import tempfile
 import unittest
 import warnings
 import zipfile
 import zlib
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import convert_amatsutsumi_patch as patch
 from ps3_inspect import decode_script
 
@@ -93,6 +96,10 @@ class ConverterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, zipfile.ZipFile(buffer) as archive:
             with self.assertRaisesRegex(ValueError, "Duplicate"):
                 patch.extract_patch(archive, Path(temp))
+
+    def test_patch_command_selects_amatsutsumi(self):
+        cmd = patch.patch_command("g", "s", "utf-8")
+        self.assertEqual(cmd[-4:], ["amatsutsumi", "g", "s", "utf-8"])
 
 
 if __name__ == "__main__":

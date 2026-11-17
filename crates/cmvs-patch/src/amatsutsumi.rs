@@ -1,26 +1,15 @@
 //! Offline conversion of the digest-pinned 2022 Amatsutsumi patch.
-#[path = "../pb3_writer.rs"]
-mod images;
-#[allow(dead_code)]
-#[path = "../rewrite_scripts.rs"]
-mod scripts;
-use cmvs_core::{bytecode, cmv::CmvIndex, cpz::ArchiveIndex, pb3, ps3::Script};
+
+use crate::common::{
+    OutputEncoding, PngDepthPolicy, Result, png_to_pb3, rewrite_encoded, validate_utf8,
+    write_archive, write_new,
+};
+use cmvs_core::{bytecode, cmv::CmvIndex, cpz::ArchiveIndex, ps3::Script};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fs::{self, File, OpenOptions},
-    io::{Cursor, Write},
+    fs::{self, File},
     path::Path,
 };
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
-fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?
-        .write_all(bytes)?;
-    Ok(())
-}
 
 fn decode_translation(bytes: &[u8]) -> Result<Vec<u8>> {
     let mut result = String::new();
@@ -42,7 +31,7 @@ fn decode_translation(bytes: &[u8]) -> Result<Vec<u8>> {
         }
         at += size;
     }
-    scripts::validate_utf8(result.as_bytes())?;
+    validate_utf8(result.as_bytes())?;
     Ok(result.into_bytes())
 }
 
@@ -65,7 +54,7 @@ fn patch_rows(original: &Script, patched: &Script) -> Result<BTreeMap<u32, Vec<u
             if bad {
                 return Err("invalid original Shift-JIS string".into());
             }
-            scripts::validate_utf8(text.as_bytes())?;
+            validate_utf8(text.as_bytes())?;
             text.as_bytes().to_vec()
         } else if i >= before.len()
             || (before[i] == b"\x82\xd9\x82\xbd\x82\xe9\0" && bytes == b"\xa1\xb0\xd3\xa9\xa1\xb1")
@@ -80,50 +69,8 @@ fn patch_rows(original: &Script, patched: &Script) -> Result<BTreeMap<u32, Vec<u
     }
     Ok(rows)
 }
-fn png_to_pb3(raw: &[u8], original: &[u8]) -> Result<(Vec<u8>, u32, u32, u16)> {
-    let mut reader = png::Decoder::new(Cursor::new(raw)).read_info()?;
-    let info = reader.info();
-    let (width, height) = (info.width, info.height);
-    if !matches!(info.color_type, png::ColorType::Rgba | png::ColorType::Rgb)
-        || info.bit_depth != png::BitDepth::Eight
-        || width == 0
-        || height == 0
-        || width > 65535
-        || height > 65535
-        || u64::from(width) * u64::from(height) * 4 > cmvs_core::MAX_PAYLOAD as u64
-    {
-        return Err("expected bounded RGB8/RGBA8 patch PNG".into());
-    }
-    let header = pb3::Header::parse(original)?;
-    if u32::from(header.width) != width || u32::from(header.height) != height {
-        return Err(format!(
-            "PNG/original dimensions differ: {width}x{height} vs {}x{}",
-            header.width, header.height
-        )
-        .into());
-    }
-    let mut rgba = vec![0; reader.output_buffer_size().ok_or("PNG exceeds limit")?];
-    let color = reader.info().color_type;
-    let frame = reader.next_frame(&mut rgba)?;
-    rgba.truncate(frame.buffer_size());
-    reader.finish()?;
-    if color == png::ColorType::Rgb {
-        rgba = rgba
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|p| [p[0], p[1], p[2], 255])
-            .collect();
-    }
-    let count = (width * height) as usize;
-    if rgba.len() != count * 4 {
-        return Err("PNG pixel count differs".into());
-    }
-    let out = images::encode_rgba(&rgba, width, height)?;
-    Ok((out, width, height, header.bpp))
-}
 
-fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<()> {
+pub fn run(game: &Path, stage: &Path, encoding: OutputEncoding) -> Result<()> {
     let output = stage.join("pack");
     fs::create_dir(&output)?;
     let mut seen = BTreeSet::new();
@@ -161,8 +108,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
             rows.insert(offset as u32, title);
             seen.insert(name.to_owned());
         }
-        let (out, changed) =
-            scripts::rewrite_encoded(&source, &rows, encoding, &[('♪', "☆"), ('・', "·")])?;
+        let (out, changed) = rewrite_encoded(&source, &rows, encoding, &[('♪', "☆"), ('・', "·")])?;
         let decoded = Script::decode(&out)?;
         bytecode::decode_layout(decoded.code(), decoded.header().entry_pc, &decoded.labels())?;
         report.push_str(&format!(
@@ -185,7 +131,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
         return Err("unmatched patched scripts".into());
     }
     write_new(&output.join("start.ps3"), &start)?;
-    scripts::write_archive(&mut file, &index, &output.join("script.cpz"), &entries, &[])?;
+    write_archive(&mut file, &index, &output.join("script.cpz"), &entries, &[])?;
     write_new(&stage.join("scripts.tsv"), report.as_bytes())?;
 
     let mut pictures = BTreeMap::new();
@@ -225,17 +171,25 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
                 if !seen.insert(entry.name.clone()) {
                     return Err("ambiguous image basename".into());
                 }
-                let (out, w, h, bpp) = png_to_pb3(&fs::read(path)?, &original)
-                    .map_err(|e| format!("{}: {e}", String::from_utf8_lossy(&entry.name)))?;
+                let converted = png_to_pb3(
+                    &fs::read(path)?,
+                    &original,
+                    true,
+                    PngDepthPolicy::ForceRgba32,
+                )
+                .map_err(|e| format!("{}: {e}", String::from_utf8_lossy(&entry.name)))?;
                 report.push_str(&format!(
-                    "{archive}\t{}\t{w}\t{h}\t{bpp}\t{}\n",
+                    "{archive}\t{}\t{}\t{}\t{}\t{}\n",
                     std::str::from_utf8(&entry.name)?,
-                    out.len()
+                    converted.width,
+                    converted.height,
+                    converted.original_bpp,
+                    converted.bytes.len()
                 ));
-                entries.insert(i, out);
+                entries.insert(i, converted.bytes);
             }
         }
-        scripts::write_archive(&mut file, &index, &output.join(archive), &entries, &[])?;
+        write_archive(&mut file, &index, &output.join(archive), &entries, &[])?;
         println!("Rebuilt {archive}");
     }
     if seen.len() != 114 {
@@ -272,21 +226,12 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
     write_new(&stage.join("videos.tsv"), report.as_bytes())?;
     Ok(())
 }
-fn main() -> Result<()> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 3 {
-        return Err("expected original-game, stage and encoding".into());
-    }
-    run(
-        Path::new(&args[0]),
-        Path::new(&args[1]),
-        scripts::OutputEncoding::parse(&args[2])?,
-    )
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cmvs_core::pb3::{self, EncodeDepth};
+
     fn fixture(text: &[u8], offset: u32) -> Vec<u8> {
         let mut code = vec![1, 2, 0x20, 1];
         code.extend(offset.to_le_bytes());
@@ -314,6 +259,7 @@ mod tests {
         out.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
         out
     }
+
     #[test]
     fn mixed_source_encodings_restore_notes_and_relocate_references() -> Result<()> {
         let base = fixture(b"\0\x82\xa0\0", 1); // Japanese あ
@@ -324,18 +270,17 @@ mod tests {
         assert_eq!(rows[&4], "中♪".as_bytes());
         for (encoding, expected, offset) in [
             (
-                scripts::OutputEncoding::Utf8,
+                OutputEncoding::Utf8,
                 "\0あ\0中♪\0Z\0".as_bytes().to_vec(),
                 12,
             ),
             (
-                scripts::OutputEncoding::Gbk,
+                OutputEncoding::Gbk,
                 b"\0\xa4\xa2\0\xd6\xd0\xa1\xee\0Z\0".to_vec(),
                 9,
             ),
         ] {
-            let (out, _) =
-                scripts::rewrite_encoded(&patch, &rows, encoding, &[('♪', "☆"), ('・', "·")])?;
+            let (out, _) = rewrite_encoded(&patch, &rows, encoding, &[('♪', "☆"), ('・', "·")])?;
             let out = Script::decode(&out)?;
             assert_eq!(out.text(), expected);
             assert_eq!(out.labels(), source.labels());
@@ -344,6 +289,7 @@ mod tests {
         }
         Ok(())
     }
+
     #[test]
     fn unexpected_base_edits_and_truncated_characters_fail() -> Result<()> {
         assert!(decode_translation(&[0x81]).is_err());
@@ -354,6 +300,7 @@ mod tests {
         assert!(patch_rows(&a, &b).is_err());
         Ok(())
     }
+
     #[test]
     fn translated_existing_name_is_gbk() -> Result<()> {
         let a = Script::decode(&fixture(b"\x82\xd9\x82\xbd\x82\xe9\0", 0))?;
@@ -361,6 +308,7 @@ mod tests {
         assert_eq!(patch_rows(&a, &b)?[&0], "“萤”".as_bytes());
         Ok(())
     }
+
     #[test]
     fn rgb_and_rgba_png_preserve_pixels_and_validate_dimensions() -> Result<()> {
         for color in [png::ColorType::Rgb, png::ColorType::Rgba] {
@@ -374,7 +322,7 @@ mod tests {
                     78
                 },
             ];
-            let original = images::encode_rgba(&rgba, 1, 1)?;
+            let original = pb3::encode_rgba(&rgba, 1, 1, EncodeDepth::Rgba32)?;
             let mut raw = Vec::new();
             {
                 let mut encoder = png::Encoder::new(&mut raw, 1, 1);
@@ -384,9 +332,11 @@ mod tests {
                     .write_header()?
                     .write_image_data(&rgba[..if color == png::ColorType::Rgb { 3 } else { 4 }])?;
             }
-            let (out, _, _, _) = png_to_pb3(&raw, &original)?;
-            assert_eq!(pb3::decode(&out)?.pixels(), rgba);
-            assert!(png_to_pb3(&raw, &images::encode_rgba(&[0; 8], 2, 1)?).is_err());
+            let converted = png_to_pb3(&raw, &original, true, PngDepthPolicy::ForceRgba32)?;
+            assert_eq!(pb3::decode(&converted.bytes)?.pixels(), rgba);
+            assert_eq!(converted.encoded_bpp, 32);
+            let wider = pb3::encode_rgba(&[0; 8], 2, 1, EncodeDepth::Rgba32)?;
+            assert!(png_to_pb3(&raw, &wider, true, PngDepthPolicy::ForceRgba32).is_err());
         }
         Ok(())
     }

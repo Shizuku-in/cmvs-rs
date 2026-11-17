@@ -1,7 +1,11 @@
 """Synthetic Longinus boundaries and omitted empty-string terminators."""
+from pathlib import Path
 import struct
+import sys
 import unittest
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import convert_aoitori_patch as patch
 
 
@@ -36,6 +40,10 @@ class ConverterTests(unittest.TestCase):
         for bad in (raw[:20], raw[:-3], raw[:-2] + b"x", raw + b"x"):
             with self.subTest(raw=bad), self.assertRaises(ValueError):
                 patch.normalize_script(bad)
+
+    def test_patch_command_selects_aoitori(self):
+        cmd = patch.patch_command("g", "s", "utf-8")
+        self.assertEqual(cmd[-4:], ["aoitori", "g", "s", "utf-8"])
 
 
 if __name__ == "__main__":

@@ -1,8 +1,11 @@
 """Synthetic character allocation and input guards; no game data required."""
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import convert_hapymaher_patch as patch
 
 
@@ -41,6 +44,10 @@ class ConverterTests(unittest.TestCase):
             self.assertFalse((root / "output").exists())
             with self.assertRaisesRegex(ValueError, "outside"):
                 patch.convert(root, root / "patch.zip", root / "output")
+
+    def test_patch_command_selects_hapymaher(self):
+        cmd = patch.patch_command("g", "s", "utf-8")
+        self.assertEqual(cmd[-4:], ["hapymaher", "g", "s", "utf-8"])
 
 
 if __name__ == "__main__":

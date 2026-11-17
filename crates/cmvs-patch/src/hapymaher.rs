@@ -1,46 +1,15 @@
-//! Offline helper for convert_hapymaher_patch.py; retains the original CPZ5 format.
-#[path = "../pb3_writer.rs"]
-mod images;
-#[allow(dead_code)]
-#[path = "../rewrite_scripts.rs"]
-mod scripts;
+//! Offline helper for Hapymaher; retains the original CPZ5 format.
 
-use cmvs_core::{bytecode, cpz::ArchiveIndex, pb3, ps3::Script};
+use crate::common::{
+    AddedEntry, OutputEncoding, PngDepthPolicy, Result, encode_memory, encode_utf8, png_to_pb3,
+    rewrite_encoded, write_archive, write_new,
+};
+use cmvs_core::{bytecode, cpz::ArchiveIndex, ps3::Script};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fs::{self, File, OpenOptions},
-    io::{Cursor, Write},
+    fs::{self, File},
     path::Path,
 };
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
-
-fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?
-        .write_all(bytes)?;
-    Ok(())
-}
-fn encode_memory(raw: &[u8]) -> Result<Vec<u8>> {
-    let script = Script::from_memory_image(raw)?;
-    let key = script.header().key;
-    let xor = ((key >> 3).wrapping_add(key >> 24)) as u8;
-    let shift = (key >> 20) % 5 + 1;
-    let mut out = raw[..48].to_vec();
-    out[36..40].fill(0);
-    out.extend(
-        script
-            .payload()
-            .iter()
-            .map(|&b| (b.rotate_left(shift) ^ xor).wrapping_add(124)),
-    );
-    if Script::decode(&out)?.payload() != script.payload() {
-        return Err("patch memory image roundtrip differs".into());
-    }
-    Ok(out)
-}
 
 fn recode(text: &[u8], mapping: &[u16]) -> Result<Vec<u8>> {
     let mut chars = Vec::new();
@@ -59,11 +28,6 @@ fn recode(text: &[u8], mapping: &[u16]) -> Result<Vec<u8>> {
         chars.push(value);
     }
     encode_utf8(&String::from_utf16(&chars)?)
-}
-
-fn encode_utf8(text: &str) -> Result<Vec<u8>> {
-    scripts::validate_utf8(text.as_bytes())?;
-    Ok(text.as_bytes().to_vec())
 }
 
 fn patch_rows(
@@ -102,41 +66,7 @@ fn patch_rows(
     Ok(rows)
 }
 
-fn png_to_pb3(raw: &[u8], original: &[u8]) -> Result<(Vec<u8>, u32, u32, u16)> {
-    let mut reader = png::Decoder::new(Cursor::new(raw)).read_info()?;
-    let info = reader.info();
-    let (width, height) = (info.width, info.height);
-    if info.color_type != png::ColorType::Rgba
-        || info.bit_depth != png::BitDepth::Eight
-        || width == 0
-        || height == 0
-        || width > 65535
-        || height > 65535
-        || u64::from(width) * u64::from(height) * 4 > cmvs_core::MAX_PAYLOAD as u64
-    {
-        return Err("expected bounded RGBA8 patch PNG".into());
-    }
-    let header = pb3::Header::parse(original)?;
-    if u32::from(header.width) != width || u32::from(header.height) != height {
-        return Err(format!(
-            "PNG/original dimensions differ: {width}x{height} vs {}x{}",
-            header.width, header.height
-        )
-        .into());
-    }
-    let mut rgba = vec![0; reader.output_buffer_size().ok_or("PNG exceeds limit")?];
-    let frame = reader.next_frame(&mut rgba)?;
-    rgba.truncate(frame.buffer_size());
-    reader.finish()?;
-    let count = (width * height) as usize;
-    if rgba.len() != count * 4 {
-        return Err("PNG pixel count differs".into());
-    }
-    let out = images::encode_rgba(&rgba, width, height)?;
-    Ok((out, width, height, header.bpp))
-}
-
-fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<()> {
+pub fn run(game: &Path, stage: &Path, encoding: OutputEncoding) -> Result<()> {
     let output = stage.join("pack");
     fs::create_dir(&output)?;
     let table = fs::read(stage.join("characters.bin"))?;
@@ -176,7 +106,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
             (raw, rows, false)
         };
         let (converted, changed) =
-            scripts::rewrite_encoded(&source, &rows, encoding, &[('♪', "☆"), ('・', "·")])
+            rewrite_encoded(&source, &rows, encoding, &[('♪', "☆"), ('・', "·")])
                 .map_err(|e| format!("{basename}: {e}"))?;
         let decoded = Script::decode(&converted)?;
         bytecode::decode_layout(decoded.code(), decoded.header().entry_pc, &decoded.labels())?;
@@ -201,7 +131,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
         return Err("unmatched patch scripts".into());
     }
     write_new(&output.join("start.ps3"), &start)?;
-    scripts::write_archive(&mut file, &index, &output.join("script.cpz"), &entries, &[])?;
+    write_archive(&mut file, &index, &output.join("script.cpz"), &entries, &[])?;
     write_new(&stage.join("scripts.tsv"), report.as_bytes())?;
 
     let mut pictures = BTreeMap::new();
@@ -242,14 +172,22 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
                 if !seen.insert(entry.name.clone()) {
                     return Err("ambiguous image basename".into());
                 }
-                let (converted, width, height, bpp) = png_to_pb3(&fs::read(path)?, &original)
-                    .map_err(|e| format!("{}: {e}", String::from_utf8_lossy(&entry.name)))?;
+                let converted = png_to_pb3(
+                    &fs::read(path)?,
+                    &original,
+                    false,
+                    PngDepthPolicy::ForceRgba32,
+                )
+                .map_err(|e| format!("{}: {e}", String::from_utf8_lossy(&entry.name)))?;
                 report.push_str(&format!(
-                    "{archive}\t{}\t{width}\t{height}\t{bpp}\t{}\n",
+                    "{archive}\t{}\t{}\t{}\t{}\t{}\n",
                     std::str::from_utf8(&entry.name)?,
-                    converted.len()
+                    converted.width,
+                    converted.height,
+                    converted.original_bpp,
+                    converted.bytes.len()
                 ));
-                entries.insert(i, converted);
+                entries.insert(i, converted.bytes);
             }
         }
         let mut additions = Vec::new();
@@ -258,19 +196,27 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
             let name = b"message_log1.pb3".to_vec();
             let original = index.read_entry_verified(&mut file, index.find(b"message_log.pb3")?)?;
             let path = pictures.get(&name).ok_or("missing added backlog image")?;
-            let (converted, width, height, bpp) = png_to_pb3(&fs::read(path)?, &original)?;
+            let converted = png_to_pb3(
+                &fs::read(path)?,
+                &original,
+                false,
+                PngDepthPolicy::ForceRgba32,
+            )?;
             report.push_str(&format!(
-                "{archive}\tmessage_log1.pb3\t{width}\t{height}\t{bpp}\t{}\n",
-                converted.len()
+                "{archive}\tmessage_log1.pb3\t{}\t{}\t{}\t{}\n",
+                converted.width,
+                converted.height,
+                converted.original_bpp,
+                converted.bytes.len()
             ));
             seen.insert(name.clone());
-            additions.push(scripts::AddedEntry {
+            additions.push(AddedEntry {
                 template: index.find(b"message_log.pb3")?,
                 name,
-                bytes: converted,
+                bytes: converted.bytes,
             });
         }
-        scripts::write_archive(
+        write_archive(
             &mut file,
             &index,
             &output.join(archive),
@@ -294,21 +240,11 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
     write_new(&stage.join("images.tsv"), report.as_bytes())?;
     Ok(())
 }
-fn main() -> Result<()> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 3 {
-        return Err("internal helper: <original-game> <stage-directory> <encoding>".into());
-    }
-    run(
-        Path::new(&args[0]),
-        Path::new(&args[1]),
-        scripts::OutputEncoding::parse(&args[2])?,
-    )
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cmvs_core::pb3;
 
     fn memory(text: &[u8]) -> Result<Script> {
         let mut raw = b"PS2A".to_vec();
@@ -385,12 +321,15 @@ mod tests {
         original[30..32].copy_from_slice(&2u16.to_le_bytes());
         original[32..34].copy_from_slice(&2u16.to_le_bytes());
         original[34..36].copy_from_slice(&24u16.to_le_bytes());
-        let (out, width, height, bpp) = png_to_pb3(&png, &original)?;
-        assert_eq!((width, height, bpp), (2, 2, 24));
-        assert_eq!(pb3::decode(&out)?.pixels(), rgba);
-        assert_eq!(pb3::Header::parse(&out)?.bpp, 32);
+        let converted = png_to_pb3(&png, &original, false, PngDepthPolicy::ForceRgba32)?;
+        assert_eq!(
+            (converted.width, converted.height, converted.original_bpp),
+            (2, 2, 24)
+        );
+        assert_eq!(pb3::decode(&converted.bytes)?.pixels(), rgba);
+        assert_eq!(pb3::Header::parse(&converted.bytes)?.bpp, 32);
         original[30..32].copy_from_slice(&3u16.to_le_bytes());
-        assert!(png_to_pb3(&png, &original).is_err());
+        assert!(png_to_pb3(&png, &original, false, PngDepthPolicy::ForceRgba32).is_err());
         Ok(())
     }
 }

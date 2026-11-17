@@ -1,11 +1,14 @@
 """Synthetic patch member validation and unused resource selection."""
 from io import BytesIO
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 import warnings
 import zipfile
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import convert_kunado_patch as patch
 
 
@@ -41,6 +44,10 @@ class ConverterTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     patch.extract_patch(archive, Path(temp))
                 self.assertEqual(list(Path(temp).iterdir()), [])
+
+    def test_patch_command_selects_kunado(self):
+        cmd = patch.patch_command("g", "s", "utf-8")
+        self.assertEqual(cmd[-4:], ["kunado", "g", "s", "utf-8"])
 
 
 if __name__ == "__main__":

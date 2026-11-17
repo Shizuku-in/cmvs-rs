@@ -400,6 +400,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmvs-patch"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
+ "encoding_rs",
+ "png",
+]
+
+[[package]]
 name = "cmvs-probe"
 version = "0.1.0"
 dependencies = [

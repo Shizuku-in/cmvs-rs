@@ -29,3 +29,8 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 ## 验证
 
 合成测试覆盖 PKP 边界检查、脚本封装、混合编码、引用重定位及 RGB/RGBA 像素。实际补丁已完成 UTF-8/GBK 转换；全部脚本跨编码文本对照通过，114 张图片逐像素回读一致，六段视频的首、中、末帧可解码。UTF-8 已确认中文标题菜单，两套输出均已初始化原生音频。完整路线和原版存档互操作未验证。
+
+```sh
+python3 -I tools/fan_patch/amatsutsumi/test_convert_amatsutsumi_patch.py
+cargo test --offline --locked -p cmvs-patch amatsutsumi
+```
