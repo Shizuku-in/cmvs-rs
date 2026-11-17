@@ -7,6 +7,7 @@ use crate::digest::parse_hex;
 /// and bound to exact `(id, base, sha256)` profile identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InspectedBuild {
+    Cvns20040515,
     Cvns20040730,
     Cvns20050216,
     Cvns20050727,
@@ -43,6 +44,12 @@ struct BuildIdentity {
 }
 
 const INSPECTED_BUILDS: &[BuildIdentity] = &[
+    BuildIdentity {
+        build: InspectedBuild::Cvns20040515,
+        id: "cvns-20040515",
+        base: Some("cmvs-20160201"),
+        sha256: sha256_hex("8d5abea307067f2789ae3a7fb4a9cd09aa4e48393a06e3d172ca4250dc56274f"),
+    },
     BuildIdentity {
         build: InspectedBuild::Cvns20040730,
         id: "cvns-20040730",
@@ -198,12 +205,11 @@ impl EngineProfile {
             // docs/games/puriring: .data file bytes end at 0x4ae000; the banks at 0x4b6708,
             // 0x4dc710 (0x8000 bytes of packed bits, 0x440be0), 0x4da710 and 0x4ba710.
             "cmvs-20070119" => Some([4096, 262144, 2048, 128]),
-            // docs/games/majifd/README.md (`sub_4117E0`), aki/README.md (`sub_412980`/`sub_411F00`),
-            // akifd/README.md (`sub_412FE0`/`sub_413AC0`) & miharu/README.md:
+            // docs/games/maji/README.md (`sub_411670`/`sub_412170`), majifd/README.md (`sub_4117E0`),
+            // aki/README.md (`sub_412980`/`sub_411F00`), akifd/README.md (`sub_412FE0`/`sub_413AC0`) & miharu/README.md:
             // integers 4096, bits 0x8000*8=262144, floats 0, strings 256.
-            "cvns-20040730" | "cvns-20050216" | "cvns-20050727" | "cvns-20090203" => {
-                Some([4096, 262144, 0, 256])
-            }
+            "cvns-20040515" | "cvns-20040730" | "cvns-20050216" | "cvns-20050727"
+            | "cvns-20090203" => Some([4096, 262144, 0, 256]),
             _ => None,
         }
     }
@@ -233,7 +239,8 @@ impl EngineProfile {
         matches!(
             self.inspected_build(),
             Some(
-                InspectedBuild::Cvns20040730
+                InspectedBuild::Cvns20040515
+                    | InspectedBuild::Cvns20040730
                     | InspectedBuild::Cvns20050216
                     | InspectedBuild::Cvns20050727
                     | InspectedBuild::Cvns20090203

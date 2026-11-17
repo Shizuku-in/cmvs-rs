@@ -206,6 +206,11 @@ impl Scenario {
     pub fn in_scenario(&self) -> bool {
         self.in_scenario
     }
+    /// Carries the ambient HUD button groups already observed before a save point into a
+    /// resumed scenario so they are not mistaken for a choice while the first line prints.
+    pub fn inherit_ambient(&mut self, prior: &Self) {
+        self.ambient.extend(&prior.ambient);
+    }
     /// Advances the current message wait.
     pub fn advance(&mut self, session: &mut Session<'_>) -> Result<(), Stop> {
         session.act(Action::Advance).map_err(Stop::Error)?;
@@ -517,5 +522,35 @@ mod tests {
         assert_eq!(text, "\u{3042}\u{ff71}A");
         let split = lines([(0x0041u16, 0), (0x0042, 0), (0x0043, 30)].into_iter());
         assert_eq!(split, ["AB", "C"]);
+    }
+
+    #[test]
+    fn inherit_ambient_preserves_observed_hud_groups() {
+        let sig = PageSignature {
+            script: b"menu.pss".to_vec(),
+            groups: Vec::new(),
+        };
+        let make = |sig: PageSignature| Scenario {
+            start: sig,
+            skip: false,
+            ambient: HashSet::new(),
+            answered: HashSet::new(),
+            pending: Vec::new(),
+            pending_frames: 0,
+            settle: Settle::new(STABLE_FRAMES),
+            quiet_since: 0,
+            in_scenario: true,
+            advancing_wait: false,
+            advances: 0,
+            nudges: 0,
+        };
+        let mut prior = make(sig.clone());
+        let hud = (1usize, [0xabu8; 32]);
+        prior.ambient.insert(hud);
+
+        let mut resumed = make(sig);
+        assert!(!resumed.ambient.contains(&hud));
+        resumed.inherit_ambient(&prior);
+        assert!(resumed.ambient.contains(&hud));
     }
 }

@@ -72,6 +72,7 @@ const BUILTIN_PROFILE_FILES: &[&str] = &[
     "profiles/cmvs-20190405.profile",
     "profiles/cmvs-20211006.profile",
     "profiles/cmvs-20221105.profile",
+    "profiles/cvns-20040515.profile",
     "profiles/cvns-20040730.profile",
     "profiles/cvns-20050216.profile",
     "profiles/cvns-20050727.profile",

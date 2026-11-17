@@ -6,6 +6,7 @@
 | [《明日の君と逢うために》 / asukimi](asukimi/README.md) | 存读档、设置及评论编辑已验证；完整路线与原生存档界面待验证 |
 | [《春色桜瀬》 / harouse](harouse/README.md) | 首选路线回标题，存读档及评论编辑通过；仍有 9 个分支前缀待探索 |
 | [《明日の七海と逢うために〜明日の君と逢うために〜FAN DISC》 / asunana](asunana/README.md) | 基本游玩接入；四轮解锁收敛、存读档与绘制检查通过 |
+| [《まじぷり -Wonder Cradle-》 / maji](maji/README.md) | 基础游玩接入：`S1`–`S4`、`R1`/`D1`、`I1`/`I4`、`V1`–`V4`（含 `--render-frames`）、`op.cmv` 3,359 帧解码与 `04.cur` 4-bit 光标通过，`246` 条命令已复核；长探针与桌面实机待验证 |
 | [《まじぷり -Wonder Cradle- ふぁんぢぃすく》 / majifd](majifd/README.md) | 基础游玩接入：`S1`–`S4`、`R1`/`D1`、`I1`/`I4`（含 `--render-frames`）通过，`248` 条命令已复核；`V1`–`V4` 未触达存档点待测、长探针与桌面实机待验证 |
 | [《秋色恋華》 / aki](aki/README.md) | 基础游玩接入：`S1`–`S4`、`R1`/`D1`、`I1`/`I4`、`V1`–`V4`（含 `--render-frames`）及 `op.cmv` 2,965 帧解码通过，254 条命令已复核；长探针与桌面实机待验证 |
 | [《秋色謳華 －秋色恋華ファンディスク－》 / akifd](akifd/README.md) | 单线桌面实机通关（`wgpu` + 音频，1,325,048 次已审命令 / 0 报错）；S1–S4、R1/D1 及 `opfd.cmv` 3,270 帧离线通过，238 条命令已复核；长探针与存读档待验证 |

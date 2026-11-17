@@ -198,7 +198,8 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
             Some(SnapshotLayout::TextV3)
         }
         Some(
-            InspectedBuild::Cvns20040730
+            InspectedBuild::Cvns20040515
+            | InspectedBuild::Cvns20040730
             | InspectedBuild::Cvns20050216
             | InspectedBuild::Cvns20050727
             | InspectedBuild::Cvns20090203,
@@ -1559,6 +1560,7 @@ mod layout_tests {
             ("cmvs-20211006", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20221105", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20160201", SnapshotLayout::TextV3),
+            ("cvns-20040515", SnapshotLayout::CvnsCsp1),
             ("cvns-20040730", SnapshotLayout::CvnsCsp1),
             ("cvns-20050216", SnapshotLayout::CvnsCsp1),
             ("cvns-20050727", SnapshotLayout::CvnsCsp1),

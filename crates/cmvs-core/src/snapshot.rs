@@ -45,9 +45,9 @@ pub enum SnapshotLayout {
     TextV3,
     /// Text v3, scene v4 with 1024 child slots (REALIVE and verified later builds).
     TextV3SceneV4,
-    /// Inspected `cvns-20040730` / `cvns-20050216` / `cvns-20050727` / `cvns-20090203`: CSP1 snapshots with
-    /// dynamic local variable bounds (`PersistentStarts`) and CVNS 2D scene/message/audio
-    /// state (`0xa00..=0xa09`).
+    /// Inspected `cvns-20040515` / `cvns-20040730` / `cvns-20050216` / `cvns-20050727` / `cvns-20090203`:
+    /// CSP1 snapshots with dynamic local variable bounds (`PersistentStarts`) and CVNS 2D
+    /// scene/message/audio state (`0xa00..=0xa09`).
     CvnsCsp1,
 }
 impl SnapshotLayout {

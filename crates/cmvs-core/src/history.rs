@@ -384,6 +384,7 @@ mod tests {
         };
 
         for (id, word_count, append) in [
+            ("cvns-20040515", 2, 0x212c),
             ("cvns-20040730", 2, 0x212c),
             ("cvns-20050216", 2, 0x212c),
             ("cvns-20050727", 4, 0x2137),

@@ -236,6 +236,7 @@ fn run(runner: &Runner<'_>, entry: (usize, usize)) -> Result<Vec<CheckResult>, O
 
     // V3: the same session resumes from the reloaded point.
     let mut again = Scenario::resume(&mut a, start.clone(), false);
+    again.inherit_ambient(&scenario);
     let reloaded = follow(&mut a, &mut again, FOLLOW + 1).map_err(stop_outcome)?;
     let v3 = compare("V3", V3, &original, &reloaded);
     let system = fs::read(user_a.join(runner.target.system_save_name())).ok();
@@ -267,6 +268,7 @@ fn run(runner: &Runner<'_>, entry: (usize, usize)) -> Result<Vec<CheckResult>, O
         Err(e) => CheckResult::new("V2", V2, Outcome::Fail(e)),
     };
     let mut resumed_scenario = Scenario::resume(&mut b, start_b, false);
+    resumed_scenario.inherit_ambient(&scenario);
     let resumed = follow(&mut b, &mut resumed_scenario, FOLLOW + 1).map_err(stop_outcome)?;
     let v1 = compare("V1", V1, &original, &resumed);
     Ok(vec![v1, v2, v3, v4])

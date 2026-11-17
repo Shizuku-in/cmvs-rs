@@ -823,6 +823,71 @@ fn cursor_24bit_bi_rgb_handles_row_padding_bottom_up_order_and_and_mask() {
 }
 
 #[test]
+fn cursor_4bit_bi_rgb_decodes_nibbles_padding_and_and_mask() {
+    // 3x2 4-bit CUR with 2-entry palette: palette=8 bytes, xor_stride=4, and_stride=4.
+    let mut raw = vec![0u8; 22 + 40 + 8 + 8 + 8];
+    raw[2] = 2;
+    raw[4] = 1;
+    raw[6] = 3;
+    raw[7] = 2;
+    raw[10] = 1;
+    raw[12] = 1;
+    put(&mut raw, 14, 40 + 8 + 8 + 8);
+    put(&mut raw, 18, 22);
+    put(&mut raw, 22, 40);
+    put(&mut raw, 26, 3);
+    put(&mut raw, 30, 4);
+    raw[34] = 1;
+    raw[36] = 4;
+    put(&mut raw, 54, 2);
+    // Palette entry 0: BGR=(0,0,0), entry 1: BGR=(10,20,30)
+    raw[66..70].copy_from_slice(&[10, 20, 30, 0]);
+    // Bottom row (visual y=1): indices [1, 0, 1] -> bytes [0x10, 0x10]
+    raw[70..72].copy_from_slice(&[0x10, 0x10]);
+    // Top row (visual y=0): indices [0, 1, 0] -> bytes [0x01, 0x00]
+    raw[74..76].copy_from_slice(&[0x01, 0x00]);
+    // AND mask bottom-up: row 0 = 010 (x=1 transparent), row 1 = 101 (x=0,2 transparent)
+    raw[78] = 0b0100_0000;
+    raw[82] = 0b1010_0000;
+
+    let cursor = CursorBitmap::decode(&raw).unwrap();
+    assert_eq!(
+        (cursor.width(), cursor.height(), cursor.hotspot()),
+        (3, 2, (1, 1))
+    );
+    assert_eq!(
+        cursor.xor_rgb(),
+        [
+            [0, 0, 0],
+            [30, 20, 10],
+            [0, 0, 0],
+            [30, 20, 10],
+            [0, 0, 0],
+            [30, 20, 10],
+        ]
+    );
+    assert_eq!(cursor.and_mask(), [true, false, true, false, true, false]);
+    assert_eq!(
+        cursor.rgba().unwrap(),
+        [
+            0, 0, 0, 0, 30, 20, 10, 255, 0, 0, 0, 0, 30, 20, 10, 255, 0, 0, 0, 0, 30, 20, 10, 255,
+        ]
+    );
+
+    let mut bad_palette = raw.clone();
+    put(&mut bad_palette, 54, 17);
+    assert!(CursorBitmap::decode(&bad_palette).is_err());
+
+    let mut bad_index = raw.clone();
+    bad_index[70] = 0x20;
+    assert!(CursorBitmap::decode(&bad_index).is_err());
+
+    for end in 0..raw.len() {
+        assert!(CursorBitmap::decode(&raw[..end]).is_err());
+    }
+}
+
+#[test]
 fn cursor_truncation_invalid_ranges_and_unsupported_variants_fail() {
     let raw = cur();
     for end in 0..raw.len() {
