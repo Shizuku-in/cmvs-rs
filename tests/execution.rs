@@ -313,13 +313,50 @@ fn unknown_condition_and_unsupported_instruction_leave_pc_unchanged() {
     let mut vm = Machine::new(&first_script).unwrap();
     assert!(vm.step().is_err());
     assert_eq!(vm.pc(), 0);
-    // 0x0413 (return by result-register count) is decoded but not executed yet.
+    // 0x0413 without an active call frame leaves pc and stack unchanged.
     let mut code = vec![];
     word(&mut code, 0x413);
+    word(&mut code, 0xfffc);
     let script = script(&code);
     let mut vm = Machine::new(&script).unwrap();
     assert!(vm.step().is_err());
     assert_eq!((vm.pc(), vm.stack().len_bytes()), (0, 0));
+}
+
+#[test]
+fn empty_integer_expression_sets_zero_and_0413_returns_by_result_count() {
+    let mut code = vec![];
+    code.extend(int(99)); // 10B: pushed arg
+    word(&mut code, 0x430); // 12B: SP += 4
+    word(&mut code, 0x410); // 12B: call label 1 -> return pc = 16
+    word(&mut code, 1); // 14B
+    word(&mut code, 0x2000); // 16B: yield
+    // label 1 at offset 18:
+    word(&mut code, 0x200); // 18B: empty 0x200 0x20f -> integer[4096]=0, result=0, condition=false
+    word(&mut code, 0x20f); // 20B
+    code.extend(int(1)); // 22B: set result=1 (1 arg dword to discard on 0x413)
+    word(&mut code, 0x413); // 32B: return discarding 4 * result bytes (trailing word ignored)
+    word(&mut code, 0xfffc); // 34B
+    let script = Script::decode(&fixture(&code, &[0, 18], &[])).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    vm.step().unwrap(); // int(99)
+    vm.step().unwrap(); // 0x430
+    vm.step().unwrap(); // 0x410 label 1 -> pushes return pc 16
+    assert_eq!(vm.pc(), 18);
+    vm.step().unwrap(); // empty 0x200 0x20f
+    assert_eq!(
+        (
+            vm.state().integer(4096),
+            vm.state().result,
+            vm.state().condition
+        ),
+        (Some(0), Some(0), Some(false))
+    );
+    vm.step().unwrap(); // int(1)
+    vm.step().unwrap(); // 0x413 -> pops return pc 16 and 4 bytes (99)
+    assert_eq!(vm.pc(), 16);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.step().unwrap(), Step::Yield);
 }
 
 #[test]

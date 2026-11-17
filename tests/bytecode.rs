@@ -217,3 +217,30 @@ fn string_assignment_is_structurally_decoded_without_claiming_numeric_evaluation
     assert_eq!(expr.end, code.len());
     assert!(bytecode::eval_constant(&expr).is_err());
 }
+
+#[test]
+fn decodes_0413_operand_word_and_top_level_empty_integer_expression() {
+    let mut code = vec![];
+    word(&mut code, 0x413);
+    word(&mut code, 0xfffc);
+    let insn = bytecode::decode_at(&code, 0).unwrap();
+    assert_eq!(insn.end, 4);
+    assert_eq!(insn.kind, InstructionKind::StackAdjust { bytes: 0xfffc });
+
+    let mut empty = vec![];
+    word(&mut empty, 0x200);
+    word(&mut empty, 0x20f);
+    let expr = expression(&empty);
+    assert_eq!(expr.end, 4);
+    assert!(expr.terms.is_empty());
+    assert_eq!(bytecode::eval_constant(&expr).unwrap(), 0);
+
+    for invalid in [
+        [0x201u16, 0x20f].as_slice(),
+        [0x202u16, 0x20f].as_slice(),
+        [0x200u16, 0x200, 0x20f, 0x20f].as_slice(),
+    ] {
+        let bytes: Vec<u8> = invalid.iter().flat_map(|w| w.to_le_bytes()).collect();
+        assert!(bytecode::decode_at(&bytes, 0).is_err());
+    }
+}

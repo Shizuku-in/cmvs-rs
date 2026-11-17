@@ -181,6 +181,22 @@ pub(in crate::dispatch) fn cvns_message_dialog(
     Ok(Flow::Done)
 }
 
+/// CVNS 0x21b7 (cvns-20040730 0x430820 -> ChooseColorA): pops two color words (`0x4008`)
+/// and writes `system_integer(0) = 0` when no interactive color dialog is picked.
+pub(in crate::dispatch) fn cvns_color_dialog(
+    _hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    call.ignore_argument(4, "initial color")?;
+    call.ignore_argument(8, "custom color")?;
+    call.complete(0x4008)?;
+    call.vm
+        .state_mut()
+        .set_system_integer(0, 0)
+        .expect("slot zero exists");
+    Ok(Flow::Done)
+}
+
 /// 0x213d / 0x140081520 seeds the modal dialog with the global face (+3160).
 /// An accepted face updates the setting and reselects only texts using the default;
 /// cancellation still completes with no arguments or result writes.

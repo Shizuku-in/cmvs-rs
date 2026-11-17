@@ -695,7 +695,7 @@ impl CvnsSnapshot {
             out.record(
                 0xa06,
                 Some(slot),
-                &text::encode_with_layout(obj, SnapshotLayout::Cvns20090203)?,
+                &text::encode_with_layout(obj, SnapshotLayout::CvnsCsp1)?,
             )?;
         }
         for (&slot, msg) in &self.messages {
@@ -744,7 +744,7 @@ impl CvnsSnapshot {
                 }
                 0xa06 => {
                     let slot = require_slot(record, CVNS_WINDOWS)?;
-                    let obj = text::decode_with_layout(body, SnapshotLayout::Cvns20090203)?;
+                    let obj = text::decode_with_layout(body, SnapshotLayout::CvnsCsp1)?;
                     insert_unique(&mut texts, slot, obj)?;
                 }
                 0xa07 => {

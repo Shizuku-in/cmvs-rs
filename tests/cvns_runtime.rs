@@ -489,7 +489,12 @@ fn cvns_0x21ab_save_comment_updates_csp_slot_and_skips_slot_zero() {
     )
     .unwrap();
 
-    for profile in ["cvns-20050727", "cvns-20090203"] {
+    for profile in [
+        "cvns-20040730",
+        "cvns-20050216",
+        "cvns-20050727",
+        "cvns-20090203",
+    ] {
         let game = Registry::builtin()
             .identify_game(&root, Some(profile))
             .unwrap();
@@ -516,4 +521,39 @@ fn cvns_0x21ab_save_comment_updates_csp_slot_and_skips_slot_zero() {
         let _ = std::fs::remove_dir_all(&user);
     }
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn cvns_20040730_color_dialog_pops_args_and_clears_accept_flag() {
+    use cmvs_rs::{
+        dispatch::{self, Flow, Hosts},
+        profile::Registry,
+    };
+    let profile = Registry::builtin().profile("cvns-20040730").unwrap();
+    let mut code = Vec::new();
+    push_const(&mut code, 0x200, 0x100, 0x112233);
+    push_const(&mut code, 0x200, 0x100, 0x445566);
+    word(&mut code, 0x21b7);
+    word(&mut code, 0x2000);
+    let sc = Script::decode(&script(&code, &[])).unwrap();
+    let mut vm = Machine::new(&sc).unwrap();
+    vm.set_command_map(profile.command_map());
+    vm.state_mut().set_system_integer(0, 99).unwrap();
+
+    while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+    let (_, cmd) = vm.pending_system().unwrap();
+    assert_eq!(
+        dispatch::run(
+            profile.semantics(cmd),
+            &mut vm,
+            &mut Hosts {
+                runtime: true,
+                ..Default::default()
+            }
+        )
+        .unwrap(),
+        Some(Flow::Done)
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(0));
 }

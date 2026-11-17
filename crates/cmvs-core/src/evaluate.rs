@@ -802,6 +802,21 @@ impl State {
         }
         .map_err(|why| error(pc, op, why))
     }
+    fn finish_integer_eval(
+        &mut self,
+        expr: &Expression,
+        value: i32,
+        journal: &mut Journal,
+    ) -> Result<i32, DecodeError> {
+        // The original integer evaluator writes its result to global integer 4096.
+        self.set_integer_journaled(4096, value, journal)
+            .map_err(|why| error(expr.pc, expr.kind, why))?;
+        self.set_result_journaled(Some(value as u32), journal);
+        journal.0.push(Undo::Condition(self.condition));
+        self.condition = Some(value != 0);
+        Ok(value)
+    }
+
     fn evaluate(
         &mut self,
         expr: &Expression,
@@ -819,6 +834,10 @@ impl State {
         }
         if expr.kind != 0x200 {
             return Err(error(expr.pc, expr.kind, "not an integer expression"));
+        }
+        if expr.terms.is_empty() {
+            // CVNS sub_425810 skips the term loop and computes default result 0 for empty 0x200 0x20f.
+            return self.finish_integer_eval(expr, 0, journal);
         }
         let mut stack = StackFrame::new(int_stack);
         for term in &expr.terms {
@@ -1004,13 +1023,7 @@ impl State {
             ));
         };
         let value = self.read(top, env, expr.pc, expr.kind)?;
-        // The original integer evaluator writes its result to global integer 4096.
-        self.set_integer_journaled(4096, value, journal)
-            .map_err(|why| error(expr.pc, expr.kind, why))?;
-        self.set_result_journaled(Some(value as u32), journal);
-        journal.0.push(Undo::Condition(self.condition));
-        self.condition = Some(value != 0);
-        Ok(value)
+        self.finish_integer_eval(expr, value, journal)
     }
 
     pub fn evaluate_float_with_labels(

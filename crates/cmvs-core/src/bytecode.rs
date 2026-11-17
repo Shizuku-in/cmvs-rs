@@ -118,7 +118,7 @@ impl Reader<'_> {
             let at = self.pos;
             let tag = self.word()?;
             if tag == 0x20f {
-                if terms.is_empty() {
+                if terms.is_empty() && !(kind == 0x200 && depth == 0) {
                     return Err(self.error(at, Some(tag), "empty expression"));
                 }
                 return Ok(Expression {
@@ -253,13 +253,13 @@ pub fn decode_at(code: &[u8], pc: usize) -> Result<Instruction, DecodeError> {
         0x405 | 0x410 => InstructionKind::Label {
             index: reader.word()?,
         },
-        0x411 | 0x412 => InstructionKind::StackAdjust {
+        0x411..=0x413 => InstructionKind::StackAdjust {
             bytes: reader.word()?,
         },
         0x414 => InstructionKind::ScriptReturn {
             reserved: reader.word()?,
         },
-        0x413 | 0x416 | 0x430 => InstructionKind::Simple,
+        0x416 | 0x430 => InstructionKind::Simple,
         0x440 | 0x442 => InstructionKind::StackImmediate {
             bytes: reader.word()?,
             raw: reader.dword()?,
@@ -342,6 +342,9 @@ pub fn eval_constant(expression: &Expression) -> Result<i32, DecodeError> {
             expression.kind,
             "not an integer expression",
         ));
+    }
+    if expression.terms.is_empty() {
+        return Ok(0);
     }
     let mut values: Vec<i32> = Vec::new();
     for term in &expression.terms {

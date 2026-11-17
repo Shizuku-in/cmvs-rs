@@ -19,6 +19,8 @@ pub mod cmd {
     pub const PERSISTENT_STR_START: u16 = 0x50d;
     pub const TEXT_MESSAGE_LOG: u16 = 0x512;
     pub const TEXT_MESSAGE_WAIT: u16 = 0x520;
+    pub const HISTORY_APPEND_2: u16 = 0x52c;
+    pub const HISTORY_QUERY_2: u16 = 0x52d;
     pub const HISTORY_QUERY: u16 = 0x536;
     pub const HISTORY_APPEND: u16 = 0x537;
     pub const MASK_CAPTURE: u16 = 0x589;

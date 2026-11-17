@@ -3,7 +3,7 @@
 use crate::dispatch::handlers::input::root_input;
 use crate::dispatch::handlers::media::{cvns_master_volume, root_audio, root_movie_player};
 use crate::dispatch::handlers::platform::{
-    cvns_message_dialog, root_platform, variant_text_dialog,
+    cvns_color_dialog, cvns_message_dialog, root_platform, variant_text_dialog,
 };
 use crate::dispatch::handlers::scene::{
     root_cvns_image, root_cvns_scene, root_cvns_wait, root_scene,
@@ -353,10 +353,28 @@ pub static CVNS: &[Entry] = &[
         handler: root_audio,
     },
     Entry {
+        command: 0x4ef,
+        name: "CVNS auxiliary SE gain multiplier",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x4ff,
+        name: "CVNS auxiliary SE stereo peak",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
         command: 0x4e7,
         name: "CVNS integer polar point",
         capability: Capability::Math,
         handler: polar_point,
+    },
+    Entry {
+        command: 0x4e8,
+        name: "CVNS degree cartesian to polar",
+        capability: Capability::Math,
+        handler: cartesian_to_polar,
     },
     Entry {
         command: 0x4ec,
@@ -393,6 +411,18 @@ pub static CVNS: &[Entry] = &[
         name: "CVNS persistent strings start",
         capability: Capability::Bootstrap,
         handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x52c,
+        name: "CVNS append 2-word history entry",
+        capability: Capability::History,
+        handler: root_history,
+    },
+    Entry {
+        command: 0x52d,
+        name: "CVNS query 2-word history entry",
+        capability: Capability::History,
+        handler: root_history,
     },
     Entry {
         command: 0x536,
@@ -1253,6 +1283,12 @@ pub static CVNS: &[Entry] = &[
         handler: root_cvns_messages,
     },
     Entry {
+        command: 0x543,
+        name: "CVNS set local message sprite visibility",
+        capability: Capability::Windows,
+        handler: root_cvns_messages,
+    },
+    Entry {
         command: 0x544,
         name: "CVNS set local sprite keyframe track",
         capability: Capability::Windows,
@@ -1359,6 +1395,24 @@ pub static CVNS: &[Entry] = &[
         name: "CVNS text input dialog",
         capability: Capability::TextDialog,
         handler: variant_text_dialog,
+    },
+    Entry {
+        command: 0x5b7,
+        name: "CVNS color picker dialog",
+        capability: Capability::Runtime,
+        handler: cvns_color_dialog,
+    },
+    Entry {
+        command: 0x600,
+        name: "CVNS register external glyph sheet",
+        capability: Capability::WindowImages,
+        handler: root_cvns_message_images,
+    },
+    Entry {
+        command: 0x601,
+        name: "CVNS extract external glyph",
+        capability: Capability::Windows,
+        handler: root_cvns_messages,
     },
     Entry {
         command: 0x629,

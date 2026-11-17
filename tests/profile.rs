@@ -825,7 +825,7 @@ fn cvns_maps_need_a_review_and_root_semantics() {
         // The target must be a root Base command or a registered CVNS-only handler.
         (cvns.replace(map, " map=0x2002 "), "no root semantics"),
         (cvns.replace(map, " map=0x2001 "), "no root semantics"),
-        (cvns.replace(map, " map=0x2600 "), "no root semantics"),
+        (cvns.replace(map, " map=0x27ff "), "no root semantics"),
         (
             cvns.replace(map, " map=0x2800 "),
             "outside the system opcodes",

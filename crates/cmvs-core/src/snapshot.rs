@@ -45,9 +45,10 @@ pub enum SnapshotLayout {
     TextV3,
     /// Text v3, scene v4 with 1024 child slots (REALIVE and verified later builds).
     TextV3SceneV4,
-    /// Inspected `cvns-20090203`: CSP1 snapshots with dynamic local variable bounds
-    /// (`PersistentStarts`) and CVNS 2D scene/message/audio state (`0xa00..=0xa09`).
-    Cvns20090203,
+    /// Inspected `cvns-20040730` / `cvns-20050216` / `cvns-20050727` / `cvns-20090203`: CSP1 snapshots with
+    /// dynamic local variable bounds (`PersistentStarts`) and CVNS 2D scene/message/audio
+    /// state (`0xa00..=0xa09`).
+    CvnsCsp1,
 }
 impl SnapshotLayout {
     pub(crate) fn text_version(self) -> u16 {
@@ -57,7 +58,7 @@ impl SnapshotLayout {
             | Self::TextV1SceneV2
             | Self::TextV1SceneV2Collision => 1,
             Self::TextV2WindowV2 | Self::TextV2 => 2,
-            Self::TextV3 | Self::TextV3SceneV4 | Self::Cvns20090203 => 3,
+            Self::TextV3 | Self::TextV3SceneV4 | Self::CvnsCsp1 => 3,
         }
     }
     /// Eight texts, four windows, no 0x6e0 or 0x8c8 records, v1 draw animations and
@@ -66,7 +67,7 @@ impl SnapshotLayout {
         self.text_version() == 1 || self == Self::TextV2WindowV2
     }
     pub(crate) fn child_slots(self) -> u16 {
-        if self.old_tables() || self == Self::Cvns20090203 {
+        if self.old_tables() || self == Self::CvnsCsp1 {
             256
         } else if self == Self::TextV3SceneV4 {
             1024

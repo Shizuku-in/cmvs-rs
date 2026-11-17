@@ -784,16 +784,25 @@ impl<'a> Machine<'a> {
                     .discard(*bytes as usize)
                     .map_err(|e| error(pc, op, e.0))?;
             }
-            InstructionKind::StackAdjust { bytes } if op == 0x411 => {
+            InstructionKind::StackAdjust { bytes } if matches!(op, 0x411 | 0x413) => {
                 if self.frames.is_empty() {
                     return Err(error(pc, op, "return without a caller"));
                 }
+                let discard_args = if op == 0x411 {
+                    usize::from(*bytes)
+                } else {
+                    let count = self
+                        .state
+                        .result
+                        .ok_or_else(|| error(pc, op, "result register is unknown"))?;
+                    usize::from((count as u16).wrapping_mul(4))
+                };
                 next = self.stack.peek_u32(4).map_err(|e| error(pc, op, e.0))? as usize;
                 if !self.is_boundary(self.slot, next) {
                     return Err(error(pc, op, "invalid return address"));
                 }
                 self.stack
-                    .discard(4 + *bytes as usize)
+                    .discard(4 + discard_args)
                     .map_err(|e| error(pc, op, e.0))?;
                 self.frames.pop();
             }

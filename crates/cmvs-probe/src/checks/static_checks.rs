@@ -439,7 +439,7 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
                     .and_then(|(family, save)| match (family, layout) {
                         (
                             cmvs_core::save_menu::SaveFamily::Cvns,
-                            cmvs_core::snapshot::SnapshotLayout::Cvns20090203,
+                            cmvs_core::snapshot::SnapshotLayout::CvnsCsp1,
                         ) => cmvs_core::snapshot::CvnsSnapshot::decode(&save.snapshot)
                             .map(|_| "CSP1 gameplay save".to_owned())
                             .map_err(|e| e.to_string()),

@@ -172,3 +172,39 @@ fn cvns_centidegree_polar_and_cartesian_conversions() {
     assert_eq!(vm.state().system_integer(4), Some(9000));
     assert_eq!(vm.state().system_integer(5), Some(40));
 }
+
+#[test]
+fn cvns_20040730_degree_cartesian_to_polar_uses_360_degree_circle() {
+    use cmvs_rs::{
+        dispatch::{self, Flow, Hosts},
+        profile::Registry,
+    };
+    let profile = Registry::builtin().profile("cvns-20040730").unwrap();
+    let script = script(&[
+        (0x20e8, &[0, 0, 100, 0]),
+        (0x20e8, &[10, 20, 10, (-30i32) as u32]),
+        (0x20e8, &[0, 0, 0, 40]),
+    ]);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.set_command_map(profile.command_map());
+
+    for (want_angle, want_dist) in [(0, 100), (270, 50), (90, 40)] {
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let (_, cmd) = vm.pending_system().unwrap();
+        assert_eq!(
+            dispatch::run(
+                profile.semantics(cmd),
+                &mut vm,
+                &mut Hosts {
+                    math: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            Some(Flow::Done)
+        );
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(4), Some(want_angle));
+        assert_eq!(vm.state().system_integer(5), Some(want_dist));
+    }
+}

@@ -17,7 +17,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
 
 fn valid_glyph_capacity(layout: SnapshotLayout, glyph_capacity: u32) -> bool {
     match layout {
-        SnapshotLayout::Cvns20090203 => matches!(glyph_capacity, 0 | 196 | 4096),
+        SnapshotLayout::CvnsCsp1 => matches!(glyph_capacity, 0 | 196 | 4096),
         _ => matches!(glyph_capacity, 0 | 196),
     }
 }
@@ -56,7 +56,7 @@ pub(crate) fn decode_with_layout(
         | SnapshotLayout::TextV1SceneV2
         | SnapshotLayout::TextV2WindowV2
         | SnapshotLayout::TextV2 => &[0; 208],
-        SnapshotLayout::TextV3 | SnapshotLayout::TextV3SceneV4 | SnapshotLayout::Cvns20090203 => {
+        SnapshotLayout::TextV3 | SnapshotLayout::TextV3SceneV4 | SnapshotLayout::CvnsCsp1 => {
             r.take(208)?
         }
     };
@@ -427,11 +427,11 @@ mod tests {
         bytes.extend(0u16.to_le_bytes());
 
         assert!(super::decode(&bytes).is_err());
-        let text = super::decode_with_layout(&bytes, super::SnapshotLayout::Cvns20090203).unwrap();
+        let text = super::decode_with_layout(&bytes, super::SnapshotLayout::CvnsCsp1).unwrap();
         assert_eq!(text.glyph_capacity, 4096);
         assert!(super::encode_with_layout(&text, super::SnapshotLayout::TextV3).is_err());
         assert_eq!(
-            super::encode_with_layout(&text, super::SnapshotLayout::Cvns20090203).unwrap(),
+            super::encode_with_layout(&text, super::SnapshotLayout::CvnsCsp1).unwrap(),
             bytes
         );
     }

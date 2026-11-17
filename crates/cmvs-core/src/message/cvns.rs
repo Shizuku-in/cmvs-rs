@@ -163,6 +163,58 @@ pub struct CvnsMessage {
     cached_objects: Vec<SceneObject>,
 }
 
+/// External `MSK0` glyph sheet (`0x600`) and Shift-JIS tile cache (`0x601`).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ExternalGlyphSheet {
+    pub glyph_size: u32,
+    pub width: u32,
+    pub height: u32,
+    pub mask: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ExternalGlyphBank {
+    sheets: Vec<ExternalGlyphSheet>,
+    glyphs: std::collections::BTreeMap<(u16, u32), Vec<u8>>,
+}
+
+impl ExternalGlyphBank {
+    pub(crate) fn add_sheet(&mut self, glyph_size: u32, width: u32, height: u32, mask: Vec<u8>) {
+        self.sheets.push(ExternalGlyphSheet {
+            glyph_size,
+            width,
+            height,
+            mask,
+        });
+    }
+
+    pub(crate) fn extract_glyph(&mut self, tile_index: u32, sjis_code: u16) {
+        for sheet in &self.sheets {
+            let size = sheet.glyph_size;
+            if size == 0 || sheet.width < size || sheet.height < size {
+                continue;
+            }
+            let cols = sheet.width / size;
+            if tile_index / cols >= sheet.height / size {
+                continue;
+            }
+            let tx = (tile_index % cols) * size;
+            let ty = (tile_index / cols) * size;
+            let mut tile = Vec::with_capacity((size * size) as usize);
+            for y in 0..size {
+                let row = ((ty + y) * sheet.width + tx) as usize;
+                tile.extend_from_slice(&sheet.mask[row..row + size as usize]);
+            }
+            self.glyphs.entry((sjis_code, size)).or_insert(tile);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn glyph(&self, sjis_code: u16, glyph_size: u32) -> Option<&[u8]> {
+        self.glyphs.get(&(sjis_code, glyph_size)).map(Vec::as_slice)
+    }
+}
+
 pub(crate) struct RestoredCvnsMessage {
     pub win_slot: usize,
     pub x: i32,
@@ -1572,6 +1624,19 @@ impl CvnsMessageHost {
                 sprite.origin_y = oy;
                 msg.rebuild_cached_objects();
             }
+            0x543 => {
+                let (m, sp) = self.require_local_sprite_mut(
+                    call.pc,
+                    op,
+                    call.argument(4, "message slot")?,
+                    call.argument(8, "local sprite")?,
+                )?;
+                let visible = call.argument(12, "visible")? != 0;
+                call.complete(0x400c)?;
+                let msg = self.messages[m].as_mut().expect("checked");
+                msg.local_sprites[sp].as_mut().expect("checked").visible = visible;
+                msg.rebuild_cached_objects();
+            }
             0x544 | 0x545 => {
                 let (m, sp) = self.require_local_sprite_mut(
                     call.pc,
@@ -2943,5 +3008,61 @@ mod tests {
         assert_eq!(sp.src_rect, [-2, 1, 3, 4]);
         assert_eq!((sp.w, sp.h), (5, 3));
         assert!(sp.dirty);
+
+        // 0x543 toggles local sprite visibility (`visible != 0`).
+        exec_msg(&mut msg, 0x543, &[Arg::Int(0), Arg::Int(2), Arg::Int(1)]);
+        assert!(
+            msg.cvns().unwrap().messages[0]
+                .as_ref()
+                .unwrap()
+                .local_sprites[2]
+                .as_ref()
+                .unwrap()
+                .visible
+        );
+        exec_msg(&mut msg, 0x543, &[Arg::Int(0), Arg::Int(2), Arg::Int(0)]);
+        assert!(
+            !msg.cvns().unwrap().messages[0]
+                .as_ref()
+                .unwrap()
+                .local_sprites[2]
+                .as_ref()
+                .unwrap()
+                .visible
+        );
+
+        // 0x600 loads an MSK0 glyph sheet; 0x601 extracts tile_index for a Shift-JIS code.
+        let mut msk = b"MSK0".to_vec();
+        msk.extend(16u32.to_le_bytes());
+        msk.extend(4u32.to_le_bytes());
+        msk.extend(4u32.to_le_bytes());
+        // Two rows of 2x2 tiles across width 4; tile 1 sits at columns 2..4, rows 0..2.
+        msk.extend([
+            1, 2, 10, 11, // row 0
+            3, 4, 12, 13, // row 1
+            5, 6, 14, 15, // row 2
+            7, 8, 16, 17, // row 3
+        ]);
+        images.0.insert(b"font2ex.msk".to_vec(), msk);
+        exec_img(
+            &mut msg,
+            &mut images,
+            0x600,
+            &[Arg::Str(b"font2ex.msk"), Arg::Int(2)],
+        );
+        exec_msg(&mut msg, 0x601, &[Arg::Int(1), Arg::Int(0x8197)]);
+        assert_eq!(
+            msg.external_glyphs.glyph(0x8197, 2),
+            Some([10, 11, 12, 13].as_slice())
+        );
+        for index in [4, 5, u32::MAX] {
+            exec_msg(&mut msg, 0x601, &[Arg::Int(index), Arg::Int(0x8198)]);
+            assert_eq!(msg.external_glyphs.glyph(0x8198, 2), None);
+        }
+        exec_msg(&mut msg, 0x601, &[Arg::Int(3), Arg::Int(0x8198)]);
+        assert_eq!(
+            msg.external_glyphs.glyph(0x8198, 2),
+            Some([14, 15, 16, 17].as_slice())
+        );
     }
 }

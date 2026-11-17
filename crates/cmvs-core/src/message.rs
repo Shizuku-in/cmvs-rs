@@ -297,6 +297,7 @@ pub struct MessageHost {
     auxiliary_fonts: [bool; AUXILIARY_TEXTS],
     auxiliary_font_faces: [Option<Arc<[u8]>>; AUXILIARY_TEXTS],
     auxiliary_clock: u32,
+    external_glyphs: cvns::ExternalGlyphBank,
     cvns: Option<Box<cvns::CvnsMessageHost>>,
 }
 
@@ -516,6 +517,13 @@ impl MessageHost {
         &mut self,
         call: &mut Call<'_, '_>,
     ) -> Result<crate::dispatch::Flow, DecodeError> {
+        if call.command == 0x601 {
+            let tile_index = call.argument(4, "glyph tile index")?;
+            let sjis_code = (call.argument(8, "glyph character code")? & 0xffff) as u16;
+            call.complete(0x4008)?;
+            self.external_glyphs.extract_glyph(tile_index, sjis_code);
+            return Ok(crate::dispatch::Flow::Done);
+        }
         let face = self.default_face();
         let settings = self.output_settings;
         let screen_size = self.screen_size().map(|v| v as i32);
@@ -530,6 +538,20 @@ impl MessageHost {
         call: &mut Call<'_, '_>,
         source: &mut dyn ImageSource,
     ) -> Result<(), Box<dyn Error>> {
+        if call.command == 0x600 {
+            let name_ref = call.argument(4, "external glyph sheet")?;
+            let glyph_size = call.argument(8, "external glyph size")?;
+            let name = call.vm.resolve_string(name_ref)?;
+            if let Some(bytes) = source.read(&name)?
+                && bytes.get(..4) == Some(b"MSK0")
+            {
+                let (width, height, mask) = crate::msk::decode_bytes(&bytes)?;
+                self.external_glyphs
+                    .add_sheet(glyph_size, width, height, mask);
+            }
+            call.complete(0x4008)?;
+            return Ok(());
+        }
         let cvns = self
             .cvns
             .get_or_insert_with(|| Box::new(cvns::CvnsMessageHost::default()));

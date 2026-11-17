@@ -38,7 +38,11 @@ impl HistoryHost {
         };
         if !matches!(
             command,
-            0x12f..=0x136 | cmd::HISTORY_QUERY | cmd::HISTORY_APPEND
+            cmd::HISTORY_APPEND_2
+                | cmd::HISTORY_QUERY_2
+                | cmd::HISTORY_QUERY
+                | cmd::HISTORY_APPEND
+                | 0x12f..=0x136
         ) {
             return Ok(false);
         }
@@ -57,16 +61,24 @@ impl HistoryHost {
             self.entries.clear();
             return Ok(());
         }
-        if matches!(command, 0x130..=0x135 | cmd::HISTORY_QUERY) {
+        if matches!(
+            command,
+            0x130..=0x135 | cmd::HISTORY_QUERY_2 | cmd::HISTORY_QUERY
+        ) {
             return self.query(call);
         }
-        let is_cvns = command == cmd::HISTORY_APPEND;
+        let is_cvns = matches!(command, cmd::HISTORY_APPEND | cmd::HISTORY_APPEND_2);
         let op = command + 0x2000;
         let str_count = if is_cvns { 3 } else { 4 };
-        let word_count = if is_cvns { 4 } else { 6 };
+        let word_count = match command {
+            cmd::HISTORY_APPEND_2 => 2,
+            cmd::HISTORY_APPEND => 4,
+            _ => 6,
+        };
         let mut strings: [Vec<u8>; 4] = Default::default();
-        // `sub_465d40 -> sub_442120`: CVNS arg1 (`SP-8`) is the dynamic dialogue text (`strings[2]`),
-        // while arg2 (`SP-12`) goes into the 32-byte field at +36 (`strings[1]`).
+        // `sub_465d40 -> sub_442120` (and cvns-20050216 `sub_4320A0 -> sub_4239F0`): CVNS
+        // arg1 (`SP-8`) is the dynamic dialogue text (`strings[2]`), while arg2 (`SP-12`)
+        // goes into the 32-byte field at +36 (`strings[1]`).
         let dest_for = |i: usize| if is_cvns { [0, 2, 1][i] } else { i };
         for i in 0..str_count {
             let dest = dest_for(i);
@@ -96,7 +108,11 @@ impl HistoryHost {
                 ["word 0", "word 1", "word 2", "word 3", "word 4", "word 5"][i],
             )?;
         }
-        call.complete(if is_cvns { 0x401c } else { 0x4028 })?;
+        call.complete(match command {
+            cmd::HISTORY_APPEND_2 => 0x4014,
+            cmd::HISTORY_APPEND => 0x401c,
+            _ => 0x4028,
+        })?;
         // 0x14005ee00 removes the tail before adding the new head.
         while self.entries.len() >= HISTORY_CAPACITY {
             self.entries.pop_back();
@@ -113,6 +129,7 @@ impl HistoryHost {
     /// (unsigned), or -1 for a missing entry. All return 0x4008. Destinations other than
     /// the string bank are not modeled.
     fn query(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        use crate::cvns::cmd;
         let pc = call.pc;
         let command = call.command;
         let op = command + 0x2000;
@@ -126,10 +143,14 @@ impl HistoryHost {
         }
         let index = call.argument(4, "entry index")? as i32;
         let entry = self.entries.get(index.max(0) as usize);
-        let is_word = matches!(command, 0x135 | 0x536);
+        let is_word = matches!(command, 0x135 | cmd::HISTORY_QUERY_2 | cmd::HISTORY_QUERY);
         let argument = call.argument(4 + 4, if is_word { "word index" } else { "destination" })?;
         if is_word {
-            let modulus = if command == 0x536 { 4 } else { 6 };
+            let modulus = match command {
+                cmd::HISTORY_QUERY_2 => 2,
+                cmd::HISTORY_QUERY => 4,
+                _ => 6,
+            };
             let value = entry.map_or(u32::MAX, |e| e.words[(argument % modulus) as usize]);
             call.complete(0x4008)?;
             call.vm
@@ -353,5 +374,80 @@ mod tests {
             history.try_handle(&mut vm_err).unwrap_err().reason,
             "history string overflows its 32-byte field"
         );
+    }
+
+    #[test]
+    fn cvns_profiles_query_the_matching_history_word_count() {
+        use crate::{
+            dispatch::{self, Flow, Hosts},
+            profile::Registry,
+        };
+
+        for (id, word_count, append) in [
+            ("cvns-20040730", 2, 0x212c),
+            ("cvns-20050216", 2, 0x212c),
+            ("cvns-20050727", 4, 0x2137),
+            ("cvns-20090203", 4, 0x2137),
+        ] {
+            let profile = Registry::builtin().profile(id).unwrap();
+            let words = [77, 88, 99, 111];
+            let mut args = vec![
+                Arg::Str(b"voice"),
+                Arg::Str(b"Short line"),
+                Arg::Str(b"Speaker"),
+            ];
+            args.extend(words[..word_count].iter().copied().map(Arg::Int));
+            let script = build_script(&[
+                (append, &args),
+                (0x2136, &[Arg::Int(0), Arg::Int(0)]),
+                (0x2136, &[Arg::Int(0), Arg::Int(1)]),
+                (0x2136, &[Arg::Int(0), Arg::Int(2)]),
+                (0x2136, &[Arg::Int(0), Arg::Int(3)]),
+                (0x2136, &[Arg::Int(0), Arg::Int(u32::MAX)]),
+                (0x2136, &[Arg::Int(1), Arg::Int(0)]),
+            ]);
+            let mut vm = Machine::new(&script).unwrap();
+            let query_command = profile.command_map().unwrap().runtime(0x136);
+            vm.set_command_map(profile.command_map());
+            let mut history = HistoryHost::default();
+            let mut results = Vec::new();
+            loop {
+                match vm.step().unwrap() {
+                    Step::Continue => {}
+                    Step::System { command, .. } => {
+                        assert_eq!(
+                            dispatch::run(
+                                profile.semantics(command),
+                                &mut vm,
+                                &mut Hosts {
+                                    history: Some(&mut history),
+                                    ..Default::default()
+                                },
+                            )
+                            .unwrap(),
+                            Some(Flow::Done),
+                        );
+                        assert_eq!(vm.stack().len_bytes(), 0);
+                        if command == query_command {
+                            results.push(vm.state().system_integer(0).unwrap());
+                        }
+                    }
+                    Step::Yield => break,
+                }
+            }
+            let expected = if word_count == 2 {
+                [77, 88, 77, 88, 88, u32::MAX]
+            } else {
+                [77, 88, 99, 111, 111, u32::MAX]
+            };
+            assert_eq!(results, expected, "{id}");
+            assert_eq!(history.entries().len(), 1);
+            let entry = &history.entries()[0];
+            assert_eq!(entry.strings[0], b"voice");
+            assert_eq!(entry.strings[1], b"Speaker");
+            assert_eq!(entry.strings[2], b"Short line");
+            assert_eq!(entry.words[..word_count], words[..word_count]);
+            assert!(entry.words[word_count..].iter().all(|&w| w == 0));
+        }
     }
 }

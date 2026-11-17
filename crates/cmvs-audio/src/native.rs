@@ -412,6 +412,21 @@ impl NativeAudio {
         );
         channel.gain = gain;
     }
+    fn set_slot_script_gain(
+        slots: &mut [Option<Channel>],
+        channel: u8,
+        kind: &str,
+        multiplier: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        let slot = slots
+            .get_mut(usize::from(channel))
+            .ok_or_else(|| format!("{kind} channel out of range"))?;
+        if let Some(sound) = slot {
+            sound.script_gain = multiplier as f32 / 256.0;
+            Self::set_gain(sound, sound.gain);
+        }
+        Ok(())
+    }
     /// Playing means started (not paused) with source data left; `update` releases
     /// finished channels. The position is the source consumption clock, not a DAC
     /// timestamp, and includes no device-buffer latency.
@@ -449,15 +464,7 @@ impl NativeAudio {
 }
 impl AudioBackend for NativeAudio {
     fn set_se_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
-        let slot = self
-            .se
-            .get_mut(usize::from(channel))
-            .ok_or("SE channel out of range")?;
-        if let Some(sound) = slot {
-            sound.script_gain = multiplier as f32 / 256.0;
-            Self::set_gain(sound, sound.gain);
-        }
-        Ok(())
+        Self::set_slot_script_gain(&mut self.se, channel, "SE", multiplier)
     }
     fn preload(&mut self, slot: u8, name: &[u8]) -> Result<bool, Box<dyn Error>> {
         let index = usize::from(slot);
@@ -807,15 +814,7 @@ impl AudioBackend for NativeAudio {
         Ok(())
     }
     fn set_voice_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
-        let slot = self
-            .voice
-            .get_mut(usize::from(channel))
-            .ok_or("voice channel out of range")?;
-        if let Some(sound) = slot {
-            sound.script_gain = multiplier as f32 / 256.0;
-            Self::set_gain(sound, sound.gain);
-        }
-        Ok(())
+        Self::set_slot_script_gain(&mut self.voice, channel, "voice", multiplier)
     }
     fn set_voice_pan(&mut self, channel: u8, _pan: i32) -> Result<(), Box<dyn Error>> {
         self.voice
@@ -865,6 +864,9 @@ impl AudioBackend for NativeAudio {
             .get(usize::from(channel))
             .ok_or("auxiliary SE channel out of range")?;
         Self::position(channel.as_ref())
+    }
+    fn set_aux_se_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+        Self::set_slot_script_gain(&mut self.aux_se, channel, "auxiliary SE", multiplier)
     }
     fn set_cvns_volumes(
         &mut self,

@@ -273,6 +273,11 @@ pub enum AudioRequest {
     StopAuxSe {
         channel: u8,
     },
+    /// CVNS 0x20ef (cvns-20050216 0x42d4f0): auxiliary SE gain multiplier (/256 scale).
+    SetAuxSeGain {
+        channel: u8,
+        multiplier: u32,
+    },
     /// CVNS `sub_41FCC0` live volume update across all CVNS SE (0..48), BGM, voice, and aux slots.
     UpdateCvnsVolumes {
         bgm: Option<u32>,
@@ -493,6 +498,10 @@ pub trait AudioBackend {
     fn aux_se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
         Err("audio backend does not implement auxiliary SE position queries".into())
     }
+    /// CVNS 0x20ef (cvns-20050216 0x42d4f0): set auxiliary SE gain multiplier (/256 scale).
+    fn set_aux_se_gain(&mut self, _channel: u8, _multiplier: u32) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement auxiliary SE gain multipliers".into())
+    }
     /// CVNS `sub_41FCC0`: update BGM, 48-slot SE, voice, and auxiliary SE gains together.
     fn set_cvns_volumes(
         &mut self,
@@ -703,6 +712,12 @@ impl AudioBackend for RecordingAudio {
     fn aux_se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
         Ok(None)
     }
+    fn set_aux_se_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::SetAuxSeGain {
+            channel,
+            multiplier,
+        })
+    }
     fn set_cvns_volumes(
         &mut self,
         bgm: Option<u32>,
@@ -760,6 +775,7 @@ struct CvnsAudioState {
     voice_gains: [u32; VOICE_CHANNELS],
     voice_pans: [i32; VOICE_CHANNELS],
     aux_channels: [Option<SeChannel>; AUX_SE_CHANNELS],
+    aux_gains: [u32; AUX_SE_CHANNELS],
     bgm_loop_sample: u32,
 }
 
@@ -800,6 +816,7 @@ impl AudioHost {
             self.cvns.pans.resize(CVNS_SE_CHANNELS, 0);
             self.cvns.voice_gains = [100; VOICE_CHANNELS];
             self.cvns.voice_pans = [0; VOICE_CHANNELS];
+            self.cvns.aux_gains = [100; AUX_SE_CHANNELS];
         }
     }
 
@@ -920,6 +937,7 @@ impl AudioHost {
                 self.cvns.voice_gains = [100; VOICE_CHANNELS];
                 self.cvns.voice_pans = [0; VOICE_CHANNELS];
                 self.cvns.aux_channels = Default::default();
+                self.cvns.aux_gains = [100; AUX_SE_CHANNELS];
             }
         }
         Ok(())
@@ -1919,7 +1937,7 @@ impl AudioHost {
             0x4bd => self.try_cvns_voice_gain(call, backend),
             0x4be => self.try_cvns_voice_pan(call, backend),
             0x4bf => self.try_cvns_voice_level(call),
-            0x4c5..=0x4c7 => self.try_cvns_aux_se(call, backend),
+            0x4c5..=0x4c7 | 0x4ef | 0x4ff => self.try_cvns_aux_se(call, backend),
             _ => Err(call.error("unregistered CVNS audio command").into()),
         }
     }
@@ -2355,6 +2373,7 @@ impl AudioHost {
                     volume,
                     flag: start,
                 });
+                self.cvns.aux_gains[ch] = 100;
             }
             0x4c6 => {
                 let position = backend.aux_se_position(ch as u8)?;
@@ -2363,6 +2382,18 @@ impl AudioHost {
                     .state_mut()
                     .set_system_integer(0, position.unwrap_or(u32::MAX))
                     .expect("slot 0 exists");
+            }
+            0x4ef => {
+                let multiplier = call.argument(8, "multiplier")?;
+                backend.set_aux_se_gain(ch as u8, (u64::from(multiplier) * 256 / 100) as u32)?;
+                call.complete(0x4008)?;
+                self.cvns.aux_gains[ch] = multiplier;
+            }
+            0x4ff => {
+                call.complete(0x4004)?;
+                let state = call.vm.state_mut();
+                state.set_system_integer(4, 0).expect("slot 4 exists");
+                state.set_system_integer(5, 0).expect("slot 5 exists");
             }
             _ => {
                 backend.stop_aux_se(ch as u8)?;
@@ -2530,7 +2561,7 @@ impl AudioHost {
         Ok(())
     }
 
-    /// Serializes CVNS BGM (+ loop sample), 48 SE channels (+ gain/pan), and 4 aux SE slots.
+    /// Serializes CVNS BGM (+ loop sample), 48 SE channels (+ gain/pan), and 4 aux SE slots (+ gain).
     pub(crate) fn saved_cvns(&self) -> Vec<u8> {
         let mut out = Vec::new();
         let write_bytes = |out: &mut Vec<u8>, bytes: &[u8]| {
@@ -2559,6 +2590,9 @@ impl AudioHost {
         }
         for aux in &self.cvns.aux_channels {
             write_se(&mut out, aux.as_ref());
+        }
+        for gain in self.cvns.aux_gains {
+            out.extend_from_slice(&gain.to_le_bytes());
         }
         out
     }
@@ -2654,9 +2688,14 @@ impl AudioHost {
                     looped: c.looped,
                     start: c.flag,
                 })?;
+                let gain = saved.aux_gains[i];
+                if gain != 100 {
+                    backend.set_aux_se_gain(i as u8, (u64::from(gain) * 256 / 100) as u32)?;
+                }
             }
         }
         self.cvns.aux_channels = saved.aux_channels;
+        self.cvns.aux_gains = saved.aux_gains;
         self.cvns.voice_gains = [100; VOICE_CHANNELS];
         self.cvns.voice_pans = [0; VOICE_CHANNELS];
         self.played = [0; SE_CHANNELS];
@@ -2671,6 +2710,7 @@ pub(crate) struct SavedCvnsAudio {
     gains: [u32; CVNS_SE_CHANNELS],
     pans: [i32; CVNS_SE_CHANNELS],
     aux_channels: [Option<SeChannel>; AUX_SE_CHANNELS],
+    aux_gains: [u32; AUX_SE_CHANNELS],
 }
 
 impl SavedCvnsAudio {
@@ -2735,6 +2775,13 @@ impl SavedCvnsAudio {
         for slot in &mut aux_channels {
             *slot = read_se(&mut at)?;
         }
+        // Older snapshots end after the auxiliary channels and imply full gain.
+        let mut aux_gains = [100; AUX_SE_CHANNELS];
+        if at != bytes.len() {
+            for gain in &mut aux_gains {
+                *gain = read_u32(&mut at)?;
+            }
+        }
         if at != bytes.len() {
             return Err(FormatError("trailing bytes in CVNS audio snapshot"));
         }
@@ -2745,6 +2792,7 @@ impl SavedCvnsAudio {
             gains,
             pans,
             aux_channels,
+            aux_gains,
         })
     }
 }
@@ -2752,6 +2800,69 @@ impl SavedCvnsAudio {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn cvns_snapshot_restores_aux_gains_and_accepts_legacy_records() {
+        let mut host = AudioHost::default();
+        host.enable_cvns();
+        host.cvns.aux_channels = std::array::from_fn(|_| {
+            Some(SeChannel {
+                name: b"loop".to_vec(),
+                volume: 75,
+                looped: true,
+                flag: true,
+            })
+        });
+        host.cvns.aux_gains = [0, 50, 100, 150];
+        let bytes = host.saved_cvns();
+        let mut restored = AudioHost::default();
+        let mut backend = RecordingAudio::default();
+        restored
+            .restore_cvns(SavedCvnsAudio::decode(&bytes).unwrap(), &mut backend)
+            .unwrap();
+        assert_eq!(restored.saved_cvns(), bytes);
+        let requests: Vec<_> = backend
+            .requests()
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r,
+                    AudioRequest::PlayAuxSe { .. } | AudioRequest::SetAuxSeGain { .. }
+                )
+            })
+            .cloned()
+            .collect();
+        let mut expected = Vec::new();
+        for (channel, multiplier) in [0, 128, 256, 384].into_iter().enumerate() {
+            expected.push(AudioRequest::PlayAuxSe {
+                channel: channel as u8,
+                name: b"loop".to_vec(),
+                volume: 192,
+                fade_in_ms: 0,
+                looped: true,
+                start: true,
+            });
+            if multiplier != 256 {
+                expected.push(AudioRequest::SetAuxSeGain {
+                    channel: channel as u8,
+                    multiplier,
+                });
+            }
+        }
+        assert_eq!(requests, expected);
+
+        let legacy_len = bytes.len() - AUX_SE_CHANNELS * 4;
+        restored
+            .restore_cvns(
+                SavedCvnsAudio::decode(&bytes[..legacy_len]).unwrap(),
+                &mut backend,
+            )
+            .unwrap();
+        assert_eq!(restored.cvns.aux_gains, [100; AUX_SE_CHANNELS]);
+        for end in legacy_len + 1..bytes.len() {
+            assert!(SavedCvnsAudio::decode(&bytes[..end]).is_err());
+        }
+    }
 
     #[test]
     fn se_gain_updates_saved_multiplier_only_and_backend_failure_is_retryable() {
@@ -2980,6 +3091,9 @@ mod lifecycle_tests {
             &[b"aux3"],
         );
         assert_eq!(aux0, Some(0));
+        call_cvns(&mut host, &mut backend, 0x4ef, &[3, 50], &[]);
+        let (_, aux_peak_r) = call_cvns(&mut host, &mut backend, 0x4ff, &[3], &[]);
+        assert_eq!(aux_peak_r, Some(0));
         call_cvns(&mut host, &mut backend, 0x4c7, &[3], &[]);
         assert_eq!(
             backend.requests(),
@@ -2992,8 +3106,40 @@ mod lifecycle_tests {
                     looped: true,
                     start: true,
                 },
+                AudioRequest::SetAuxSeGain {
+                    channel: 3,
+                    multiplier: 128,
+                },
                 AudioRequest::StopAuxSe { channel: 3 },
             ]
+        );
+
+        // Reusing a muted channel must not restore the previous sound's gain.
+        call_cvns(
+            &mut host,
+            &mut backend,
+            0x4c5,
+            &[3, 0x8000_0000, 100, 0, 1, 1],
+            &[b"aux3"],
+        );
+        call_cvns(&mut host, &mut backend, 0x4ef, &[3, 0], &[]);
+        call_cvns(
+            &mut host,
+            &mut backend,
+            0x4c5,
+            &[3, 0x8000_0000, 100, 0, 1, 1],
+            &[b"replacement"],
+        );
+        let mut restored_backend = RecordingAudio::default();
+        AudioHost::default()
+            .restore_cvns(
+                SavedCvnsAudio::decode(&host.saved_cvns()).unwrap(),
+                &mut restored_backend,
+            )
+            .unwrap();
+        assert_eq!(
+            restored_backend.requests().last(),
+            backend.requests().last()
         );
 
         backend = RecordingAudio::default();

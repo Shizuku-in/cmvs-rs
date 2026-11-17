@@ -198,3 +198,21 @@ archive data/pack/script.cpz sha256=d380b8065fdf05440047adc74b36d59cab345486e253
 game-id 0x00000000
 executable cvns.exe sha256=fd475dda79e4a559d934b214494d314539915afde7a910b3d35269dd9cd4a028
 end
+
+game aki
+profile cvns-20050216
+start data/pack/start.pss sha256=3c2507628fecfabd57a17d9f306fb9faf9dc42115fc10fb88bba35b52a5c03a9
+archive data/pack/script.cpz sha256=a1a120a72fac0caa77b5cd93338da58b12b6b3e13681211aa0603f0ee388c050
+# Not yet established which CVNS command, if any, carries a game ID; cvns.cfg has GAME_ID=1003.
+game-id 0x00000000
+executable cvns.exe sha256=1e0d17db759650c32e94a9bc1eb6a143463df22638fba687b420644dce969e42
+end
+
+game majifd
+profile cvns-20040730
+start data/pack/start.pss sha256=2f505e8ac49ccc8be7cfc79861ab1d2390050300a011fad07fe80b2f721b8c4f
+archive data/pack/script.cpz sha256=9ecae4b71c801414925d505ff62103865283f6925088028d729e3d134a22d46e
+# Not yet established which CVNS command, if any, carries a game ID; cvns.cfg has GAME_ID=1001.
+game-id 0x00000000
+executable cvns.exe sha256=2bfcb306f094a3968af7bc88e37a091305c628b06ddfbf0fce14268d66bf3a07
+end

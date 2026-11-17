@@ -197,9 +197,12 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
         Some(InspectedBuild::Cmvs20160201 | InspectedBuild::Cmvs20171114) => {
             Some(SnapshotLayout::TextV3)
         }
-        Some(InspectedBuild::Cvns20050727 | InspectedBuild::Cvns20090203) => {
-            Some(SnapshotLayout::Cvns20090203)
-        }
+        Some(
+            InspectedBuild::Cvns20040730
+            | InspectedBuild::Cvns20050216
+            | InspectedBuild::Cvns20050727
+            | InspectedBuild::Cvns20090203,
+        ) => Some(SnapshotLayout::CvnsCsp1),
         None if profile.base.is_none() => Some(SnapshotLayout::TextV3),
         None => None,
     }
@@ -608,7 +611,7 @@ impl Runtime<'_> {
         vm: crate::machine::VmImage,
     ) -> Result<(), Box<dyn Error>> {
         let layout = self.require_snapshot_layout()?;
-        let (bytes, script_image) = if layout == SnapshotLayout::Cvns20090203 {
+        let (bytes, script_image) = if layout == SnapshotLayout::CvnsCsp1 {
             self.capture_cvns_snapshot(vm)?
         } else {
             let (snapshot, script_image) = self.engine_snapshot_with(vm)?;
@@ -820,7 +823,7 @@ impl Runtime<'_> {
             .ok_or("save slot to load does not exist")?;
         let family = self.save_family();
         let save = Csv2Save::decode_family(&bytes, family)?;
-        if layout == SnapshotLayout::Cvns20090203 {
+        if layout == SnapshotLayout::CvnsCsp1 {
             let snapshot = CvnsSnapshot::decode(&save.snapshot)?;
             return self.restore_cvns_snapshot(
                 slot,
@@ -1556,7 +1559,10 @@ mod layout_tests {
             ("cmvs-20211006", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20221105", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20160201", SnapshotLayout::TextV3),
-            ("cvns-20090203", SnapshotLayout::Cvns20090203),
+            ("cvns-20040730", SnapshotLayout::CvnsCsp1),
+            ("cvns-20050216", SnapshotLayout::CvnsCsp1),
+            ("cvns-20050727", SnapshotLayout::CvnsCsp1),
+            ("cvns-20090203", SnapshotLayout::CvnsCsp1),
         ] {
             assert_eq!(snapshot_layout(registry.profile(id).unwrap()), Some(layout));
             assert_eq!(

@@ -50,22 +50,28 @@ fn handle_polar_point_with(
     Ok(())
 }
 
-/// CVNS `0x4ed` (cvns-20050727 0x433290 -> 0x442bb0): pops `(x1, y1, x2, y2)` (`0x4010`),
-/// writes centidegree angle `[0, 36000)` to `system_integer(4)` and distance to `system_integer(5)`.
+/// CVNS `0x4e8` (cvns-20040730 0x42d1c0 -> 0x43bae0) and `0x4ed` (cvns-20050727 0x433290 -> 0x442bb0):
+/// pops `(x1, y1, x2, y2)` (`0x4010`), writes integer degree `[0, 360)` (`0x4e8`) or
+/// centidegree `[0, 36000)` (`0x4ed`) angle to `system_integer(4)` and distance to `system_integer(5)`.
 pub(crate) fn handle_cartesian_to_polar(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
     let x1 = call.argument(4, "x1")? as i32;
     let y1 = call.argument(8, "y1")? as i32;
     let x2 = call.argument(12, "x2")? as i32;
     let y2 = call.argument(16, "y2")? as i32;
+    let (scale, full) = if call.command == 0x4e8 {
+        (1.0, 360)
+    } else {
+        (100.0, 36000)
+    };
     let dx = f64::from(x2.wrapping_sub(x1));
     let dy = f64::from(y2.wrapping_sub(y1));
     let theta = dy.atan2(dx);
-    let mut angle = trunc_f64_i32((180.0 / std::f64::consts::PI) * theta * -100.0);
+    let mut angle = trunc_f64_i32((180.0 / std::f64::consts::PI) * theta * -scale);
     if angle < 0 {
-        angle = angle.wrapping_add(36000);
+        angle = angle.wrapping_add(full);
     }
-    angle = 36000i32.wrapping_sub(angle);
-    if angle == 36000 {
+    angle = full.wrapping_sub(angle);
+    if angle == full {
         angle = 0;
     }
     let dist = if x2 == x1 {
