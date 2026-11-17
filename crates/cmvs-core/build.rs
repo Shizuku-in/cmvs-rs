@@ -1,8 +1,9 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env,
     fmt::Write as _,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,6 +12,10 @@ struct FormatError(pub &'static str);
 
 #[allow(dead_code)]
 const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
+
+#[path = "src/cvns.rs"]
+#[allow(dead_code)]
+mod cvns;
 
 #[path = "src/digest.rs"]
 #[allow(dead_code)]
@@ -35,59 +40,22 @@ mod profile {
     pub mod model;
     #[path = "text.rs"]
     pub mod text;
+    #[path = "validate.rs"]
+    pub mod validate;
 
     pub use contract::{ContractProof, ContractRules, ContractSide};
     pub use model::*;
 }
 
-use digest::{Sha256, sha256};
-
-const EXTRACTOR_SOURCES: &[(&str, &str)] = &[
-    ("contract_extract.py", "tools/contract_extract.py"),
-    ("contract_x64.py", "tools/contract_x64.py"),
-    ("command_contract.py", "tools/command_contract.py"),
-    ("profile_compare.py", "tools/profile_compare.py"),
-];
-
-const CONTEXT_PATH: &str = "docs/games/chronoclock/contract-context.json";
-const MAPPINGS_PATH: &str = "docs/games/chronoclock/contract-mappings.json";
-const SUMMARIES_PATH: &str = "docs/games/chronoclock/contract-summaries.json";
-
-const BUILTIN_PROFILE_FILES: &[&str] = &[
-    "profiles/cmvs-20070119.profile",
-    "profiles/cmvs-20071117.profile",
-    "profiles/cmvs-20080719.profile",
-    "profiles/cmvs-20080903.profile",
-    "profiles/cmvs-20090815.profile",
-    "profiles/cmvs-20100314.profile",
-    "profiles/cmvs-20101211.profile",
-    "profiles/cmvs-20110525.profile",
-    "profiles/cmvs-20120309.profile",
-    "profiles/cmvs-20130131.profile",
-    "profiles/cmvs-20140217.profile",
-    "profiles/cmvs-20150405.profile",
-    "profiles/cmvs-20160201.profile",
-    "profiles/cmvs-20171114.profile",
-    "profiles/cmvs-20190305.profile",
-    "profiles/cmvs-20190405.profile",
-    "profiles/cmvs-20211006.profile",
-    "profiles/cmvs-20221105.profile",
-    "profiles/cvns-20040515.profile",
-    "profiles/cvns-20040730.profile",
-    "profiles/cvns-20050216.profile",
-    "profiles/cvns-20050727.profile",
-    "profiles/cvns-20090203.profile",
-];
-
-fn read_bytes(root: &Path, relative: &str) -> Vec<u8> {
-    let path: PathBuf = root.join(relative);
-    println!("cargo:rerun-if-changed={}", path.display());
-    fs::read(&path).unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
-}
-
-fn read_text(root: &Path, relative: &str) -> String {
-    let path: PathBuf = root.join(relative);
-    println!("cargo:rerun-if-changed={}", path.display());
+fn read_manifest_text(manifest_dir: &Path, relative: &str) -> String {
+    assert!(
+        Path::new(relative)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_))),
+        "build input path must stay inside CARGO_MANIFEST_DIR: {relative}"
+    );
+    println!("cargo:rerun-if-changed={relative}");
+    let path = manifest_dir.join(relative);
     fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
@@ -104,9 +72,58 @@ fn format_digest(bytes: &[u8; 32]) -> String {
     out
 }
 
+fn parse_command_literal(token: &str) -> u16 {
+    if let Some(hex) = token.strip_prefix("0x") {
+        u16::from_str_radix(hex, 16)
+            .unwrap_or_else(|err| panic!("invalid hex command literal `{token}`: {err}"))
+    } else {
+        token
+            .parse::<u16>()
+            .unwrap_or_else(|err| panic!("invalid command literal `{token}`: {err}"))
+    }
+}
+
+fn parse_entry_tables(source: &str, label: &str) -> BTreeMap<String, BTreeSet<u16>> {
+    let mut tables = BTreeMap::new();
+    let mut current: Option<String> = None;
+    for raw_line in source.lines() {
+        let code = raw_line
+            .split_once("//")
+            .map_or(raw_line, |(head, _)| head)
+            .trim();
+        if let Some(rest) = code.strip_prefix("pub static ") {
+            let (name, _) = rest
+                .split_once(':')
+                .unwrap_or_else(|| panic!("malformed static header in {label}: `{code}`"));
+            let name = name.trim().to_owned();
+            assert!(
+                tables.insert(name.clone(), BTreeSet::new()).is_none(),
+                "duplicate static table `{name}` in {label}"
+            );
+            current = Some(name);
+        }
+        if let Some(table_name) = current.as_deref()
+            && let Some((_, after)) = code.split_once("command:")
+        {
+            let literal = after.split_once(',').map_or(after, |(head, _)| head).trim();
+            tables
+                .get_mut(table_name)
+                .expect("active table")
+                .insert(parse_command_literal(literal));
+        }
+        if current.is_some() && code.ends_with("];") {
+            current = None;
+        }
+    }
+    assert!(current.is_none(), "unclosed static table in {label}");
+    tables
+}
+
 fn main() {
     for source in [
         "build.rs",
+        "profiles",
+        "src/cvns.rs",
         "src/digest.rs",
         "src/exe.rs",
         "src/lzss.rs",
@@ -114,31 +131,17 @@ fn main() {
         "src/profile/text.rs",
         "src/profile/contract.rs",
         "src/profile/binary.rs",
+        "src/profile/validate.rs",
     ] {
         println!("cargo:rerun-if-changed={source}");
     }
 
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("crates/cmvs-core sits two levels below the repository root");
 
-    let mut extractor = Sha256::new();
-    for &(name, relative) in EXTRACTOR_SOURCES {
-        let bytes = read_bytes(repo_root, relative);
-        extractor.update(name.as_bytes());
-        extractor.update(&[0]);
-        extractor.update(&bytes);
-        extractor.update(&[0]);
-    }
-    let rules = profile::ContractRules {
-        extractor: extractor.finish(),
-        context: sha256(&read_bytes(repo_root, CONTEXT_PATH)),
-        mappings: sha256(&read_bytes(repo_root, MAPPINGS_PATH)),
-        summaries: sha256(&read_bytes(repo_root, SUMMARIES_PATH)),
-    };
+    let rules_text = read_manifest_text(&manifest_dir, "profiles/contract_rules.txt");
+    let rules = profile::ContractRules::parse(&rules_text)
+        .unwrap_or_else(|err| panic!("failed to parse profiles/contract_rules.txt: {err}"));
 
     let generated_rules = format!(
         "// Generated by build.rs; do not edit.\n\
@@ -158,20 +161,64 @@ fn main() {
     fs::write(out_dir.join("contract_rules.rs"), generated_rules)
         .expect("write generated contract_rules.rs");
 
-    let profiles = BUILTIN_PROFILE_FILES
-        .iter()
-        .map(|relative| {
-            let text = read_text(&manifest_dir, relative);
-            profile::text::parse_profile(&text)
-                .unwrap_or_else(|err| panic!("failed to parse {relative}: {err}"))
+    let cvns_source = read_manifest_text(&manifest_dir, "src/dispatch/registry/cvns.rs");
+    let cvns_tables = parse_entry_tables(&cvns_source, "src/dispatch/registry/cvns.rs");
+    let cvns_commands = cvns_tables
+        .get("CVNS")
+        .expect("CVNS static table in src/dispatch/registry/cvns.rs");
+
+    let variant_source = read_manifest_text(&manifest_dir, "src/dispatch/registry/variants.rs");
+    let raw_variants = parse_entry_tables(&variant_source, "src/dispatch/registry/variants.rs");
+    let mut variant_commands = BTreeMap::new();
+    for (table_name, commands) in raw_variants {
+        let kebab = table_name.to_ascii_lowercase().replace('_', "-");
+        let id = profile::VariantId::parse(&kebab).unwrap_or_else(|| {
+            panic!("unknown variant table `{table_name}` in src/dispatch/registry/variants.rs")
+        });
+        variant_commands.insert(id.name().to_owned(), commands);
+    }
+
+    let mut profile_files = fs::read_dir(manifest_dir.join("profiles"))
+        .expect("read profiles directory")
+        .map(|entry| entry.expect("profiles directory entry").file_name())
+        .filter_map(|name| {
+            let name = name.into_string().expect("ASCII profile file name");
+            name.ends_with(".profile")
+                .then(|| format!("profiles/{name}"))
         })
         .collect::<Vec<_>>();
-    let games_text = read_text(&manifest_dir, "profiles/games.txt");
+    profile_files.sort();
+    assert!(
+        !profile_files.is_empty(),
+        "expected embedded .profile files"
+    );
+
+    let profiles = profile_files
+        .iter()
+        .map(|relative| {
+            let text = read_manifest_text(&manifest_dir, relative);
+            let parsed = profile::text::parse_profile(&text)
+                .unwrap_or_else(|err| panic!("failed to parse {relative}: {err}"));
+            profile::validate::validate_profile(&parsed, |id, command| {
+                variant_commands
+                    .get(id.name())
+                    .is_some_and(|commands| commands.contains(&command))
+            })
+            .unwrap_or_else(|err| panic!("failed to validate {relative}: {err}"));
+            parsed
+        })
+        .collect::<Vec<_>>();
+    let games_text = read_manifest_text(&manifest_dir, "profiles/games.txt");
     let games = profile::text::parse_games(&games_text)
         .unwrap_or_else(|err| panic!("failed to parse profiles/games.txt: {err}"));
-    let contracts_text = read_text(&manifest_dir, "profiles/contracts.txt");
-    let contracts = profile::contract::parse_catalog(&contracts_text, &[rules])
+    let contracts_text = read_manifest_text(&manifest_dir, "profiles/contracts.txt");
+    let contracts = profile::contract::parse_catalog(&contracts_text, std::slice::from_ref(&rules))
         .unwrap_or_else(|err| panic!("failed to parse profiles/contracts.txt: {err}"));
+
+    profile::validate::validate_registry(&profiles, &games, &contracts, |target| {
+        cvns_commands.contains(&target)
+    })
+    .unwrap_or_else(|err| panic!("failed to validate builtin profile registry: {err}"));
 
     let raw_bundle = profile::binary::encode_bundle(&profiles, &games, &contracts)
         .expect("encode builtin registry bundle");

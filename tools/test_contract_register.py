@@ -1,12 +1,12 @@
-"""Synthetic certificate candidate generation, including original-PE re-extraction."""
+"""Synthetic certificate candidate generation and pinned contract_rules.txt consistency checks."""
 import argparse
-import copy
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 def sibling(name):
@@ -18,6 +18,9 @@ def sibling(name):
 
 cr, fixtures = sibling("contract_register"), sibling("test_contract_extract")
 ce = cr.ce
+
+PROFILES_DIR = cr.REPO_ROOT / "crates/cmvs-core/profiles"
+CHRONOCLOCK_DOCS = cr.REPO_ROOT / "docs/games/chronoclock"
 
 
 class RegistrationTests(unittest.TestCase):
@@ -65,7 +68,7 @@ class RegistrationTests(unittest.TestCase):
                                   base_exe=paths["base.exe"], derived_exe=paths["derived.exe"],
                                   base_profile=paths["base.profile"], derived_profile=paths["derived.profile"],
                                   context=paths["context.json"], mappings=paths["mappings.json"], summaries=paths["summaries.json"],
-                                  report=paths["report.json"], opcodes=[0x2000])
+                                  report=paths["report.json"], contract_rules=None, opcodes=[0x2000])
 
     def test_reextracts_binds_and_emits_only_candidates(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -78,6 +81,9 @@ class RegistrationTests(unittest.TestCase):
             self.assertIn(f"contract={ident}", result["profile"])
             self.assertIn("0x2000\tunreviewed\tcontract-equivalent\tequivalent", result["migration"])
             self.assertIn("binary=checked", line)
+            parsed_rules, parsed_ast = cr.parse_contract_rules_with_meta(result["contract_rules"])
+            self.assertEqual(parsed_ast, cr.extractor_ast_digest())
+            self.assertEqual(cr.parse_catalog(result["catalog"], active_rules=parsed_rules)[ident]["opcode"], "0x2000")
             self.assertEqual(cr.register(args), result)
 
     def test_rejects_stale_forged_incomplete_report_and_changed_exe(self):
@@ -102,6 +108,94 @@ class RegistrationTests(unittest.TestCase):
                 if variant == "unselected": args.opcodes = []
                 with self.assertRaises((ValueError, ce.cc.InvalidEvidence)):
                     cr.register(args)
+
+    def test_repo_contract_rules_match_catalog_and_chronoclock_tables(self):
+        rules_text = cr.DEFAULT_CONTRACT_RULES.read_text(encoding="utf-8")
+        pinned, pinned_ast = cr.parse_contract_rules_with_meta(rules_text)
+        self.assertEqual(pinned_ast, cr.extractor_ast_digest())
+
+        catalog_text = (PROFILES_DIR / "contracts.txt").read_text(encoding="utf-8")
+        proofs = cr.parse_catalog(catalog_text, active_rules=pinned)
+        self.assertGreaterEqual(len(proofs), 3)
+        for fields in proofs.values():
+            derived_profile = (PROFILES_DIR / f"{fields['derived-profile']}.profile").read_text(encoding="utf-8")
+            line = "proof v1 " + " ".join(f"{k}={fields[k]}" for k in cr.PROOF_KEYS)
+            ident = hashlib.sha256(line.encode("utf-8")).hexdigest()
+            self.assertIn(f"contract={ident}", derived_profile)
+
+        for key, checker in (
+            ("context", ce.check_context),
+            ("mappings", ce.check_mappings),
+            ("summaries", ce.check_summaries),
+        ):
+            raw, doc = ce.load_json(CHRONOCLOCK_DOCS / f"contract-{key}.json", 8 * 1024 * 1024)
+            checker(doc)
+            self.assertEqual(pinned[key], hashlib.sha256(raw).hexdigest())
+
+    def test_extractor_ast_digest_ignores_comments_whitespace_and_detects_logic_edits(self):
+        tools_dir = Path(__file__).parent
+        baseline_ast = cr.extractor_ast_digest(tools_dir)
+        with tempfile.TemporaryDirectory() as directory:
+            temp_tools = Path(directory)
+            for name in ce.SOURCES:
+                original = (tools_dir / name).read_text(encoding="utf-8")
+                decorated = f"# Extra header comment in {name}\n\n{original}\n    # Trailing comment and blank lines\n\n"
+                (temp_tools / name).write_text(decorated, encoding="utf-8")
+            self.assertEqual(cr.extractor_ast_digest(temp_tools), baseline_ast)
+
+            # Mutating an executable constant or expression in any extractor file changes the AST digest.
+            target = temp_tools / "contract_extract.py"
+            mutated = target.read_text(encoding="utf-8").replace("FRAME_RET = 0x28", "FRAME_RET = 0x30", 1)
+            self.assertNotEqual(mutated, target.read_text(encoding="utf-8"))
+            target.write_text(mutated, encoding="utf-8")
+            self.assertNotEqual(cr.extractor_ast_digest(temp_tools), baseline_ast)
+
+    def test_pinned_contract_rules_preserve_extractor_across_comment_edits_and_reject_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.fixture(directory)
+            pinned_sha = "7" * 64
+            rules_path = Path(directory, "contract_rules.txt")
+            rules_path.write_text(
+                cr.format_contract_rules(
+                    {
+                        "extractor": pinned_sha,
+                        "context": hashlib.sha256(Path(args.context).read_bytes()).hexdigest(),
+                        "mappings": hashlib.sha256(Path(args.mappings).read_bytes()).hexdigest(),
+                        "summaries": hashlib.sha256(Path(args.summaries).read_bytes()).hexdigest(),
+                    },
+                    extractor_ast=cr.extractor_ast_digest(),
+                ),
+                encoding="utf-8",
+            )
+            args.contract_rules = str(rules_path)
+            result = cr.register(args)
+            self.assertIn(f"extractor={pinned_sha}", result["catalog"])
+
+            # Drifted AST digest with mismatched raw revision is rejected.
+            rules_path.write_text(
+                rules_path.read_text(encoding="utf-8").replace(cr.extractor_ast_digest(), "0" * 64),
+                encoding="utf-8",
+            )
+            with mock.patch.object(ce, "revision", return_value="9" * 64):
+                report = json.loads(Path(args.report).read_text(encoding="utf-8"))
+                report["rules"]["extractor_revision"] = "9" * 64
+                Path(args.report).write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    cr.register(args)
+
+    def test_parse_contract_rules_rejects_malformed_inputs(self):
+        valid = cr.format_contract_rules({k: str(i) * 64 for i, k in enumerate(cr.RULE_KEYS, 1)}, extractor_ast="a" * 64)
+        self.assertEqual(cr.parse_contract_rules(valid)["extractor"], "1" * 64)
+        for bad in (
+            "",
+            valid.replace("extractor ", "wrong "),
+            valid.replace("1" * 64, "Z" * 64),
+            valid + "extra " + "b" * 64 + "\n",
+            valid.replace("# extractor-ast " + "a" * 64, "# extractor-ast bad"),
+            "# extractor-ast " + "a" * 64 + "\n" + valid,
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                cr.parse_contract_rules(bad)
 
 
 if __name__ == "__main__":

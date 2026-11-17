@@ -181,6 +181,51 @@ pub(super) fn lookup_sorted<T>(entries: &[(u16, T)], command: u16) -> Option<&T>
         .map(|idx| &entries[idx].1)
 }
 
+impl EngineProfile {
+    pub fn semantics(&self, command: u16) -> Semantics {
+        self.variant(command)
+            .map_or(Semantics::Root, |entry| Semantics::Variant(entry.id))
+    }
+    pub fn variant(&self, command: u16) -> Option<&VariantBinding> {
+        lookup_sorted(&self.variant, command)
+    }
+    pub fn variant_bindings(&self) -> impl Iterator<Item = (u16, &VariantBinding)> {
+        self.variant
+            .iter()
+            .map(|(command, entry)| (*command, entry))
+    }
+    /// Status of system command `0x2000 + command`; cases beyond the switch are absent.
+    pub fn status(&self, command: u16) -> CommandStatus {
+        self.statuses
+            .get(command as usize)
+            .copied()
+            .unwrap_or(CommandStatus::Absent)
+    }
+    pub fn statuses(&self) -> &[CommandStatus] {
+        &self.statuses
+    }
+    /// The machine comparison proof of an `Inherited` or `Presumed` command.
+    pub fn proof(&self, command: u16) -> Option<&MachineProof> {
+        lookup_sorted(&self.proofs, command)
+    }
+    pub fn review(&self, command: u16) -> Option<&str> {
+        lookup_sorted(&self.reviews, command).map(String::as_str)
+    }
+    pub fn contract_id(&self, command: u16) -> Option<&[u8; 32]> {
+        lookup_sorted(&self.contracts, command)
+    }
+    /// The runtime command a reviewed CVNS command is translated to.
+    pub fn map(&self, command: u16) -> Option<u16> {
+        lookup_sorted(&self.maps, command).copied()
+    }
+    pub fn count(&self, status: CommandStatus) -> usize {
+        self.statuses.iter().filter(|&&s| s == status).count()
+    }
+    pub fn binary(&self, sha256: &[u8; 32]) -> Option<&Binary> {
+        self.binaries.iter().find(|b| &b.sha256 == sha256)
+    }
+}
+
 /// Maps the data of one game to the profile of the build it ships with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameRecord {

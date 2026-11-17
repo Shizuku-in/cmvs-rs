@@ -15,6 +15,41 @@ pub struct ContractRules {
     pub summaries: [u8; 32],
 }
 
+impl ContractRules {
+    /// Parses a declarative `contract_rules.txt` file containing the four pinned SHA-256 digests.
+    pub fn parse(text: &str) -> Result<Self, ProfileError> {
+        let mut lines = text::Lines::new(text);
+        let (line, words) = lines.expect("extractor", 1)?;
+        let extractor = text::sha(line, words[0])?;
+        let (line, words) = lines.expect("context", 1)?;
+        let context = text::sha(line, words[0])?;
+        let (line, words) = lines.expect("mappings", 1)?;
+        let mappings = text::sha(line, words[0])?;
+        let (line, words) = lines.expect("summaries", 1)?;
+        let summaries = text::sha(line, words[0])?;
+        if let Some((line, _)) = lines.next() {
+            return Err(text::at(line, "unexpected trailing contract rule line"));
+        }
+        Ok(Self {
+            extractor,
+            context,
+            mappings,
+            summaries,
+        })
+    }
+
+    /// Canonical four-line `contract_rules.txt` representation.
+    pub fn to_text(&self) -> String {
+        format!(
+            "extractor {}\ncontext {}\nmappings {}\nsummaries {}\n",
+            to_hex(&self.extractor),
+            to_hex(&self.context),
+            to_hex(&self.mappings),
+            to_hex(&self.summaries),
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContractSide {
     pub profile: String,

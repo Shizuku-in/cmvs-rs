@@ -16,10 +16,10 @@ mod model;
 mod quirks;
 mod select;
 mod text;
+mod validate;
 
 pub use contract::{ContractProof, ContractRules, ContractSide};
 pub use gate::{CommandGate, GateCounts, GateError, GateErrorKind};
-use model::lookup_sorted;
 pub use model::{
     Binary, CommandStatus, EngineProfile, Family, GameRecord, MachineProof, ProfileError,
     RecordFile, Semantics, VariantBinding, VariantId,
@@ -29,6 +29,7 @@ pub use select::{
     EXECUTABLE_NAMES, Evidence, FileEvidence, Game, GameFiles, ProfileSelection, SelectionBasis,
     SelectionError,
 };
+pub use validate::SAME_BUILD_SECONDS;
 
 use crate::exe::{Case, Dispatch, PeImage};
 use std::{collections::BTreeMap, sync::OnceLock};
@@ -36,8 +37,8 @@ use std::{collections::BTreeMap, sync::OnceLock};
 include!(concat!(env!("OUT_DIR"), "/contract_rules.rs"));
 
 impl ContractRules {
-    /// Active rules computed at build time from the bundled extractor sources and
-    /// contract tables. Editing any dependency invalidates the registered certificates
+    /// Active rules embedded at build time from `profiles/contract_rules.txt`.
+    /// Updating a rule digest invalidates certificates pinned to older rules
     /// until extraction and review are repeated.
     pub fn builtin() -> Self {
         BUILTIN_CONTRACT_RULES
@@ -62,22 +63,7 @@ impl Binary {
     }
 }
 
-/// x86/x64 executables of one build are linked minutes apart (66-147 s in the 2010-2023 survey).
-pub const SAME_BUILD_SECONDS: u32 = 300;
-
 impl EngineProfile {
-    pub fn semantics(&self, command: u16) -> Semantics {
-        self.variant(command)
-            .map_or(Semantics::Root, |entry| Semantics::Variant(entry.id))
-    }
-    pub fn variant(&self, command: u16) -> Option<&VariantBinding> {
-        lookup_sorted(&self.variant, command)
-    }
-    pub fn variant_bindings(&self) -> impl Iterator<Item = (u16, &VariantBinding)> {
-        self.variant
-            .iter()
-            .map(|(command, entry)| (*command, entry))
-    }
     /// Whether this profile belongs to the predecessor CVNS family.
     pub fn is_cvns(&self) -> bool {
         self.family == Family::Cvns
@@ -117,41 +103,10 @@ impl EngineProfile {
             Family::Cvns => 256,
         }
     }
-    /// Status of system command `0x2000 + command`; cases beyond the switch are absent.
-    pub fn status(&self, command: u16) -> CommandStatus {
-        self.statuses
-            .get(command as usize)
-            .copied()
-            .unwrap_or(CommandStatus::Absent)
-    }
-    pub fn statuses(&self) -> &[CommandStatus] {
-        &self.statuses
-    }
-    /// The machine comparison proof of an `Inherited` or `Presumed` command.
-    pub fn proof(&self, command: u16) -> Option<&MachineProof> {
-        lookup_sorted(&self.proofs, command)
-    }
-    pub fn review(&self, command: u16) -> Option<&str> {
-        lookup_sorted(&self.reviews, command).map(String::as_str)
-    }
-    pub fn contract_id(&self, command: u16) -> Option<&[u8; 32]> {
-        lookup_sorted(&self.contracts, command)
-    }
-    /// The runtime command a reviewed CVNS command is translated to.
-    pub fn map(&self, command: u16) -> Option<u16> {
-        lookup_sorted(&self.maps, command).copied()
-    }
     /// The translation a VM running this profile's scripts must apply; `None` for CMVS.
     pub fn command_map(&self) -> Option<crate::cvns::CommandMap> {
         (self.family == Family::Cvns)
             .then(|| crate::cvns::CommandMap::new(self.maps.iter().copied()))
-    }
-    pub fn count(&self, status: CommandStatus) -> usize {
-        self.statuses.iter().filter(|&&s| s == status).count()
-    }
-
-    pub fn binary(&self, sha256: &[u8; 32]) -> Option<&Binary> {
-        self.binaries.iter().find(|b| &b.sha256 == sha256)
     }
     /// Builds a profile from located switches: present cases become `Base` for a root
     /// profile and `Unreviewed` for a derived one.
@@ -207,138 +162,9 @@ impl EngineProfile {
         Ok(profile)
     }
     fn validate(&self) -> Result<(), ProfileError> {
-        if !text::is_identifier(&self.id) {
-            return Err(ProfileError::new("profile id must be lowercase ASCII"));
-        }
-        if self.family == Family::Cvns && self.base.is_none() {
-            return Err(ProfileError::new(
-                "a CVNS profile derives from a CMVS root profile",
-            ));
-        }
-        let first = self
-            .binaries
-            .first()
-            .ok_or(ProfileError::new("profile needs at least one binary"))?;
-        for (i, binary) in self.binaries.iter().enumerate() {
-            if self.binaries[..i].iter().any(|b| b.arch == binary.arch) {
-                return Err(ProfileError::new("profile lists one architecture twice"));
-            }
-            if binary.cases.len() != self.statuses.len() {
-                return Err(ProfileError::new("binaries disagree on the switch size"));
-            }
-            if binary.timestamp.abs_diff(first.timestamp) > SAME_BUILD_SECONDS {
-                return Err(ProfileError::new(
-                    "executables were not linked minutes apart; not one build",
-                ));
-            }
-        }
-        let kind = |case: &Case| std::mem::discriminant(case);
-        for (command, status) in self.statuses.iter().enumerate() {
-            let case = self.binaries[0].cases[command];
-            if self
-                .binaries
-                .iter()
-                .any(|b| kind(&b.cases[command]) != kind(&case))
-            {
-                return Err(ProfileError::new(
-                    "executables disagree on a command; not one build",
-                ));
-            }
-            let cvns = self.family == Family::Cvns;
-            if cvns
-                && !matches!(
-                    status,
-                    CommandStatus::Absent
-                        | CommandStatus::NoOp
-                        | CommandStatus::Unreviewed
-                        | CommandStatus::Reviewed
-                )
-            {
-                return Err(ProfileError::new(
-                    "CVNS commands are absent, noop, unreviewed or reviewed with a map",
-                ));
-            }
-            if (cvns && *status == CommandStatus::Reviewed) != self.map(command as u16).is_some() {
-                return Err(ProfileError::new(
-                    "only reviewed CVNS commands, and all of them, carry a map",
-                ));
-            }
-            if let Some(target) = self.map(command as u16)
-                && target > crate::cvns::LAST_COMMAND
-            {
-                return Err(ProfileError::new(
-                    "map target is outside the system opcodes",
-                ));
-            }
-            let allowed = match (status, case) {
-                (CommandStatus::Absent, Case::Default) => true,
-                (CommandStatus::NoOp, Case::NoOp(_)) => true,
-                (CommandStatus::Base, Case::Handler(_)) => self.base.is_none(),
-                (CommandStatus::Unreviewed, Case::Handler(_)) => self.base.is_some(),
-                (
-                    CommandStatus::Inherited
-                    | CommandStatus::Reviewed
-                    | CommandStatus::Presumed
-                    | CommandStatus::ContractEquivalent,
-                    Case::Handler(_),
-                ) => self.base.is_some(),
-                _ => false,
-            };
-            if !allowed {
-                return Err(ProfileError::new(
-                    "command status contradicts the switch or profile kind",
-                ));
-            }
-            if let Some(variant) = self.variant(command as u16) {
-                if *status != CommandStatus::Unreviewed || self.base.is_none() {
-                    return Err(ProfileError::new(
-                        "variant override requires an unreviewed derived command",
-                    ));
-                }
-                if !self.binaries.iter().any(|binary| {
-                    binary.arch == variant.arch && binary.sha256 == variant.binary_sha256
-                }) {
-                    return Err(ProfileError::new(
-                        "variant evidence does not match the profile binary",
-                    ));
-                }
-                if crate::dispatch::variant_entry(variant.id, command as u16).is_none() {
-                    return Err(ProfileError::new(
-                        "variant override has no registered handler",
-                    ));
-                }
-            }
-            if matches!(status, CommandStatus::Inherited | CommandStatus::Presumed)
-                != self.proof(command as u16).is_some()
-            {
-                return Err(ProfileError::new(
-                    "inherited and presumed status require exactly one proof",
-                ));
-            }
-            if (*status == CommandStatus::Reviewed) != self.review(command as u16).is_some() {
-                return Err(ProfileError::new(
-                    "reviewed status requires exactly one review record",
-                ));
-            }
-            if (*status == CommandStatus::ContractEquivalent)
-                != self.contract_id(command as u16).is_some()
-            {
-                return Err(ProfileError::new(
-                    "contract-equivalent status requires exactly one certificate",
-                ));
-            }
-            if let Some(proof) = self.proof(command as u16)
-                && !self
-                    .binaries
-                    .iter()
-                    .any(|b| b.arch == proof.arch && b.sha256 == proof.derived_sha256)
-            {
-                return Err(ProfileError::new(
-                    "comparison proof does not match derived binary",
-                ));
-            }
-        }
-        Ok(())
+        validate::validate_profile(self, |id, command| {
+            crate::dispatch::variant_entry(id, command).is_some()
+        })
     }
 }
 
@@ -383,39 +209,29 @@ impl Registry {
         registry.validate()?;
         Ok(registry)
     }
-    /// The embedded profiles; their validity is covered by the test suite.
+    /// Decodes an LZSS-framed binary registry bundle whose profile, contract-rule,
+    /// and cross-registry invariants were already validated at build time.
+    fn decode_prevalidated(blob: &[u8]) -> Result<Self, ProfileError> {
+        let (raw_len_bytes, compressed) = blob
+            .split_at_checked(4)
+            .ok_or_else(|| ProfileError::new("embedded registry missing length header"))?;
+        let raw_len =
+            u32::from_le_bytes(raw_len_bytes.try_into().expect("four-byte header")) as usize;
+        let raw = crate::lzss::decode(compressed, raw_len)
+            .map_err(|_| ProfileError::new("invalid embedded registry LZSS payload"))?;
+        let (profiles, games, contracts) = binary::decode_bundle(&raw)?;
+        Ok(Self {
+            profiles,
+            games,
+            contracts,
+        })
+    }
+    /// The embedded profiles, game records, and contract certificates validated at build time.
     pub fn builtin() -> &'static Self {
         static REGISTRY: OnceLock<Registry> = OnceLock::new();
         REGISTRY.get_or_init(|| {
-            let (raw_len_bytes, compressed) = BUILTIN_REGISTRY
-                .split_at_checked(4)
-                .expect("embedded registry has length header");
-            let raw_len = u32::from_le_bytes(
-                raw_len_bytes
-                    .try_into()
-                    .expect("four-byte embedded registry length"),
-            ) as usize;
-            let raw = crate::lzss::decode(compressed, raw_len)
-                .expect("embedded registry LZSS payload is valid");
-            let (profiles, games, contracts) =
-                binary::decode_bundle(&raw).expect("embedded registry binary payload is valid");
-            for profile in &profiles {
-                profile
-                    .validate()
-                    .expect("embedded engine profile is valid");
-            }
-            let active = ContractRules::builtin();
-            assert!(
-                contracts.values().all(|proof| proof.rules == active),
-                "embedded contract rules are current"
-            );
-            let registry = Self {
-                profiles,
-                games,
-                contracts,
-            };
-            registry.validate().expect("embedded profile data is valid");
-            registry
+            Self::decode_prevalidated(BUILTIN_REGISTRY)
+                .expect("prevalidated embedded registry bundle is valid")
         })
     }
     pub fn profiles(&self) -> &[EngineProfile] {
@@ -437,111 +253,9 @@ impl Registry {
             .find_map(|p| p.binary(sha256).map(|b| (p, b)))
     }
     fn validate(&self) -> Result<(), ProfileError> {
-        for (i, profile) in self.profiles.iter().enumerate() {
-            if self.profiles[..i].iter().any(|p| p.id == profile.id) {
-                return Err(ProfileError::new(format!(
-                    "duplicate profile {}",
-                    profile.id
-                )));
-            }
-            if let Some(base) = &profile.base {
-                let base = self.profile(base).ok_or(ProfileError::new(format!(
-                    "profile {} names a missing base",
-                    profile.id
-                )))?;
-                // Inheritance is one level deep until a reviewed chain exists. CVNS has no
-                // root of its own: its reviewed commands map onto CMVS root semantics.
-                if base.base.is_some() || base.family != Family::Cmvs {
-                    return Err(ProfileError::new(format!(
-                        "profile {} must derive from a root profile of its family",
-                        profile.id
-                    )));
-                }
-                // A review compares against root semantics, which only a Base command has;
-                // a CVNS review names the runtime command, and CVNS-only semantics need
-                // their own registered handler.
-                let has_root_semantics = |command: u16| match profile.map(command) {
-                    None => base.status(command) == CommandStatus::Base,
-                    Some(target) if target < crate::cvns::CVNS_ONLY => {
-                        base.status(target) == CommandStatus::Base
-                    }
-                    Some(target) => crate::dispatch::cvns_entry(target).is_some(),
-                };
-                if profile
-                    .reviews
-                    .iter()
-                    .any(|&(command, _)| !has_root_semantics(command))
-                {
-                    return Err(ProfileError::new("reviewed command has no root semantics"));
-                }
-                for (command, proof) in &profile.proofs {
-                    let command = *command;
-                    if base.status(command) != CommandStatus::Base
-                        || !base
-                            .binaries
-                            .iter()
-                            .any(|b| b.arch == proof.arch && b.sha256 == proof.base_sha256)
-                    {
-                        return Err(ProfileError::new(
-                            "comparison proof does not match root binary/command",
-                        ));
-                    }
-                }
-                for (command, id) in &profile.contracts {
-                    let command = *command;
-                    if base.status(command) != CommandStatus::Base {
-                        return Err(ProfileError::new("contract command has no root semantics"));
-                    }
-                    let proof = self.contracts.get(id).ok_or_else(|| {
-                        ProfileError::new("contract certificate is missing or revoked")
-                    })?;
-                    proof.bind(command, base, profile)?;
-                }
-            }
-        }
-        for (i, game) in self.games.iter().enumerate() {
-            for (index, start) in game.start_scripts.iter().enumerate() {
-                if game.start_scripts[..index]
-                    .iter()
-                    .any(|earlier| earlier.sha256 == start.sha256)
-                {
-                    return Err(ProfileError::new(format!(
-                        "game {} repeats a start script hash",
-                        game.game
-                    )));
-                }
-            }
-            let earlier = &self.games[..i];
-            if earlier.iter().any(|g| {
-                g.game == game.game
-                    || g.start_scripts.iter().any(|start| {
-                        game.start_scripts
-                            .iter()
-                            .any(|other| other.sha256 == start.sha256)
-                    })
-                    || g.script_archive.sha256 == game.script_archive.sha256
-            }) {
-                return Err(ProfileError::new(format!(
-                    "game {} duplicates an earlier record",
-                    game.game
-                )));
-            }
-            let profile = self
-                .profile(&game.profile)
-                .ok_or(ProfileError::new(format!(
-                    "game {} names a missing profile",
-                    game.game
-                )))?;
-            for exe in &game.executables {
-                if profile.binary(&exe.sha256).is_none() {
-                    return Err(ProfileError::new(format!(
-                        "game {} executable {} is not a binary of profile {}",
-                        game.game, exe.path, profile.id
-                    )));
-                }
-            }
-        }
-        Ok(())
+        validate::validate_registry(&self.profiles, &self.games, &self.contracts, |target| {
+            crate::dispatch::cvns_entry(target).is_some()
+        })
     }
 }
 
@@ -567,16 +281,46 @@ mod tests {
         let profile_refs = profile_texts.iter().map(String::as_str).collect::<Vec<_>>();
         let games = fs::read_to_string(dir.join("games.txt")).expect("read games.txt");
         let contracts = fs::read_to_string(dir.join("contracts.txt")).expect("read contracts.txt");
+        let rules_text =
+            fs::read_to_string(dir.join("contract_rules.txt")).expect("read contract_rules.txt");
+        let rules = ContractRules::parse(&rules_text).expect("parse contract_rules.txt");
+        assert_eq!(ContractRules::builtin(), rules);
 
-        let parsed = Registry::parse_with_contracts(
-            &profile_refs,
-            &games,
-            &contracts,
-            &[ContractRules::builtin()],
-        )
-        .expect("parse raw profile files");
+        let parsed = Registry::parse_with_contracts(&profile_refs, &games, &contracts, &[rules])
+            .expect("parse raw profile files");
 
         assert_eq!(Registry::builtin(), &parsed);
+    }
+
+    #[test]
+    fn contract_rules_roundtrip_and_reject_invalid_lines() {
+        let builtin = ContractRules::builtin();
+        let canonical = builtin.to_text();
+        assert_eq!(ContractRules::parse(&canonical), Ok(builtin.clone()));
+        assert_eq!(
+            ContractRules::parse(&format!("# comment\n\n{canonical}# trailing comment\n")),
+            Ok(builtin),
+        );
+
+        assert!(ContractRules::parse("").is_err());
+        assert!(ContractRules::parse(&canonical.replace("extractor ", "other ")).is_err());
+        assert!(ContractRules::parse(&canonical.replace("0f", "ZZ")).is_err());
+        assert!(ContractRules::parse(&format!("{canonical}extra 00\n")).is_err());
+    }
+
+    #[test]
+    fn prevalidated_blob_roundtrips_and_rejects_corrupt_envelopes() {
+        let decoded = Registry::decode_prevalidated(BUILTIN_REGISTRY).expect("decode builtin blob");
+        assert_eq!(&decoded, Registry::builtin());
+
+        assert!(Registry::decode_prevalidated(b"").is_err());
+        assert!(Registry::decode_prevalidated(b"\x01\x02\x03").is_err());
+        assert!(Registry::decode_prevalidated(b"\xff\x00\x00\x00\xff").is_err());
+
+        let invalid_bundle = crate::lzss::encode(b"CMVB\x02");
+        let mut framed = (5u32).to_le_bytes().to_vec();
+        framed.extend_from_slice(&invalid_bundle);
+        assert!(Registry::decode_prevalidated(&framed).is_err());
     }
 
     #[test]

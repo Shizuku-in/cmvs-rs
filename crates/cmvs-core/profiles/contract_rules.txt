@@ -1,0 +1,7 @@
+# Pinned active SHA-256 digests authorizing certificates in contracts.txt.
+# Comment/whitespace edits in tools/*.py preserve extractor-ast; logic edits require re-extraction.
+# extractor-ast fbbf1c0e983e25c079ac219c569e88630a79eaafea3a859c278a59a03dfbeaa0
+extractor 70f584306ccace44d493d660842db7e130644817434953a2a9767ea6049fb0ef
+context 82f0aa126250bfaaedcb607b09914c6969e88342ddb6c39c6bbd6b301fcdd8aa
+mappings 150aac4c20c4fd139b5fbd059e8d22e50f9fc001ca99624a87a5efde9c04767d
+summaries 993cd8eefddc2709dd42109944ca9eee99cb4d74d211d5b13eccaf93e93a746d

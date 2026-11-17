@@ -17,7 +17,7 @@ pub(super) fn is_identifier(text: &str) -> bool {
 }
 
 /// Non-comment lines split into words, with their 1-based line numbers.
-struct Lines<'a> {
+pub(super) struct Lines<'a> {
     lines: std::iter::Enumerate<std::str::Lines<'a>>,
     peeked_line: usize,
     peeked: Vec<&'a str>,
@@ -25,7 +25,7 @@ struct Lines<'a> {
 }
 
 impl<'a> Lines<'a> {
-    fn new(text: &'a str) -> Self {
+    pub(super) fn new(text: &'a str) -> Self {
         let mut this = Self {
             lines: text.lines().enumerate(),
             peeked_line: 0,
@@ -46,7 +46,7 @@ impl<'a> Lines<'a> {
             self.peeked.clear();
         }
     }
-    fn next(&mut self) -> Option<(usize, &[&'a str])> {
+    pub(super) fn next(&mut self) -> Option<(usize, &[&'a str])> {
         if self.peeked.is_empty() {
             return None;
         }
@@ -59,7 +59,11 @@ impl<'a> Lines<'a> {
         self.peeked.first().copied()
     }
     /// The next line, which must start with `key` and hold exactly `count` values.
-    fn expect(&mut self, key: &str, count: usize) -> Result<(usize, &[&'a str]), ProfileError> {
+    pub(super) fn expect(
+        &mut self,
+        key: &str,
+        count: usize,
+    ) -> Result<(usize, &[&'a str]), ProfileError> {
         match self.next() {
             Some((line, words)) if words[0] == key && words.len() == count + 1 => {
                 Ok((line, &words[1..]))
