@@ -106,7 +106,7 @@ python -I tools/probe_matrix.py "<输出目录1>" "<输出目录2>" --markdown
 
 游戏输入只读，测试只保留合成数据；真实输出在仓库外。结构通过、命令入口覆盖、路线地址覆盖和完整语义支持分别报告。
 
-单脚本接口位于 `tests/support/script_validation.rs`：`validate(&Script) -> Result<ScriptStructure, DecodeError>`，返回指令边界、代码/标签数量和系统命令频次。它不依赖路径、归档、游戏名或输出协议，不向运行时核心增加仅供测试的 API。`tests/script_validation.rs` 用合成数据验证接口，并提供默认忽略的外部样本适配器。
+单脚本接口位于 `crates/cmvs-core/tests/integration/support/script_validation.rs`：`validate(&Script) -> Result<ScriptStructure, DecodeError>`，返回指令边界、代码/标签数量和系统命令频次。它不依赖路径、归档、游戏名或输出协议，不向运行时核心增加仅供测试的 API。`crates/cmvs-core/tests/integration/script_validation.rs` 用合成数据验证接口，并提供默认忽略的外部样本适配器。
 
 从项目目录显式执行外部样本检查（游戏输入只读，报告仅含元数据）：
 
@@ -114,7 +114,7 @@ python -I tools/probe_matrix.py "<输出目录1>" "<输出目录2>" --markdown
 New-Item -ItemType Directory -Force local | Out-Null
 $env:CMVS_SCRIPT_TEST_INPUTS = "<游戏目录>/data/pack/script.cpz;<游戏目录>/data/pack/start.ps3"
 $env:CMVS_SCRIPT_TEST_REPORT = "local/script-validation-sites.tsv"
-cargo test --offline --release --test script_validation external_script_structure -- --ignored --exact --nocapture
+cargo test --offline --release -p cmvs-core --test integration script_validation::external_script_structure -- --ignored --exact --nocapture
 Remove-Item Env:CMVS_SCRIPT_TEST_INPUTS, Env:CMVS_SCRIPT_TEST_REPORT
 ```
 
@@ -124,7 +124,7 @@ Remove-Item Env:CMVS_SCRIPT_TEST_INPUTS, Env:CMVS_SCRIPT_TEST_REPORT
 
 ```powershell
 $env:CMVS_COMMAND_INVENTORY = "local/inventory/dispatch.tsv"
-cargo test --offline --release --test command_inventory command_inventory -- --ignored --exact
+cargo test --offline --release -p cmvs-core --test integration command_inventory::command_inventory -- --ignored --exact
 Remove-Item Env:CMVS_COMMAND_INVENTORY
 python -I tools/command_inventory.py local/script-validation-sites.tsv local/inventory/dispatch.tsv crates/cmvs-core/profiles/cmvs-20160201.profile local/inventory/joined.tsv
 ```

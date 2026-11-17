@@ -49,7 +49,7 @@
 有音频设备时，可显式执行合成播放检查：
 
 ```sh
-cargo test --offline --features audio-output --test audio_output native_device_smoke -- --ignored --nocapture
+cargo test --offline --features audio-output --test cli audio_output::native_device_smoke -- --ignored --exact --nocapture
 ```
 
 Windows 受限沙箱曾触发原生无效句柄异常，相同构建在普通桌面权限下通过。该环境差异不表示解码失败；只检查画面时可显式选 `--audio record`。设备消费检查不替代人工听音或延迟测量。

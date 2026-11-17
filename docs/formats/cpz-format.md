@@ -44,7 +44,8 @@ CPZ5 新建可选模式 5～9；CPZ6 使用模式 1。新建 CPZ5/6 默认启用
 ## 验证
 
 ```sh
-cargo test --offline --locked --test cpz_write --test cpz3 --test cpz5 --test cpz --test cpz7
+cargo test --offline --locked -p cmvs-core --test integration cpz
+cargo test --offline --locked -p cmvs-rs --test cli cpz_cli
 ```
 
 独立合成向量覆盖各版本和模式、每包参数、重复名称、目录与索引填充、空/变长资源及加密尾字节；检查替换内容回读、未替换密文不变；新建 CPZ3/5/6 覆盖目录、名称、空资源和加密边界，并拒绝错误条目、损坏或不匹配的输入及非空输出。9 个原版脚本包共 1,113 项已完成替换回读，覆盖全部上述版本和 CPZ5 模式；另以 7 个原版脚本包的 907 项内容新建 CPZ5/6，全部回读一致。CPZ6 头部摘要和校验和公式另与 25 个原版封包核对。
@@ -56,4 +57,4 @@ cargo test --offline --locked --test cpz_write --test cpz3 --test cpz5 --test cp
 - **CPZ1**（2004 年两作）：16 字节明文头部（签名、文件数、索引长度、保留）。索引与每个资源各自从密钥下标 0 开始，按字节做 `(b ^ key[i & 63]) - 108`，密钥是 exe 内 64 字节 Shift-JIS 短语逐字节加 10。没有校验和，`read_entry_verified` 等同 `read_entry`。
 - **CPZ2**（2005、2009 年三作）：20 字节头部，文件数、索引长度分别异或 `0xe47c59f3`、`0x3f71de2a`，+12 是索引密文校验和（与 CPZ3 同一算法和种子），+16 的索引密钥异或 `0x77777777 ^ 0x37a9f45b`。按 32 位字解密：`rotr((w ^ (table[n & 15] + key)) - 0x15c3e7, shift)`，尾部不足 4 字节的部分为 `(b ^ ((table + key) >> 4i)) + 55`；`shift` 由密钥的 8 个半字节与 5 异或后取低 4 位再加 8。`table` 是同一短语（第 47 字节不同）与从 55 起每步减 41 的字节流异或后的 16 个小端字。每条记录的密钥异或 `0x796c3afd`。
 
-常量与流程取自 2005 年 `cvns.exe`（读取器 `0x4247c0`/`0x424be0`，解密 `0x424730`/`0x424a60`，校验和 `0x424a20`）。5 个游戏目录共 37 个封包的全部条目可读出，CPZ2 的 23 个封包逐条通过校验和；按扩展名核对了 `PB2A`、`MSK0`、`MV2X`、`OggS` 签名。合成向量由测试内独立编写的加密器生成（`tests/cpz1_cpz2.rs`）。
+常量与流程取自 2005 年 `cvns.exe`（读取器 `0x4247c0`/`0x424be0`，解密 `0x424730`/`0x424a60`，校验和 `0x424a20`）。5 个游戏目录共 37 个封包的全部条目可读出，CPZ2 的 23 个封包逐条通过校验和；按扩展名核对了 `PB2A`、`MSK0`、`MV2X`、`OggS` 签名。合成向量由测试内独立编写的加密器生成（`crates/cmvs-core/tests/integration/cpz1_cpz2.rs`）。

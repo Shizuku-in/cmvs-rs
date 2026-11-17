@@ -759,15 +759,15 @@ impl ApplicationHandler for App<'_> {
                     // Minimized/zero-sized surfaces skip presentation; still satisfy the
                     // pending capture from the off-screen logical frame when font/GPU owns it.
                     if self.startup.capture_due() {
-                        let captured = (|| -> Result<RgbaImage, Box<dyn Error>> {
-                            #[cfg(feature = "wgpu-renderer")]
-                            if self.use_gpu {
-                                return self.gpu_frame()?.read();
-                            }
+                        #[cfg(feature = "wgpu-renderer")]
+                        let frame = if self.use_gpu {
+                            self.gpu_frame().and_then(|gpu| gpu.read())
+                        } else {
                             self.frame()
-                        })()
-                        .and_then(|img| self.startup.supply_capture(img));
-                        if let Err(error) = captured {
+                        };
+                        #[cfg(not(feature = "wgpu-renderer"))]
+                        let frame = self.frame();
+                        if let Err(error) = frame.and_then(|img| self.startup.supply_capture(img)) {
                             self.fail(el, error);
                             return;
                         }
