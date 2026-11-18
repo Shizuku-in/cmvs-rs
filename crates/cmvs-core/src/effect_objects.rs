@@ -1,5 +1,10 @@
-//! Engine +4024: four effect objects, independent of the 256 scene slots.
-use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
+//! Effect objects maintained separately from ordinary scene slots.
+//!
+//! [`crate::scene::SceneHost`] owns their state. [`crate::runtime::Runtime`] advances
+//! the effects during frame updates, and [`crate::scene_render`] prepares them for drawing.
+
+// Engine +4024: four effect objects, independent of the 256 scene slots.
+use crate::dispatch::Call;
 mod collision;
 mod falling;
 mod fragments;
@@ -10,7 +15,14 @@ mod legacy;
 mod magic;
 mod sprites;
 mod vortex;
-pub use legacy::{LegacyEffect, SnowField, Walk, WorldQuad};
+pub use curtain::Curtain;
+pub use legacy::{
+    Circle, FloatingPlanes, LegacyEffect, LegacyMesh, MeshScene, SnowField, Walk, WalkOutput,
+    WorldQuad,
+};
+pub use magic::{Magic, Spark};
+pub use sprites::Sprites;
+pub use vortex::Vortex;
 mod legacy_flakes;
 pub(crate) use legacy_flakes::LegacyFlakes;
 mod rain;
@@ -20,27 +32,13 @@ mod snapshot;
 pub use falling::{FallingEffect, FallingParticle};
 pub use particles::{Particle, ParticleEffect};
 
-/// 0x22a0 / 0x14007dbe0: SP-4 slot 0..3 destroys and frees that object (0x140040820) when
-/// present; other values are ignored. Returns 0x4004 without a system result.
-/// VM-only compatibility helper for an empty object host, which has no effect to
-/// destroy. Stateful callers use dispatch.
-pub fn try_handle(vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-    let Some((pc, 0x2a0)) = vm.pending_system() else {
-        return Ok(false);
-    };
-    let mut call = Call::new(vm, pc, 0x2a0);
-    call.argument(4, "slot")?;
-    call.complete(0x4004)?;
-    Ok(true)
-}
-
 impl crate::scene::SceneHost {
     /// 0x22a0 (0x43cab0 in cmvs-20070119): SP-4 slot 0..3, returns 0x4004.
     pub(crate) fn release_effect(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: Option<&mut dyn crate::audio::AudioBackend>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let slot = call.argument(4, "slot")?;
         if slot < 4 {
             self.replace_effect_slot(slot as u8, backend)?;

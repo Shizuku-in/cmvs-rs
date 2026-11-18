@@ -1,7 +1,7 @@
 //! Reusable scene uniforms and texture bindings. Queue writes precede each scene's
 //! submission, so later frames can reuse the buffer without a CPU/GPU idle wait.
 use super::*;
-use cmvs_core::scene_render::shader::PARAM_FLOATS;
+use cmvs_core::render::scene_render::shader::PARAM_FLOATS;
 use std::collections::HashSet;
 
 const PARAM_BYTES: u64 = (PARAM_FLOATS * 4) as u64;
@@ -135,7 +135,7 @@ impl DrawBindings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::scene_render::Blend;
+    use cmvs_core::render::scene_render::Blend;
 
     #[test]
     #[ignore = "requires a native GPU adapter; run explicitly"]
@@ -167,13 +167,48 @@ mod tests {
         let smaller = render(&mut gpu, 3, 50);
 
         // Eviction must not leave bindings to the old texture resident in the cache.
+        let sprite = cmvs_core::render::scene::ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(1, 1, vec![90, 40, 80, 255]).unwrap(),
+        };
+        let render_sprite = |gpu: &mut Renderer| {
+            gpu.compose(
+                [8, 1],
+                [0, 0, 0, 255],
+                &[Layer::Image {
+                    image: &sprite,
+                    rect: [0, 0, 1, 1],
+                    corner: [0, 0],
+                    alpha: 255,
+                    mask: None,
+                    screen_mask: None,
+                    blend: Blend::Replace,
+                }],
+            )
+            .unwrap()
+        };
+        let cached_sprite = render_sprite(&mut gpu);
+        assert_eq!(gpu.bindings.groups.len(), 1);
+        let sprite_group = gpu.bindings.groups.values().next().unwrap().binding.clone();
         gpu.cache.clear();
         gpu.cache_bytes = 0;
+        let evicted_sprite = render_sprite(&mut gpu);
+        assert_eq!(gpu.bindings.groups.len(), 1);
+        assert_ne!(
+            gpu.bindings.groups.values().next().unwrap().binding,
+            sprite_group
+        );
         let replaced = render(&mut gpu, 2, 60);
         assert_eq!(gpu.bindings.groups.len(), 1);
-        assert_ne!(gpu.bindings.groups.values().next().unwrap().binding, group);
         let empty = render(&mut gpu, 0, 0);
         assert!(gpu.bindings.groups.is_empty());
+
+        for frame in [cached_sprite, evicted_sprite] {
+            assert_eq!(&frame.read().unwrap().pixels()[..4], &[90, 40, 80, 255]);
+        }
 
         // No waits/readbacks between submissions: overwriting or reallocating the
         // uniform buffer must not change any previously submitted logical frame.

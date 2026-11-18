@@ -70,10 +70,7 @@ impl ScaleMotion {
     }
 }
 impl SceneHost {
-    pub(super) fn handle_scale_motion(
-        &mut self,
-        call: &mut Call<'_, '_>,
-    ) -> Result<(), DecodeError> {
+    pub(super) fn handle_scale_motion(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
 
         let fail = |why| error(pc, command + 0x2000, why);
@@ -98,7 +95,9 @@ impl SceneHost {
             Some(
                 u16::try_from(args[1])
                     .ok()
-                    .filter(|id| *id < self.child_slots.count() && parent.children.contains_key(id))
+                    .filter(|id| {
+                        *id < self.config.child_slots.count() && parent.children.contains_key(id)
+                    })
                     .ok_or_else(|| {
                         fail("scale motion child outside this build's table or missing")
                     })?,

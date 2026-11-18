@@ -81,7 +81,10 @@ fn fit(draw: &mut DrawState, old: &ObjectImage, new: &ObjectImage) {
 
 /// 0x140032d70: common area has min dimensions, centered horizontally, top-aligned.
 /// Keep the NEW pixel only where both images are fully opaque; other RGB is irrelevant.
-fn common_image(old: &ObjectImage, new: &ObjectImage) -> Result<ObjectImage, Box<dyn Error>> {
+fn common_image(
+    old: &ObjectImage,
+    new: &ObjectImage,
+) -> Result<ObjectImage, Box<dyn Error + Send + Sync>> {
     let width = old.pixels.width().min(new.pixels.width());
     let height = old.pixels.height().min(new.pixels.height());
     let mut pixels = vec![0; (u64::from(width) * u64::from(height) * 4) as usize];
@@ -128,7 +131,7 @@ impl SceneHost {
     /// 0x22c5 / 0x14007d3c0 cancels the slot object's replacement, restoring factor 256.
     /// 0x22c6 / 0x14007d400 writes whether +14504 or +14508 is active to result 0.
     /// Both take only SP-4, return 0x4004 and do not advance time or yield.
-    pub(super) fn control_change(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(super) fn control_change(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let raw = call.argument(4, "object slot")?;
         let slot = u8::try_from(raw)
@@ -165,7 +168,7 @@ impl SceneHost {
     /// Skipping cancels, result 0=1, 0xc008; only a release-triggered skip consumes input.
     pub fn try_wait_change(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Option<Step>, DecodeError> {
@@ -178,7 +181,7 @@ impl SceneHost {
 
     pub(crate) fn handle_wait_change(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Flow, DecodeError> {
@@ -227,9 +230,9 @@ impl SceneHost {
     /// SP-16 manager selector (0 = primary). Writes result 0, returns 0x4010, no yield.
     pub fn try_change_image(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         images: &mut dyn ImageSource,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         let Some((pc, 0x2c4)) = vm.pending_system() else {
             return Ok(false);
         };
@@ -239,9 +242,9 @@ impl SceneHost {
 
     pub(crate) fn handle_change_image(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         images: &mut dyn ImageSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x22c4, why);
         let args = [
@@ -261,14 +264,15 @@ impl SceneHost {
             return Ok(());
         };
         if args[3] != 0 {
-            if !self.allow_stand_change_table {
+            if !self.config.allow_stand_change_table {
                 return Err(fail("secondary replacement image manager is not implemented").into());
             }
             // cmvs-20070119 0x4076f0: the stand table (searched after 0x2011 here, see
             // ResourceKind::Image) with its next-read cache armed (0x414030).
             images.cache_next_read()?;
         }
-        let prepared = self.prepare_image_change(slot, &name, args[2], images, pc, 0x22c4)?;
+        let prepared =
+            self.prepare_image_change(slot, &name, args[2], images, pc, call.opcode())?;
         call.complete(0x4010)?;
         call.vm
             .state_mut()
@@ -287,7 +291,7 @@ impl SceneHost {
         images: &mut dyn ImageSource,
         pc: usize,
         opcode: u16,
-    ) -> Result<Option<PreparedChange>, Box<dyn Error>> {
+    ) -> Result<Option<PreparedChange>, Box<dyn Error + Send + Sync>> {
         self.objects
             .get(&slot)
             .map(|old| old.prepare_image_change(name, duration, images, pc, opcode))
@@ -310,7 +314,7 @@ impl SceneObject {
         images: &mut dyn ImageSource,
         pc: usize,
         opcode: u16,
-    ) -> Result<PreparedChange, Box<dyn Error>> {
+    ) -> Result<PreparedChange, Box<dyn Error + Send + Sync>> {
         let fail = |why| error(pc, opcode, why);
         let old = self;
         if old.secondary_image.is_some() {

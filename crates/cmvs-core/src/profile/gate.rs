@@ -1,7 +1,7 @@
 //! Checks each pending system command against the selected profile before any host runs it.
-use super::{CommandStatus, ProfileSelection};
+use super::{CommandStatus, EngineProfile, GameRecord, ProfileSelection, SelectionBasis};
 use crate::machine::Machine;
-use std::{collections::BTreeSet, fmt};
+use std::{collections::BTreeSet, fmt, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateErrorKind {
@@ -11,6 +11,8 @@ pub enum GateErrorKind {
     NoOp,
     /// Present, but its semantics are not yet established for this build.
     Unreviewed,
+    /// A CVNS command without a reviewed translation; never run under CMVS numbering.
+    Unmapped,
     /// Legacy shape evidence is incomplete and the selected policy blocks it.
     Presumed,
     /// 0x201d declares a different game than the matched record.
@@ -23,6 +25,7 @@ pub struct GateError {
     pub base: Option<String>,
     pub script: String,
     pub pc: usize,
+    /// The command as the script encodes it (for CVNS, before translation).
     pub command: u16,
     pub kind: GateErrorKind,
 }
@@ -48,13 +51,18 @@ impl fmt::Display for GateError {
             ),
             GateErrorKind::Unreviewed => write!(
                 f,
-                "{site} is unreviewed for engine profile {} (base {}); blocked by --block-unreviewed",
+                "{site} is unreviewed for engine profile {} (base {}); unreviewed command blocked by policy",
                 self.profile,
                 self.base.as_deref().unwrap_or("-")
             ),
+            GateErrorKind::Unmapped => write!(
+                f,
+                "{site} is a CVNS command with no reviewed mapping in engine profile {}; not implemented",
+                self.profile
+            ),
             GateErrorKind::Presumed => write!(
                 f,
-                "{site} has only legacy presumed evidence for engine profile {}; blocked by --block-presumed",
+                "{site} has only legacy presumed evidence for engine profile {}; presumed command blocked by policy",
                 self.profile
             ),
             GateErrorKind::GameIdMismatch { expected, found } => write!(
@@ -69,8 +77,11 @@ impl fmt::Display for GateError {
 impl std::error::Error for GateError {}
 
 #[derive(Debug, Clone)]
-pub struct CommandGate<'a> {
-    selection: ProfileSelection<'a>,
+pub struct CommandGate {
+    profile: Arc<EngineProfile>,
+    record: Option<GameRecord>,
+    basis: SelectionBasis,
+    evidence: Vec<String>,
     block_unreviewed: bool,
     block_presumed: bool,
     allowed: BTreeSet<u16>,
@@ -91,22 +102,25 @@ pub struct GateCounts {
     pub unreviewed: u64,
 }
 
-impl<'a> CommandGate<'a> {
+impl CommandGate {
     pub fn resolve(
         &mut self,
-        vm: &Machine<'_>,
+        vm: &Machine,
         pc: usize,
         command: u16,
     ) -> Result<super::ResolvedCommand, GateError> {
         let first_unreviewed = self.check(vm, pc, command)?;
         Ok(super::ResolvedCommand {
-            semantics: self.selection.profile.semantics(command),
+            semantics: self.profile.semantics(command),
             first_unreviewed,
         })
     }
-    pub fn new(selection: ProfileSelection<'a>) -> Self {
+    pub fn new(selection: ProfileSelection<'_>) -> Self {
         Self {
-            selection,
+            profile: Arc::new(selection.profile.clone()),
+            record: selection.record.cloned(),
+            basis: selection.basis,
+            evidence: selection.evidence,
             block_unreviewed: false,
             block_presumed: false,
             allowed: BTreeSet::new(),
@@ -123,8 +137,30 @@ impl<'a> CommandGate<'a> {
     pub fn set_block_presumed(&mut self, block: bool) {
         self.block_presumed = block;
     }
-    pub fn selection(&self) -> &ProfileSelection<'a> {
-        &self.selection
+    /// Selected engine profile enforced by this gate.
+    pub fn profile(&self) -> &EngineProfile {
+        &self.profile
+    }
+    /// Matched game record, if any.
+    pub fn record(&self) -> Option<&GameRecord> {
+        self.record.as_ref()
+    }
+    /// Basis on which the engine profile was selected.
+    pub fn basis(&self) -> SelectionBasis {
+        self.basis
+    }
+    /// Evidence lines collected during profile selection.
+    pub fn evidence(&self) -> &[String] {
+        &self.evidence
+    }
+    /// Reconstruct the selection, cloning its evidence.
+    pub fn selection(&self) -> ProfileSelection<'_> {
+        ProfileSelection {
+            profile: &self.profile,
+            record: self.record.as_ref(),
+            basis: self.basis,
+            evidence: self.evidence.clone(),
+        }
     }
     /// Unreviewed commands let through so far.
     pub fn allowed(&self) -> &BTreeSet<u16> {
@@ -203,22 +239,38 @@ impl<'a> CommandGate<'a> {
     /// Pending commands are re-checked when a wait resumes, which is harmless.
     pub fn check(
         &mut self,
-        vm: &Machine<'_>,
+        vm: &Machine,
         pc: usize,
         command: u16,
     ) -> Result<Option<u16>, GateError> {
-        let profile = self.selection.profile;
+        let profile = &*self.profile;
+        let cvns = profile.family == super::Family::Cvns;
+        // A CVNS status belongs to the command the script encodes, not its translation.
+        let source = if cvns {
+            vm.pending_source()
+                .filter(|&source| vm.command_map().map(|m| m.runtime(source)) == Some(command))
+                .ok_or_else(|| GateError {
+                    profile: profile.id.clone(),
+                    base: profile.base.clone(),
+                    script: vm.current_name().escape_ascii().to_string(),
+                    pc,
+                    command,
+                    kind: GateErrorKind::Unmapped,
+                })?
+        } else {
+            command
+        };
         let error = |kind| GateError {
             profile: profile.id.clone(),
             base: profile.base.clone(),
             script: vm.current_name().escape_ascii().to_string(),
             pc,
-            command,
+            command: source,
             kind,
         };
         // 0x201d/0x201e/0x201f read the top stack word; 0x201d carries the game ID.
         if command == 0x1d
-            && let Some(record) = self.selection.record
+            && let Some(record) = self.record.as_ref()
             && let Ok(found) = vm.stack().peek_u32(4)
             && found != record.game_id
         {
@@ -227,7 +279,7 @@ impl<'a> CommandGate<'a> {
                 found,
             }));
         }
-        match profile.status(command) {
+        match profile.status(source) {
             CommandStatus::Base => {
                 self.counts.base += 1;
                 Ok(None)
@@ -253,6 +305,7 @@ impl<'a> CommandGate<'a> {
             CommandStatus::Presumed => Err(error(GateErrorKind::Presumed)),
             CommandStatus::Absent => Err(error(GateErrorKind::Absent)),
             CommandStatus::NoOp => Err(error(GateErrorKind::NoOp)),
+            CommandStatus::Unreviewed if cvns => Err(error(GateErrorKind::Unmapped)),
             CommandStatus::Unreviewed if !self.block_unreviewed => {
                 self.counts.unreviewed += 1;
                 Ok(self.allowed.insert(command).then_some(command))

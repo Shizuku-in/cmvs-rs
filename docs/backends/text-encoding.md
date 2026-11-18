@@ -2,7 +2,7 @@
 
 `cmvs_core::TextEncoding` 提供 `ShiftJis`（默认）、`Gbk` 和 `Utf8`。前两者表示以相应编码编译或修补过的 CMVS 引擎；`Utf8` 是原版之外的扩展，没有对应的原版 exe，见下文 [UTF-8](#utf-8)。
 
-创建 VM 时使用 `Machine::new_with_encoding(&script, TextEncoding::Gbk)`；从指定入口运行可用 `Machine::at_with_encoding`。完整 runner 使用 `Startup::new_with_encoding(&script, root, &game, tick, TextEncoding::Gbk)`。现有 `new` / `at` 调用继续使用 Shift-JIS。
+创建 VM 时使用 `Machine::new_with_encoding(&script, TextEncoding::Gbk)`；从指定入口运行可用 `Machine::at_with_encoding`。完整 runner 使用 `Runtime::new_with_encoding(&script, root, &game, tick, TextEncoding::Gbk)`。现有 `new` / `at` 调用继续使用 Shift-JIS。
 
 消息输出、测量、ruby、辅助文本、字符串比较/截取和文本对话框过滤统一调用 `TextEncoding::wide_len` / `wide_code`：SJIS 首字节为 `81–9F | E0–FC`，GBK 为 `>= 80`，二者都是两字节，字形码为大端字节对。扫描器沿用引擎的字节配对行为，不校验尾字节。
 
@@ -38,7 +38,7 @@ cargo run --release --features desktop --bin cmvs-desktop -- \
   --user-data-dir "<独立测试存档目录>"
 ```
 
-桌面 `--encoding` 同时配置宿主文本、VM 和字体 metrics/渲染。`--encoding auto` 识别为 GBK 或 UTF-8 时走相同路径。`--record-text` 也使用选定的引擎编码，与 `--font` 互斥。
+桌面 `--encoding` 同时配置宿主文本、VM 和字体 metrics/渲染。`--encoding auto`（以及移动端、浏览器、主机与嵌入宿主）按 `encoding.txt` → 汉化转换器生成的 `conversion.json`（顶层 `"encoding"`）→ 游戏脚本文本的顺序识别编码；识别为 GBK 或 UTF-8 时走相同路径。`--record-text` 也使用选定的引擎编码，与 `--font` 互斥。
 
 ## UTF-8
 

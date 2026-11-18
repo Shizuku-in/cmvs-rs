@@ -1,0 +1,20 @@
+//! Shared synthetic test builders and temporary path guards; no original game data.
+pub mod bytecode;
+pub mod cmv9;
+pub mod css1_fixture;
+pub mod environment_cases;
+pub mod media_cases;
+pub mod runtime_cases;
+pub mod script_validation;
+pub mod shared_audio;
+pub mod shared_controls;
+pub mod shared_environment;
+pub mod shared_images;
+pub mod shared_media;
+pub mod shared_message_wait;
+pub mod shared_state;
+pub mod shared_storage;
+pub mod shared_wait;
+pub mod shared_windows;
+pub mod temp_dir;
+pub mod window_cases;

@@ -726,7 +726,7 @@ fn place_layout(
 use crate::dispatch::{Call, Flow, TextHosts};
 pub(crate) fn set_mode(
     hosts: &mut TextHosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
 ) -> Result<Flow, DecodeError> {
     let raw = call.argument(4, "enabled")?;
     call.complete(0x4004)?;
@@ -735,7 +735,7 @@ pub(crate) fn set_mode(
 }
 pub(crate) fn auxiliary_face(
     hosts: &mut TextHosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
 ) -> Result<Flow, DecodeError> {
     let slot = call.argument(4, "auxiliary slot")? as usize;
     let raw = call.argument(8, "font face")?;
@@ -764,7 +764,7 @@ pub(crate) fn auxiliary_face(
 }
 pub(crate) fn measure_text(
     hosts: &mut TextHosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
 ) -> Result<Flow, DecodeError> {
     let index = call.argument(4, "text slot")? as usize;
     let raw = call.argument(8, "text")?;
@@ -799,7 +799,7 @@ pub(crate) fn measure_text(
 }
 pub(crate) fn direct_text(
     hosts: &mut TextHosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
 ) -> Result<Flow, DecodeError> {
     if !hosts.messages.record_output {
         return Ok(Flow::Unhandled);
@@ -811,7 +811,7 @@ pub(crate) fn direct_text(
 }
 pub(crate) fn direct_window(
     hosts: &mut TextHosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
 ) -> Result<Flow, DecodeError> {
     if !hosts.messages.record_output {
         return Ok(Flow::Unhandled);
@@ -823,7 +823,7 @@ pub(crate) fn direct_window(
 }
 pub(crate) fn append_window(
     hosts: &mut TextHosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
 ) -> Result<Flow, DecodeError> {
     Ok(
         match hosts.messages.try_record_output_with_layout(
@@ -839,7 +839,7 @@ pub(crate) fn append_window(
 }
 pub(crate) fn poll_window(
     hosts: &mut TextHosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
 ) -> Result<Flow, DecodeError> {
     Ok(
         if hosts
@@ -854,7 +854,7 @@ pub(crate) fn poll_window(
 }
 pub(crate) fn auxiliary_text(
     hosts: &mut TextHosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
 ) -> Result<Flow, DecodeError> {
     if !hosts.messages.record_output {
         return Ok(Flow::Unhandled);
@@ -887,7 +887,7 @@ pub(crate) fn auxiliary_text(
 /// 0x23b8 / 0x14007aa10 -> 0x140032050. These two native fields hold 64 bytes each.
 pub(crate) fn auxiliary_line_break(
     hosts: &mut TextHosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
 ) -> Result<Flow, DecodeError> {
     let slot = call.argument(4, "auxiliary slot")? as usize;
     let hanging = call.argument(8, "hanging characters")?;
@@ -926,7 +926,7 @@ pub(crate) fn auxiliary_line_break(
 
 pub(crate) fn auxiliary_measure(
     hosts: &mut TextHosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
 ) -> Result<Flow, DecodeError> {
     let slot = call.argument(4, "auxiliary slot")? as usize;
     let raw = call.argument(8, "text")?;

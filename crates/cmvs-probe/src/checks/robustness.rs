@@ -90,7 +90,10 @@ pub fn play_route(
                     steps: session.startup().steps(),
                     choices,
                     end_page,
-                    system_save: fs::read(session.user_dir().join("system.dat")).ok(),
+                    system_save: fs::read(
+                        session.user_dir().join(runner.target.system_save_name()),
+                    )
+                    .ok(),
                     samples,
                 });
             }
@@ -240,7 +243,14 @@ pub fn damaged_saves(runner: &Runner<'_>) -> CheckResult {
     let mut options = runner.options.clone();
     options.max_steps = DAMAGED_STEPS;
     let damaged = runner.with_options(&options);
-    let template = fs::read(runner.target.root.join("save/system.dat")).ok();
+    let template = fs::read(
+        runner
+            .target
+            .root
+            .join("save")
+            .join(runner.target.system_save_name()),
+    )
+    .ok();
     let mut cases: Vec<DamagedCase> = vec![
         ("corrupt system save", Some(garbage(4096)), None),
         ("missing gameplay slot", None, None),

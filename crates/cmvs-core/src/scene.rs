@@ -2,16 +2,16 @@
 //! Renderers read it each frame; this module draws nothing and owns no device.
 use crate::{
     bytecode::DecodeError,
-    dispatch::Call,
+    dispatch::{Call, Flow},
     evaluate::error,
     image::{self, ImageSource},
-    machine::Machine,
     raster::RgbaImage,
 };
 use std::{collections::BTreeMap, error::Error};
 mod animation;
 mod change;
 mod child_slots;
+pub mod cvns;
 mod image_effect;
 mod mask;
 pub(crate) mod opacity;
@@ -21,6 +21,11 @@ mod rotation;
 mod scale_motion;
 mod strip;
 mod world_motion;
+pub use crate::effect_objects::{
+    Circle, CollisionEffect, CollisionParticle, Curtain, FallingEffect, FallingParticle,
+    FloatingPlanes, Fragment, FragmentEffect, LegacyEffect, LegacyMesh, Magic, MeshScene, Particle,
+    ParticleEffect, ParticleFade, SnowField, Spark, Sprites, Vortex, Walk, WalkOutput, WorldQuad,
+};
 pub use animation::{ANIMATION_FRAMES, Animation, AnimationFrame};
 pub use change::ImageChange;
 pub(crate) use child_slots::ChildSlots;
@@ -52,7 +57,8 @@ impl ClearState {
     }
 }
 
-/// Object +6176 after a successful 0x2030 (image object built by 0x14002fd00).
+// Object +6176 after a successful 0x2030 (image object built by 0x14002fd00).
+/// Image pixels, source identity, and properties attached to a scene object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectImage {
     /// Image +1200 enables the mode/color/extra words at +1204..+1212.
@@ -292,7 +298,11 @@ impl ObjectImage {
     }
 }
 
-/// A 0x38c8-byte object freshly built by 0x14003a3c0, including 768 child pointers.
+// A 0x38c8-byte object freshly built by 0x14003a3c0, including 768 child pointers.
+/// A drawable scene object with an optional image, children, and effect state.
+///
+/// Owned by [`SceneHost`] or a message window. Renderers read its current state;
+/// advancing it does not draw or allocate a device texture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneObject {
     /// Optional +6208 collision vertex buffer, in raw f32 words; triples form triangles.
@@ -400,14 +410,16 @@ impl Default for SceneObject {
     }
 }
 
-/// Draw fields retained as original words (offset / 4). Unimplemented setters stay pending.
-/// 0=coordinate mode, 1=blend, 2..6=source x/y/width/height, 6..8=origin,
-/// 8..10=position, 10=order, 11..14=world x/y/z float bits (0x2072..0x2074),
-/// 15/16=camera projection parameter bits (0x2070/0x2071),
-/// 17=opacity, 18/19=scale bits, 20=rotation, 21=fade factor.
+/// Drawing properties and active animation tracks for a scene object.
+///
+/// The internal 22-word block preserves the native engine representation; use the
+/// typed accessors below (or [`Self::snapshot_words`] for read-only snapshot inspection)
+/// rather than indexing raw words directly.
+// Original fields are addressed by byte offset / 4; world XYZ: 0x2072..0x2074,
+// projection parameters: 0x2070/0x2071. Unimplemented setters stay pending.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrawState {
-    pub words: [u32; 22],
+    pub(crate) words: [u32; 22],
     /// +88: second-texture mapping mode, set by 0x2321.
     pub texture_mode: u32,
     /// +104: 0x2322 selects texture stage 0 COLOROP=SUBTRACT instead of MODULATE.
@@ -427,6 +439,168 @@ pub struct DrawState {
     pub position_motion: Option<Box<PositionMotion>>,
     /// +152: floating-point world XYZ motion, managed by 0x21f9..0x21fd.
     pub world_motion: Option<Box<WorldMotion>>,
+}
+
+impl DrawState {
+    /// Coordinate mode (`0` = 2D screen, `1`/`2` = screen-projected, `5` = float 2D).
+    pub fn coordinate_mode(&self) -> u32 {
+        self.words[0]
+    }
+    /// Set the coordinate mode.
+    pub fn set_coordinate_mode(&mut self, mode: u32) {
+        self.words[0] = mode;
+    }
+    /// Blend mode (`0` = opaque, `1` = alpha, `2` = additive, etc.).
+    pub fn blend_mode(&self) -> u32 {
+        self.words[1]
+    }
+    /// Set the blend mode.
+    pub fn set_blend_mode(&mut self, mode: u32) {
+        self.words[1] = mode;
+    }
+    /// Source rectangle `[x, y, width, height]` in texels.
+    pub fn source_rect(&self) -> [u32; 4] {
+        [self.words[2], self.words[3], self.words[4], self.words[5]]
+    }
+    /// Set the source rectangle `[x, y, width, height]` in texels.
+    pub fn set_source_rect(&mut self, rect: [u32; 4]) {
+        self.words[2..6].copy_from_slice(&rect);
+    }
+    /// Set only the source `[width, height]` while preserving source `[x, y]`.
+    pub fn set_source_size(&mut self, width: u32, height: u32) {
+        self.words[4] = width;
+        self.words[5] = height;
+    }
+    /// Pivot/origin `[x, y]` as raw 32-bit words.
+    pub fn origin_raw(&self) -> [u32; 2] {
+        [self.words[6], self.words[7]]
+    }
+    /// Set the pivot/origin `[x, y]` as raw 32-bit words.
+    pub fn set_origin_raw(&mut self, origin: [u32; 2]) {
+        self.words[6..8].copy_from_slice(&origin);
+    }
+    /// 2D position `[x, y]` in signed logical pixels.
+    pub fn position(&self) -> [i32; 2] {
+        [self.words[8] as i32, self.words[9] as i32]
+    }
+    /// 2D position `[x, y]` as raw 32-bit words.
+    pub fn position_raw(&self) -> [u32; 2] {
+        [self.words[8], self.words[9]]
+    }
+    /// Set the 2D position `[x, y]` in signed logical pixels.
+    pub fn set_position(&mut self, pos: [i32; 2]) {
+        self.words[8] = pos[0] as u32;
+        self.words[9] = pos[1] as u32;
+    }
+    /// Set the 2D position `[x, y]` as raw 32-bit words.
+    pub fn set_position_raw(&mut self, pos: [u32; 2]) {
+        self.words[8..10].copy_from_slice(&pos);
+    }
+    /// Integer screen-space offset for 2D (`0`) or floating-point 2D (`5`) coordinate modes.
+    pub fn screen_offset(&self) -> Option<[i32; 2]> {
+        match self.words[0] {
+            0 => Some(self.position()),
+            5 => {
+                let values = [self.words[11], self.words[12]].map(f32::from_bits);
+                if values
+                    .iter()
+                    .any(|v| !(-2147483648.0..2147483648.0).contains(v))
+                {
+                    return None;
+                }
+                Some(values.map(|v| v as i32))
+            }
+            _ => None,
+        }
+    }
+    /// Layer ordering key.
+    pub fn layer(&self) -> u32 {
+        self.words[10]
+    }
+    /// Set the layer ordering key.
+    pub fn set_layer(&mut self, layer: u32) {
+        self.words[10] = layer;
+    }
+    /// World `[x, y, z]` coordinates as raw IEEE-754 `f32` bit patterns.
+    pub fn world_position_bits(&self) -> [u32; 3] {
+        [self.words[11], self.words[12], self.words[13]]
+    }
+    /// Set world `[x, y, z]` coordinates from raw `f32` bit patterns.
+    pub fn set_world_position_bits(&mut self, bits: [u32; 3]) {
+        self.words[11..14].copy_from_slice(&bits);
+    }
+    /// Solid-fill color word (`0x00RRGGBB`).
+    pub fn color(&self) -> u32 {
+        self.words[14]
+    }
+    /// Set the solid-fill color word (`0x00RRGGBB`).
+    pub fn set_color(&mut self, color: u32) {
+        self.words[14] = color;
+    }
+    /// Camera projection parameter words (`[0x2070, 0x2071]`) as raw `f32` bit patterns.
+    pub fn projection_bits(&self) -> [u32; 2] {
+        [self.words[15], self.words[16]]
+    }
+    /// Set camera projection parameter words from raw `f32` bit patterns.
+    pub fn set_projection_bits(&mut self, bits: [u32; 2]) {
+        self.words[15..17].copy_from_slice(&bits);
+    }
+    /// Object opacity word (`0..=255`, or engine-specific raw values).
+    pub fn opacity(&self) -> u32 {
+        self.words[17]
+    }
+    /// Set the raw object opacity word.
+    pub fn set_opacity(&mut self, opacity: u32) {
+        self.words[17] = opacity;
+    }
+    /// `[scale_x, scale_y]` as `f32` values.
+    pub fn scale(&self) -> [f32; 2] {
+        [
+            f32::from_bits(self.words[18]),
+            f32::from_bits(self.words[19]),
+        ]
+    }
+    /// `[scale_x, scale_y]` as raw `f32` bit patterns.
+    pub fn scale_bits(&self) -> [u32; 2] {
+        [self.words[18], self.words[19]]
+    }
+    /// Set `[scale_x, scale_y]` from `f32` values.
+    pub fn set_scale(&mut self, scale: [f32; 2]) {
+        self.words[18] = scale[0].to_bits();
+        self.words[19] = scale[1].to_bits();
+    }
+    /// Set `[scale_x, scale_y]` from raw `f32` bit patterns.
+    pub fn set_scale_bits(&mut self, bits: [u32; 2]) {
+        self.words[18..20].copy_from_slice(&bits);
+    }
+    /// Rotation angle in signed hundredths of a degree.
+    pub fn rotation_hundredths(&self) -> i32 {
+        self.words[20] as i32
+    }
+    /// Raw rotation word (hundredths of a degree as `u32`).
+    pub fn rotation_raw(&self) -> u32 {
+        self.words[20]
+    }
+    /// Set the rotation angle in signed hundredths of a degree.
+    pub fn set_rotation_hundredths(&mut self, hundredths: i32) {
+        self.words[20] = hundredths as u32;
+    }
+    /// Set the raw rotation word.
+    pub fn set_rotation_raw(&mut self, raw: u32) {
+        self.words[20] = raw;
+    }
+    /// Cross-fade factor (`0..=256`, default `256`).
+    pub fn fade_factor(&self) -> u32 {
+        self.words[21]
+    }
+    /// Set the cross-fade factor (`0..=256`).
+    pub fn set_fade_factor(&mut self, factor: u32) {
+        self.words[21] = factor;
+    }
+    /// Read-only copy of the 22 native draw-state words (snapshot `0x700` layout).
+    pub fn snapshot_words(&self) -> [u32; 22] {
+        self.words
+    }
 }
 impl Default for DrawState {
     fn default() -> Self {
@@ -477,13 +651,15 @@ impl DrawState {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct SceneHost {
-    child_slots: ChildSlots,
-    allow_filter_mode_one: bool,
-    allow_rotation_hold: bool,
-    legacy_world_motion: bool,
-    allow_legacy_sine_modes: bool,
+/// Immutable engine-build scene configuration derived from [`crate::profile::EngineProfile`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SceneConfig {
+    pub(crate) child_slots: ChildSlots,
+    pub(crate) collision_x87_arithmetic: bool,
+    pub(crate) allow_filter_mode_one: bool,
+    pub(crate) allow_rotation_hold: bool,
+    pub(crate) legacy_world_motion: bool,
+    pub(crate) allow_legacy_sine_modes: bool,
     pub(crate) allow_screen_coordinates_one: bool,
     pub(crate) allow_logical_screen_scale: bool,
     pub(crate) allow_projected_parent_rotation: bool,
@@ -493,11 +669,70 @@ pub struct SceneHost {
     pub(crate) allow_legacy_triangle_quake: bool,
     /// cmvs-20070119 0x4076f0: a nonzero 0x22c4 selector loads from the stand table.
     pub(crate) allow_stand_change_table: bool,
+}
+
+impl SceneConfig {
+    pub(crate) fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        use crate::profile::InspectedBuild;
+
+        let build = profile.inspected_build();
+        Self {
+            child_slots: ChildSlots::for_profile(profile),
+            collision_x87_arithmetic: matches!(
+                build,
+                Some(InspectedBuild::Cmvs20090815 | InspectedBuild::Cmvs20100314)
+            ),
+            allow_filter_mode_one: matches!(
+                build,
+                Some(
+                    InspectedBuild::Cmvs20071117
+                        | InspectedBuild::Cmvs20090815
+                        | InspectedBuild::Cmvs20100314
+                )
+            ),
+            allow_rotation_hold: build == Some(InspectedBuild::Cmvs20070119),
+            legacy_world_motion: build == Some(InspectedBuild::Cmvs20070119),
+            allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
+            allow_screen_coordinates_one: matches!(
+                build,
+                Some(
+                    InspectedBuild::Cmvs20070119
+                        | InspectedBuild::Cmvs20080719
+                        | InspectedBuild::Cmvs20080903
+                        | InspectedBuild::Cmvs20090815
+                        | InspectedBuild::Cmvs20100314
+                )
+            ),
+            allow_logical_screen_scale: matches!(
+                build,
+                Some(InspectedBuild::Cmvs20101211 | InspectedBuild::Cmvs20100314)
+            ),
+            allow_projected_parent_rotation: build == Some(InspectedBuild::Cmvs20080719),
+            allow_triangle_quake: matches!(
+                build,
+                Some(
+                    InspectedBuild::Cmvs20080719
+                        | InspectedBuild::Cmvs20090815
+                        | InspectedBuild::Cmvs20100314
+                )
+            ),
+            allow_legacy_triangle_quake: build == Some(InspectedBuild::Cmvs20070119),
+            allow_stand_change_table: build == Some(InspectedBuild::Cmvs20070119),
+        }
+    }
+}
+
+/// Scene-object slots, retained transitions, and effects updated by script commands.
+///
+/// Read this state with [`crate::scene_render`] or a host renderer. It does not own
+/// a graphics device. Frame progression is coordinated by [`crate::runtime::Runtime`].
+#[derive(Debug, Default)]
+pub struct SceneHost {
+    pub(crate) config: SceneConfig,
     screen_size: crate::viewport::ScreenSize,
     pub(crate) legacy_flakes: BTreeMap<u8, crate::effect_objects::LegacyFlakes>,
     pub(crate) rain_effects: BTreeMap<u8, crate::effect_objects::RainEffect>,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
-    pub(crate) collision_x87_arithmetic: bool,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
     pub(crate) particle_effects: BTreeMap<u8, crate::effect_objects::ParticleEffect>,
     pub(crate) falling_effects: BTreeMap<u8, crate::effect_objects::FallingEffect>,
@@ -511,45 +746,34 @@ pub struct SceneHost {
     quake: Option<Quake>,
     /// Engine +4640; see `strip`.
     strip: Option<StripWipe>,
+    /// CVNS +5696 (`0x2008`): defaults to backdrop clear enabled (`false` = enabled).
+    cvns_backdrop_disabled: bool,
+    /// CVNS +5695 (`0x2009`): optional screen/layer fade mix `0..=256` (`None` = 256).
+    cvns_layer_fade_alpha: Option<u16>,
+    /// CVNS (`cvns-20090203`) 2D image buffers, 1536 sprites, fade, mask wipe, and quake.
+    cvns: Option<Box<cvns::CvnsScene>>,
 }
 impl SceneHost {
-    /// Construct runtime hosts for the independently inspected child-table layout.
+    /// Construct runtime hosts for the independently inspected child-table layout
+    /// and engine family.
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
-            child_slots: ChildSlots::for_profile(profile),
-            collision_x87_arithmetic: profile.is_inspected_20090815()
-                || profile.is_inspected_20100314(),
-            allow_filter_mode_one: profile.is_inspected_20071117()
-                || profile.is_inspected_20090815()
-                || profile.is_inspected_20100314(),
-            allow_rotation_hold: profile.is_inspected_20070119(),
-            allow_logical_screen_scale: profile.is_inspected_20101211()
-                || profile.is_inspected_20100314(),
-            legacy_world_motion: profile.is_inspected_20070119(),
-            allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
-            allow_screen_coordinates_one: profile.is_inspected_20070119()
-                || profile.is_inspected_20080719()
-                || profile.is_inspected_20080903()
-                || profile.is_inspected_20090815()
-                || profile.is_inspected_20100314(),
-            allow_projected_parent_rotation: profile.is_inspected_20080719(),
-            allow_triangle_quake: profile.is_inspected_20080719()
-                || profile.is_inspected_20090815()
-                || profile.is_inspected_20100314(),
-            allow_stand_change_table: profile.is_inspected_20070119(),
-            allow_legacy_triangle_quake: profile.is_inspected_20070119(),
+            config: SceneConfig::for_profile(profile),
+            cvns: profile
+                .is_cvns()
+                .then(|| Box::new(cvns::CvnsScene::default())),
             ..Self::default()
         }
     }
 
     fn supports_image_filter_mode(&self, mode: u32) -> bool {
-        matches!(mode, 2 | 17 | 256 | 512) || mode == 1 && self.allow_filter_mode_one
+        matches!(mode, 2 | 17 | 256 | 512) || mode == 1 && self.config.allow_filter_mode_one
     }
 
     pub fn screen_size(&self) -> [u32; 2] {
         self.screen_size.pixels()
     }
-    pub(crate) fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
+    pub fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
         self.screen_size = size;
     }
     pub(crate) fn snapshot_preview(clear: ClearState, objects: BTreeMap<u8, SceneObject>) -> Self {
@@ -578,9 +802,137 @@ impl SceneHost {
         self.advance_strip(delta);
         self.advance_mask(delta);
         self.advance_quake(delta);
+        if let Some(cvns) = self.cvns.as_mut() {
+            let before = self.cvns_layer_fade_alpha.unwrap_or(256);
+            let mut level = before;
+            let active_fade = cvns.fade.is_some();
+            cvns.advance_frame(delta, &mut self.clear.color, &mut level);
+            if active_fade || level != before {
+                self.cvns_layer_fade_alpha = Some(level);
+            }
+        }
+    }
+    pub fn enable_cvns(&mut self) {
+        self.cvns
+            .get_or_insert_with(|| Box::new(cvns::CvnsScene::default()));
+    }
+    pub fn cvns(&self) -> Option<&cvns::CvnsScene> {
+        self.cvns.as_deref()
+    }
+    pub fn cvns_mut(&mut self) -> &mut cvns::CvnsScene {
+        self.cvns
+            .get_or_insert_with(|| Box::new(cvns::CvnsScene::default()))
+    }
+    pub(crate) fn cvns_backdrop_disabled(&self) -> bool {
+        self.cvns_backdrop_disabled
+    }
+    pub(crate) fn cvns_layer_fade_alpha(&self) -> Option<u16> {
+        self.cvns_layer_fade_alpha
+    }
+    pub(crate) fn restore_cvns(
+        &mut self,
+        clear: ClearState,
+        backdrop_disabled: bool,
+        layer_fade_alpha: Option<u16>,
+        cvns: cvns::CvnsScene,
+    ) {
+        *self = Self {
+            screen_size: self.screen_size,
+            config: self.config,
+            clear,
+            cvns_backdrop_disabled: backdrop_disabled,
+            cvns_layer_fade_alpha: layer_fade_alpha,
+            cvns: Some(Box::new(cvns)),
+            ..Self::default()
+        };
+    }
+    pub(crate) fn handle_cvns_image(
+        &mut self,
+        call: &mut Call<'_>,
+        source: &mut dyn ImageSource,
+    ) -> Result<Flow, Box<dyn Error + Send + Sync>> {
+        let size = self.screen_size.pixels();
+        let backdrop = (
+            !self.cvns_backdrop_disabled,
+            self.clear.color,
+            self.cvns_layer_fade_alpha.unwrap_or(256),
+        );
+        self.cvns_mut().handle_image(call, source, size, backdrop)
+    }
+    pub(crate) fn handle_cvns(
+        &mut self,
+        call: &mut Call<'_>,
+    ) -> Result<Flow, Box<dyn Error + Send + Sync>> {
+        let mut level = self.cvns_layer_fade_alpha.unwrap_or(256);
+        let mut color = self.clear.color;
+        let flow = self.cvns_mut().handle(call, &mut color, &mut level)?;
+        self.clear.color = color;
+        if self.cvns_layer_fade_alpha.is_some() || level != 256 {
+            self.cvns_layer_fade_alpha = Some(level);
+        }
+        Ok(flow)
+    }
+    pub(crate) fn wait_cvns(
+        &mut self,
+        call: &mut Call<'_>,
+        input: &mut crate::input::ActionInput,
+        gate: crate::fade::SkipGate,
+    ) -> Result<Flow, Box<dyn Error + Send + Sync>> {
+        let mut level = self.cvns_layer_fade_alpha.unwrap_or(256);
+        let mut color = self.clear.color;
+        let flow = self
+            .cvns_mut()
+            .wait(call, input, gate, &mut color, &mut level)?;
+        self.clear.color = color;
+        if self.cvns_layer_fade_alpha.is_some() || level != 256 {
+            self.cvns_layer_fade_alpha = Some(level);
+        }
+        Ok(flow)
     }
     pub fn clear(&self) -> ClearState {
         self.clear
+    }
+    pub fn clear_enabled(&self) -> bool {
+        !self.cvns_backdrop_disabled
+    }
+    pub fn layer_fade_alpha(&self) -> u16 {
+        self.cvns_layer_fade_alpha.unwrap_or(256)
+    }
+    fn handle_cvns_backdrop(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
+        let names = argument_names(call.command);
+        match call.command {
+            0x408 => {
+                let enabled = call.argument(4, names[0])? != 0;
+                call.complete(0x4004)?;
+                self.cvns_backdrop_disabled = !enabled;
+            }
+            0x409 => {
+                let alpha = call.argument(4, names[0])?;
+                let color = call.argument(8, names[1])?;
+                call.complete(0x4008)?;
+                self.clear.color = color;
+                self.cvns_layer_fade_alpha = Some(alpha.min(256) as u16);
+                if let Some(cvns) = self.cvns.as_mut() {
+                    cvns.fade = None;
+                }
+            }
+            0x40c => {
+                for (i, name) in names.iter().enumerate() {
+                    call.argument(4 * (i + 1), name)?;
+                }
+                call.complete(0x4010)?;
+            }
+            0x40b => {
+                let color = call.argument(4, names[0])?;
+                call.complete(0x4004)?;
+                self.clear.color = color;
+            }
+            0x40d => {
+                call.complete(0x4000)?;
+            }
+            _ => unreachable!("handled CVNS backdrop command"),
+        }
+        Ok(())
     }
     pub fn object(&self, slot: u8) -> Option<&SceneObject> {
         self.objects.get(&slot)
@@ -603,19 +955,8 @@ impl SceneHost {
     pub(crate) fn replace_movie_object(&mut self, slot: u8, object: SceneObject) {
         self.objects.insert(slot, object);
     }
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(command, 0x20..=0x23 | 0x25..=0x28 | 0x2a | 0x2d..=0x2f | 0x33 | 0x34 | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x78 | 0x1e0..=0x1fd | 0x220..=0x223 | 0x250 | 0x2ae | 0x2c5 | 0x2c6 | 0x2cb | 0x321 | 0x322 | 0x328 | 0x329)
-        {
-            return Ok(false);
-        }
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         if command == 0x328 {
             return self.create_object_effect(call);
@@ -702,10 +1043,13 @@ impl SceneHost {
             self.objects.clear();
             return Ok(());
         }
+        if matches!(command, 0x408 | 0x409 | 0x40b..=0x40d) {
+            return self.handle_cvns_backdrop(call);
+        }
         if !matches!(command, 0x2cb | 0x250 | 0x20 | 0x21) {
             return Err(call.error("unregistered command"));
         }
-        let op = command + 0x2000;
+        let op = call.opcode();
         let value = call.argument(4, argument_names(call.command)[0])?;
         let slot = if matches!(command, 0x20 | 0x21) {
             // 0x14006bb00/0x14006bbc0 compare signed against 256: larger values only set
@@ -736,7 +1080,7 @@ impl SceneHost {
     /// 0x2026: SP-4 object, SP-8 child (negative selects self), SP-12 boolean.
     /// Evidence and build-specific addresses: docs/games/chronoclock/vm-semantics.md.
     /// Missing/invalid targets stay explicit errors: VM +12056 bit 0x10 is unmodeled.
-    fn set_shown(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn set_shown(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x2026, why);
         let slot = call.argument(4, argument_names(call.command)[0])?;
@@ -751,7 +1095,7 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|id| *id < self.child_slots.count())
+                .filter(|id| *id < self.config.child_slots.count())
                 .and_then(|id| parent.children.get_mut(&id))
                 .ok_or_else(|| {
                     fail("visibility needs an existing child within this build's child table")
@@ -765,7 +1109,7 @@ impl SceneHost {
     /// 0x2023 / 0x14006bd10 -> 0x14003a7d0: remove SP-8 from parent SP-4.
     /// The child index is unsigned: values >=768, including negative i32 bits, are no-ops.
     /// Drop owns the subtree, images and effect state; parent flags/state remain untouched.
-    fn destroy_child(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn destroy_child(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x2023, why);
         let raw = call.argument(4, argument_names(call.command)[0])?;
@@ -775,7 +1119,7 @@ impl SceneHost {
             return Err(fail("child deletion needs an existing parent object"));
         }
         call.complete(0x4008)?;
-        if child < u32::from(self.child_slots.count()) {
+        if child < u32::from(self.config.child_slots.count()) {
             self.objects
                 .get_mut(&slot)
                 .expect("validated parent")
@@ -792,9 +1136,9 @@ impl SceneHost {
     /// - 0x2028 / 0x14006bea0: SP-8 is the source slot (same bounds). Destroys the target
     ///   object, moves the source pointer into the target and clears the source. With the
     ///   same occupied slot the original stores the pointer it just freed, which Rust rejects.
-    fn query_or_move(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn query_or_move(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
-        let op = command + 0x2000;
+        let op = call.opcode();
         let mut word = |distance| {
             call.argument(distance, argument_names(command)[distance / 4 - 1])
                 .map(|value| value as i32)
@@ -809,7 +1153,7 @@ impl SceneHost {
                 None => false,
                 Some(_) if second < 0 => true,
                 Some(object) => u16::try_from(second).is_ok_and(|id| {
-                    id < self.child_slots.count() && object.children.contains_key(&id)
+                    id < self.config.child_slots.count() && object.children.contains_key(&id)
                 }),
             };
             call.complete(0x4008)?;
@@ -840,7 +1184,7 @@ impl SceneHost {
     /// image +1040) gives system results 1/2 = width/height (+1144/+1148) and 3 = the
     /// 32-bit flag (+1152), and result 0 = 1; without one only result 0 = 0 is written.
     /// Pops 4 bytes.
-    fn image_info(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn image_info(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let raw = call.argument(4, argument_names(call.command)[0])? as i32;
         let object = u8::try_from(raw)
@@ -880,7 +1224,7 @@ impl SceneHost {
     /// (0x140030190): the BGRA dword of the CPU copy at +1160, or 0 outside +1144/+1148 or
     /// without an image. Only file-loaded, unfiltered images are verified to keep that copy
     /// equal to the decoded pixels. Pops 16.
-    fn pixel(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn pixel(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x2034, why);
         let mut args = [0; 4];
@@ -897,7 +1241,7 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|id| *id < self.child_slots.count())
+                .filter(|id| *id < self.config.child_slots.count())
                 .and_then(|id| object.children.get(&id))
                 .ok_or_else(|| {
                     fail("pixel query needs an existing child within this build's child table")
@@ -936,7 +1280,7 @@ impl SceneHost {
     /// bit 0x10), SP-8 child (negative selects the object, 0x14003a760 otherwise), SP-12/SP-16
     /// logical width/height written to +6256/+6260. A missing object or child (none at 768
     /// and above) would be dereferenced. Pops 16.
-    fn set_logical_size(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn set_logical_size(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x202a, why);
         let mut args = [0; 4];
@@ -953,7 +1297,7 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|id| *id < self.child_slots.count())
+                .filter(|id| *id < self.config.child_slots.count())
                 .and_then(|id| object.children.get_mut(&id))
                 .ok_or_else(|| {
                     fail("logical size needs an existing child within this build's child table")
@@ -968,7 +1312,7 @@ impl SceneHost {
     /// object). System results 0..3 = draw words 17 (opacity), 8, 9, 10; float results 8/9 =
     /// words 18/19 (scale), as the window query 0x218d. Returns 0x4008; a missing slot only
     /// sets +8108 bit 0x10 in the original and is an error here.
-    pub(crate) fn draw_query(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn draw_query(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x204f, why);
         let slot = call.argument(4, "object slot")?;
@@ -1007,10 +1351,7 @@ impl SceneHost {
     }
 
     /// HAROUSE x86 0x444ce0: select screen coordinate mode 0 or 1.
-    pub(crate) fn screen_coordinates(
-        &mut self,
-        call: &mut Call<'_, '_>,
-    ) -> Result<(), DecodeError> {
+    pub(crate) fn screen_coordinates(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x204e, why);
         let slot = call.argument(4, "object slot")?;
@@ -1037,9 +1378,10 @@ impl SceneHost {
         Ok(())
     }
 
-    fn handle_object(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn handle_object(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
-        let fail = |why| error(pc, command + 0x2000, why);
+        let op = call.opcode();
+        let fail = |why| error(pc, op, why);
         let count = match command {
             0x40 => 1,
             0x22 | 0x25 | 0x2d | 0x2e | 0x42 | 0x50 => 2,
@@ -1060,8 +1402,8 @@ impl SceneHost {
             .ok_or_else(|| fail("object slot does not exist"))?;
         // Independently inspected create helpers ignore unsigned overflow of their table.
         if command == 0x22
-            && self.child_slots != ChildSlots::Slots768
-            && args[1] >= u32::from(self.child_slots.count())
+            && self.config.child_slots != ChildSlots::Slots768
+            && args[1] >= u32::from(self.config.child_slots.count())
         {
             call.complete(0x4008)?;
             return Ok(());
@@ -1075,7 +1417,7 @@ impl SceneHost {
             Some(
                 u16::try_from(args[1])
                     .ok()
-                    .filter(|v| *v < self.child_slots.count())
+                    .filter(|v| *v < self.config.child_slots.count())
                     .ok_or_else(|| fail("child slot outside this build's table"))?,
             )
         };
@@ -1198,7 +1540,7 @@ impl SceneHost {
     }
 
     /// 0x2078 / 0x14006f4c0 -> 0x14003b210: raw XYZ to float results 8..10.
-    fn world_position(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn world_position(&self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x2078, why);
         let slot = call.argument(4, argument_names(call.command)[0])?;
@@ -1212,7 +1554,7 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|&id| id < self.child_slots.count())
+                .filter(|&id| id < self.config.child_slots.count())
                 .and_then(|id| parent.children.get(&id))
                 .ok_or_else(|| {
                     fail("world query needs an existing child within this build's child table")
@@ -1234,29 +1576,11 @@ impl SceneHost {
         Ok(())
     }
 
-    /// 0x2030 / 0x14006c220: SP-4 object slot, SP-8 file name. Rebuilds the object image
-    /// (0x14003bb10) and sets system result 0 to whether loading succeeded; returns 0x4008.
-    /// 0x2038 uses SP-8 child slot and SP-12 name, and returns 0x400c.
-    /// 0x203b / 0x14006c3b0 -> 0x14003bbc0 -> 0x140035260 adds mode/color/extra,
-    /// filters decoded pixels before upload, and returns 0x4014. Mode 1 requires the inspected cmvs-20071117 profile and hash.
-    /// +12032 is set only by 0x212a, which stays unhandled, so its 0x140018bc0 call never runs.
-    pub fn try_handle_image(
-        &mut self,
-        vm: &mut Machine<'_>,
-        images: &mut dyn ImageSource,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command @ (0x30 | 0x35 | 0x38 | 0x3b | 0x3f))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_image(&mut Call::new(vm, pc, command), images)?;
-        Ok(true)
-    }
-
     pub(crate) fn handle_image(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         images: &mut dyn ImageSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if call.command == 0x32 {
             // cmvs-20070119 0x4329b0: arm the stand table's next-read cache (+5651), then
             // load like 0x2030; returns 0x400c although SP-12 is not read.
@@ -1270,7 +1594,8 @@ impl SceneHost {
             return Ok(());
         }
         let (pc, command) = (call.pc, call.command);
-        let fail = |why| error(pc, command + 0x2000, why);
+        let op = call.opcode();
+        let fail = |why| error(pc, op, why);
         let raw_slot = call.argument(4, "object slot")?;
         let raw_name = call.argument(if command == 0x38 { 12 } else { 8 }, "image name")?;
         // Slots >= 256 or without an object only set +12056 bit 0x10 (unmodeled);
@@ -1285,7 +1610,7 @@ impl SceneHost {
                 u16::try_from(id)
                     .ok()
                     .filter(|id| {
-                        *id < self.child_slots.count()
+                        *id < self.config.child_slots.count()
                             && self.objects[&slot].children.contains_key(id)
                     })
                     .ok_or_else(|| {
@@ -1317,7 +1642,7 @@ impl SceneHost {
             if first != 0 || second != 0 {
                 return Err(fail("second texture nonzero load flags are not verified").into());
             }
-            let decoded = load_image(images, name, pc, 0x2035)?;
+            let decoded = load_image(images, name, pc, op)?;
             call.complete(0x4010)?;
             call.vm
                 .state_mut()
@@ -1329,7 +1654,7 @@ impl SceneHost {
                 .secondary_image = decoded;
             return Ok(());
         }
-        let mut decoded = load_image(images, name, pc, command + 0x2000)?;
+        let mut decoded = load_image(images, name, pc, op)?;
         if let Some(filter) = filter
             && let Some(image) = decoded.as_mut()
         {
@@ -1355,18 +1680,24 @@ impl SceneHost {
 }
 
 #[derive(Debug)]
-struct ImageLoadError {
+pub(crate) struct ImageLoadError {
     pc: usize,
     opcode: u16,
-    cause: Box<dyn Error>,
+    cause: Box<dyn Error + Send + Sync>,
+}
+impl ImageLoadError {
+    pub(crate) fn fmt_at(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        pc: usize,
+        opcode: u16,
+    ) -> std::fmt::Result {
+        write!(f, "PC=0x{pc:x} 0x{opcode:04x}: {}", self.cause)
+    }
 }
 impl std::fmt::Display for ImageLoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "PC=0x{:x} 0x{:04x}: {}",
-            self.pc, self.opcode, self.cause
-        )
+        self.fmt_at(f, self.pc, self.opcode)
     }
 }
 impl Error for ImageLoadError {
@@ -1382,7 +1713,7 @@ pub(crate) fn load_image(
     name: Vec<u8>,
     pc: usize,
     op: u16,
-) -> Result<Option<ObjectImage>, Box<dyn Error>> {
+) -> Result<Option<ObjectImage>, Box<dyn Error + Send + Sync>> {
     if name.len() >= 64 {
         return Err(error(pc, op, "image name exceeds the original 64-byte buffers").into());
     }
@@ -1431,18 +1762,7 @@ impl SceneHost {
     ) {
         *self = Self {
             screen_size: self.screen_size,
-            child_slots: self.child_slots,
-            collision_x87_arithmetic: self.collision_x87_arithmetic,
-            allow_filter_mode_one: self.allow_filter_mode_one,
-            allow_rotation_hold: self.allow_rotation_hold,
-            legacy_world_motion: self.legacy_world_motion,
-            allow_legacy_sine_modes: self.allow_legacy_sine_modes,
-            allow_screen_coordinates_one: self.allow_screen_coordinates_one,
-            allow_logical_screen_scale: self.allow_logical_screen_scale,
-            allow_projected_parent_rotation: self.allow_projected_parent_rotation,
-            allow_triangle_quake: self.allow_triangle_quake,
-            allow_stand_change_table: self.allow_stand_change_table,
-            allow_legacy_triangle_quake: self.allow_legacy_triangle_quake,
+            config: self.config,
             legacy_flakes: Default::default(),
             rain_effects: Default::default(),
             particle_effects: Default::default(),
@@ -1456,6 +1776,9 @@ impl SceneHost {
             fade: crate::fade::FadeHost::restored(fade),
             masks: [mask, None],
             strip,
+            cvns_backdrop_disabled: false,
+            cvns_layer_fade_alpha: None,
+            cvns: None,
         };
     }
 }
@@ -1465,6 +1788,11 @@ fn argument_names(command: u16) -> &'static [&'static str] {
         0x2f | 0x221..=0x223 => &[],
         0x2cb => &["clear color"],
         0x250 => &["clear depth"],
+        0x408 => &["backdrop clear enable"],
+        0x409 => &["layer fade alpha", "fade color"],
+        0x40b => &["fill color"],
+        0x40c => &["left", "top", "width", "height"],
+        0x40d => &[],
         0x20 | 0x21 | 0x33 | 0x40 | 0x329 | 0x2c5 | 0x2c6 => &["object slot"],
         0x22 | 0x23 | 0x25 | 0x27 | 0x2d | 0x2e | 0x42 | 0x50 | 0x78 => {
             &["object slot", "child slot"]
@@ -1637,7 +1965,7 @@ mod filter_tests {
     #[derive(Default)]
     struct CachingSource(std::collections::HashMap<u128, image::DecodedImage>, bool);
     impl ImageSource for CachingSource {
-        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             Ok(None)
         }
         fn caches_decodes(&self) -> bool {

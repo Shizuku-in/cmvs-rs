@@ -1,15 +1,23 @@
-//! Engine save snapshot (0x140069270): record framing and its verified live-state effect.
-//! Captures use the supported record layouts; skipped captures are tracked as unavailable.
+//! Engine-state snapshot records for gameplay saves.
+//!
+//! Snapshot capture and restoration cover the implemented record layouts. A decoded
+//! [`crate::save`] container alone is not a restored runtime; [`crate::runtime::Runtime`]
+//! coordinates live-state changes and snapshot policy.
+
+// Capture follows 0x140069270 record framing and its verified live-state effect.
+// Skipped captures are marked unavailable.
 use crate::{
     FormatError, bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine,
 };
 use std::ops::Range;
 
+pub(crate) mod cvns;
 mod effect;
 mod engine;
 mod variables;
 mod visual;
 mod vm_state;
+pub use cvns::{CVNS_SNAPSHOT_SCHEMA_VERSION, CvnsLocalVariables, CvnsSnapshot};
 pub use effect::SavedEffect;
 pub use engine::EngineSnapshot;
 pub use variables::LocalVariables;
@@ -37,6 +45,10 @@ pub enum SnapshotLayout {
     TextV3,
     /// Text v3, scene v4 with 1024 child slots (REALIVE and verified later builds).
     TextV3SceneV4,
+    /// Inspected `cvns-20040515` / `cvns-20040730` / `cvns-20050216` / `cvns-20050727` / `cvns-20090203`:
+    /// CSP1 snapshots with dynamic local variable bounds (`PersistentStarts`) and CVNS 2D
+    /// scene/message/audio state (`0xa00..=0xa09`).
+    CvnsCsp1,
 }
 impl SnapshotLayout {
     pub(crate) fn text_version(self) -> u16 {
@@ -46,7 +58,7 @@ impl SnapshotLayout {
             | Self::TextV1SceneV2
             | Self::TextV1SceneV2Collision => 1,
             Self::TextV2WindowV2 | Self::TextV2 => 2,
-            Self::TextV3 | Self::TextV3SceneV4 => 3,
+            Self::TextV3 | Self::TextV3SceneV4 | Self::CvnsCsp1 => 3,
         }
     }
     /// Eight texts, four windows, no 0x6e0 or 0x8c8 records, v1 draw animations and
@@ -55,7 +67,7 @@ impl SnapshotLayout {
         self.text_version() == 1 || self == Self::TextV2WindowV2
     }
     pub(crate) fn child_slots(self) -> u16 {
-        if self.old_tables() {
+        if self.old_tables() || self == Self::CvnsCsp1 {
             256
         } else if self == Self::TextV3SceneV4 {
             1024
@@ -113,8 +125,14 @@ pub fn framing(tag: u16) -> Option<Framing> {
         | 0x630
         | 0x6e0
         | 0x880..=0x883
-        | 0x900 => Framing::Long,
-        0x380 | 0x400 | 0x6a0 | 0x700 | 0x800 | 0x8c0 | 0x8c8 | 0x8e8 => Framing::Indexed,
+        | 0x900
+        | 0xa00
+        | 0xa01
+        | 0xa04
+        | 0xa08
+        | 0xa09 => Framing::Long,
+        0x380 | 0x400 | 0x6a0 | 0x700 | 0x800 | 0x8c0 | 0x8c8 | 0x8e8 | 0xa02 | 0xa03 | 0xa05
+        | 0xa06 | 0xa07 => Framing::Indexed,
         0x304 => Framing::StringPair,
         _ => return None,
     })
@@ -214,26 +232,7 @@ pub enum SaveImage {
 }
 
 impl SaveImage {
-    /// 0x22b2 / 0x14007c9a0 captures the next PC with repeat count zero.
-    /// Only an explicit research policy may proceed without the serialized image.
-    pub fn try_handle(
-        &mut self,
-        vm: &mut Machine<'_>,
-        continue_without_image: bool,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, 0x2b2)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !continue_without_image {
-            return Ok(false);
-        }
-        self.handle_unavailable(&mut Call::new(vm, pc, 0x2b2))?;
-        Ok(true)
-    }
-    pub(crate) fn handle_unavailable(
-        &mut self,
-        call: &mut Call<'_, '_>,
-    ) -> Result<(), DecodeError> {
+    pub(crate) fn handle_unavailable(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         // Validate/apply the only fallible live-state change before completing the
         // verified no-argument command. Completion advances PC and resets repeat.
@@ -252,7 +251,7 @@ impl SaveImage {
     /// Applies 0x140069270's only VM-visible effect without building the image:
     /// bit 0 is set for the captured copy, then cleared in live state.
     /// The variable change-tracking flag it may raise is not modeled.
-    pub fn capture_unavailable(&mut self, vm: &mut Machine<'_>) -> Result<(), &'static str> {
+    pub fn capture_unavailable(&mut self, vm: &mut Machine) -> Result<(), &'static str> {
         vm.state_mut().set_bit(0, false)?;
         *self = Self::Unavailable {
             script: vm.current_name().to_vec(),
@@ -275,15 +274,8 @@ impl SaveTitle {
     pub(crate) fn restore(&mut self, title: Vec<u8>) {
         self.0 = title;
     }
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, 0x162)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, 0x162))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let raw = call.argument(4, "title")?;
         let title = call.vm.resolve_string(raw)?;
@@ -313,17 +305,8 @@ impl SaveInfo {
     pub fn values(&self) -> [Option<u32>; 3] {
         self.0
     }
-    /// 0x22b9, inline in the dispatcher: +11828 = SP-4, pops 4 bytes. 0x22ba (inline):
-    /// +11832 = SP-4 and +11836 = SP-8, pops 8.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x2b9 | 0x2ba))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let command = call.command;
         let first = call.argument(4, "first word")?;
         if command == 0x2b9 {

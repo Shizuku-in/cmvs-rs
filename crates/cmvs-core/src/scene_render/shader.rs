@@ -9,14 +9,15 @@
 //! | 3 | 1 = clamped bilinear source sampling |
 //! | 4..8 | source x/y/width/height |
 //! | 8..16 | device corners in strip order TL, TR, BL, BR |
-//! | 16..19 | solid RGB 0..255 |
+//! | 16..19 | solid or CVNS tint RGB 0..255 |
 //! | 19 | [`flags`] |
-//! | 24..280 | mask coverage per green value, only read with [`flags::MASK`] |
-use super::{Blend, Layer};
+//! | 20..23 | CVNS color weight, source alpha toggle and additive toggle |
+//! | 24..280 | CMVS mask coverage or CVNS affine UV (base, X step, Y step) |
+use super::{Blend, Layer, cvns::Source};
 use crate::raster::RgbaImage;
 
 pub const PARAM_FLOATS: usize = 280;
-/// Floats read when [`flags::MASK`] is clear; the coverage table follows them.
+/// Floats read by draws that need neither mask coverage nor affine UVs.
 pub const BASE_FLOATS: usize = 24;
 
 pub mod flags {
@@ -29,6 +30,8 @@ pub mod flags {
     pub const SCREEN: u32 = 8;
     /// Wrapped instead of clamped texel addressing (world billboards).
     pub const WRAP: u32 = 16;
+    pub const CVNS: u32 = 32;
+    pub const CVNS_AFFINE: u32 = 64;
 }
 
 /// Fixed-function blending of a draw; alpha writes are always disabled.
@@ -53,9 +56,9 @@ impl ShaderDraw<'_> {
     pub fn flags(&self) -> u32 {
         self.params[19] as u32
     }
-    /// Floats a device must upload; the coverage table only when it is read.
+    /// Floats a device must upload.
     pub fn used_params(&self) -> &[f32] {
-        if self.flags() & flags::MASK != 0 {
+        if self.flags() & (flags::MASK | flags::CVNS_AFFINE) != 0 {
             &self.params
         } else {
             &self.params[..BASE_FLOATS]
@@ -73,6 +76,61 @@ pub fn shader_draw<'a>(command: &Layer<'a>, size: [u32; 2]) -> ShaderDraw<'a> {
     let mut screen = None;
     let mut flag = 0;
     let (corners, alpha, blend) = match command {
+        Layer::Cvns(draw) => {
+            flag |= flags::CVNS;
+            let [l, t, r, b] = draw.bounds.map(|v| v as f32);
+            let shade = draw.shade;
+            p[16..19].copy_from_slice(&shade.tint.map(f32::from));
+            p[20] = f32::from(shade.weight);
+            let use_alpha = match draw.source {
+                Source::Solid(rgb) => {
+                    p[16..19].copy_from_slice(&super::cvns::apply_tint(rgb, shade).map(f32::from));
+                    p[20] = 256.0;
+                    flag |= flags::SOLID;
+                    false
+                }
+                Source::Tile {
+                    image,
+                    at: [x, y],
+                    use_alpha,
+                    ..
+                } => {
+                    source = Some(image);
+                    p[4..8].copy_from_slice(&[x as f32, y as f32, r - l, b - t]);
+                    use_alpha
+                }
+                Source::Transformed {
+                    image,
+                    src_rect,
+                    base,
+                    step_x,
+                    step_y,
+                    use_alpha,
+                } => {
+                    source = Some(image);
+                    flag |= flags::CVNS_AFFINE;
+                    p[4..8].copy_from_slice(&src_rect.map(|v| v as f32));
+                    for (i, pair) in [base, step_x, step_y].into_iter().enumerate() {
+                        p[24 + 2 * i..26 + 2 * i].copy_from_slice(&pair.map(|v| v as f32));
+                    }
+                    use_alpha
+                }
+            };
+            p[21] = u8::from(use_alpha) as f32;
+            p[22] = u8::from(shade.additive) as f32;
+            let blend = if shade.additive {
+                Blend::Additive
+            } else if !use_alpha && shade.alpha == 256 {
+                Blend::Replace
+            } else {
+                Blend::Alpha
+            };
+            (
+                [[l, t], [r, t], [l, b], [r, b]],
+                u32::from(shade.alpha),
+                blend,
+            )
+        }
         Layer::Image {
             image,
             rect,
@@ -207,6 +265,23 @@ pub fn shader_draw<'a>(command: &Layer<'a>, size: [u32; 2]) -> ShaderDraw<'a> {
         params: p,
         blend: blend_state,
         textures: [source, mask.map(|m| &m.mask.pixels), screen],
+    }
+}
+
+/// Builds a full-target opaque draw for a [`super::RenderFrame::precomposited`] image.
+pub fn precomposited_draw<'a>(image: &'a RgbaImage, size: [u32; 2]) -> ShaderDraw<'a> {
+    let [w, h] = size.map(|v| v as f32);
+    let [sw, sh] = [image.width() as f32, image.height() as f32];
+    let mut p = [0f32; PARAM_FLOATS];
+    p[0] = w;
+    p[1] = h;
+    p[2] = 255.0;
+    p[4..8].copy_from_slice(&[0.0, 0.0, sw, sh]);
+    p[8..16].copy_from_slice(&[0.0, 0.0, w, 0.0, 0.0, h, w, h]);
+    ShaderDraw {
+        params: p,
+        blend: ShaderBlend::Replace,
+        textures: [Some(image), None, None],
     }
 }
 

@@ -12,7 +12,10 @@ use crate::{
     session::{Session, Stop},
     target::cap,
 };
-use cmvs_core::{save::Csv2Save, save_menu::SaveHeader, snapshot::parse_records};
+use cmvs_core::{
+    format::save::Csv2Save, format::snapshot::parse_records, runtime::save_menu::SaveFamily,
+    runtime::save_menu::SaveHeader,
+};
 use std::{fs, path::Path};
 
 /// Message waits played before the first save attempt.
@@ -84,11 +87,15 @@ fn compare(
     ]))
 }
 
-/// Compares two CSV2 files section by section and names the first differing snapshot
+/// Compares two CSV2/CSP1 files section by section and names the first differing snapshot
 /// record.
-fn compare_saves(first: &[u8], second: &[u8]) -> Result<Option<String>, String> {
-    let a = Csv2Save::decode(first).map_err(|e| e.to_string())?;
-    let b = Csv2Save::decode(second).map_err(|e| e.to_string())?;
+fn compare_saves(
+    family: SaveFamily,
+    first: &[u8],
+    second: &[u8],
+) -> Result<Option<String>, String> {
+    let a = Csv2Save::decode_family(first, family).map_err(|e| e.to_string())?;
+    let b = Csv2Save::decode_family(second, family).map_err(|e| e.to_string())?;
     if a.snapshot != b.snapshot {
         let ra = parse_records(&a.snapshot).map_err(|e| e.to_string())?;
         let rb = parse_records(&b.snapshot).map_err(|e| e.to_string())?;
@@ -196,12 +203,13 @@ fn run(runner: &Runner<'_>, entry: (usize, usize)) -> Result<Vec<CheckResult>, O
     if !load_backup {
         issues.push("loading a slot did not keep the state before the load in slot 998");
     }
+    let family = runner.target.save_family();
     let headers: Vec<Json> = [POINT, OVERWRITTEN, OVERWRITE_BACKUP, LOAD_BACKUP]
         .into_iter()
         .map(|slot| {
             let parsed = fs::read(slot_path(&user_a, slot))
                 .ok()
-                .map(|bytes| SaveHeader::parse(&bytes));
+                .map(|bytes| SaveHeader::parse_family(&bytes, family));
             let state = match parsed {
                 None => "missing".to_owned(),
                 Some(Ok(header)) => format!("label {}", header.label.escape_ascii()),
@@ -227,9 +235,10 @@ fn run(runner: &Runner<'_>, entry: (usize, usize)) -> Result<Vec<CheckResult>, O
 
     // V3: the same session resumes from the reloaded point.
     let mut again = Scenario::resume(&mut a, start.clone(), false);
+    again.inherit_ambient(&scenario);
     let reloaded = follow(&mut a, &mut again, FOLLOW + 1).map_err(stop_outcome)?;
     let v3 = compare("V3", V3, &original, &reloaded);
-    let system = fs::read(user_a.join("system.dat")).ok();
+    let system = fs::read(user_a.join(runner.target.system_save_name())).ok();
     drop(a);
 
     // Session B starts fresh with the save point and loads it from the start page.
@@ -244,7 +253,7 @@ fn run(runner: &Runner<'_>, entry: (usize, usize)) -> Result<Vec<CheckResult>, O
     let v2 = match b.save_slot(RESAVED) {
         Ok(true) => match fs::read(slot_path(&user_b, RESAVED))
             .map_err(|e| e.to_string())
-            .and_then(|resaved| compare_saves(&point_bytes, &resaved))
+            .and_then(|resaved| compare_saves(family, &point_bytes, &resaved))
         {
             Ok(None) => CheckResult::new("V2", V2, Outcome::Pass(Level::L1)),
             Ok(Some(difference)) => CheckResult::new("V2", V2, Outcome::Fail(difference)),
@@ -258,6 +267,7 @@ fn run(runner: &Runner<'_>, entry: (usize, usize)) -> Result<Vec<CheckResult>, O
         Err(e) => CheckResult::new("V2", V2, Outcome::Fail(e)),
     };
     let mut resumed_scenario = Scenario::resume(&mut b, start_b, false);
+    resumed_scenario.inherit_ambient(&scenario);
     let resumed = follow(&mut b, &mut resumed_scenario, FOLLOW + 1).map_err(stop_outcome)?;
     let v1 = compare("V1", V1, &original, &resumed);
     Ok(vec![v1, v2, v3, v4])

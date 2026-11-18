@@ -1,6 +1,11 @@
-//! Software presentation of verified static 2D objects, their children, full-screen color
-//! fades, mask transitions and camera projections and strip wipes. Unsupported transforms,
-//! blend modes and unverified solid-color paths fail explicitly.
+//! Scene draw-queue preparation and software rendering.
+//!
+//! Use [`render_scene`] to produce an RGBA frame, or [`prepare_scene`] to obtain a
+//! [`RenderFrame`] for a GPU backend. Both paths share object ordering and layer
+//! preparation. Pass host-generated glyph and window objects as additional objects.
+//!
+//! Invalid dimensions and unsupported transforms or effect combinations return
+//! [`FormatError`] during queue preparation.
 use crate::{
     FormatError, MAX_PAYLOAD,
     camera::CameraHost,
@@ -8,8 +13,10 @@ use crate::{
     scene::{DrawState, MaskTransition, ObjectImage, SceneHost, SceneObject},
 };
 
+pub mod cvns;
 pub mod shader;
 
+#[derive(Clone, Copy)]
 pub enum Layer<'a> {
     /// World-space inverse-view billboard: full texture, wrapped linear sampling,
     /// alpha blending and no depth writes (original queue 5).
@@ -65,6 +72,7 @@ pub enum Layer<'a> {
         alpha: u32,
         blend: Blend,
     },
+    Cvns(cvns::Draw<'a>),
     Fade(&'a crate::fade::Fade),
 }
 
@@ -498,7 +506,7 @@ fn logical_screen_scale(
     object: &SceneObject,
     parent_scale: Option<f32>,
 ) -> Result<f32, FormatError> {
-    if !scene.allow_logical_screen_scale {
+    if !scene.config.allow_logical_screen_scale {
         return match object.logical_size[0] {
             0 => Ok(1.0),
             width if width == scene.screen_size()[0] => Ok(1.0),
@@ -654,7 +662,7 @@ fn projected_layer<'a>(
     // then subtracts the offset, applies the projection scale, rotates by its +52 argument
     // (the parent's angle for an inherited child, 0 otherwise) and adds the position.
     let parent_angle = inherited.map_or(0, |p| p[20] as i32);
-    if parent_angle != 0 && !scene.allow_projected_parent_rotation {
+    if parent_angle != 0 && !scene.config.allow_projected_parent_rotation {
         return Err(FormatError(
             "children of a rotated projected parent are not verified",
         ));
@@ -843,8 +851,19 @@ pub struct RenderFrame<'a> {
     height: u32,
     clear: [u8; 4],
     commands: Vec<DrawCommand<'a>>,
+    precomposited: Option<RgbaImage>,
 }
 impl<'a> RenderFrame<'a> {
+    pub fn from_precomposited(image: RgbaImage) -> Self {
+        Self {
+            width: image.width(),
+            height: image.height(),
+            clear: [0, 0, 0, 255],
+            commands: Vec::new(),
+            precomposited: Some(image),
+        }
+    }
+
     pub fn dimensions(&self) -> [u32; 2] {
         [self.width, self.height]
     }
@@ -854,9 +873,25 @@ impl<'a> RenderFrame<'a> {
     pub fn commands(&self) -> &[DrawCommand<'a>] {
         &self.commands
     }
+    pub fn precomposited(&self) -> Option<&RgbaImage> {
+        self.precomposited.as_ref()
+    }
+
+    /// A CVNS draw uploads its entire source, even when only one texel is visible.
+    pub fn cvns_source_exceeds(&self, max_dimension: u32) -> bool {
+        self.commands.iter().any(|layer| match layer {
+            Layer::Cvns(draw) => draw.texture().is_some_and(|(image, _)| {
+                image.width() > max_dimension || image.height() > max_dimension
+            }),
+            _ => false,
+        })
+    }
 
     /// Executes the shared command queue with the portable rasterizer.
-    pub fn render_cpu(self) -> Result<RgbaImage, FormatError> {
+    pub fn render_cpu(&self) -> Result<RgbaImage, FormatError> {
+        if let Some(image) = &self.precomposited {
+            return Ok(image.clone());
+        }
         let size = (u64::from(self.width) * u64::from(self.height))
             .checked_mul(4)
             .ok_or(FormatError("scene surface size overflow"))?;
@@ -867,7 +902,7 @@ impl<'a> RenderFrame<'a> {
         for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&self.clear);
         }
-        for command in self.commands {
+        for &command in &self.commands {
             draw(&mut pixels, self.width, self.height, command);
         }
         RgbaImage::new(self.width, self.height, pixels)
@@ -880,7 +915,7 @@ pub fn render(scene: &SceneHost, width: u32, height: u32) -> Result<RgbaImage, F
     render_scene(scene, None, &[], width, height)
 }
 
-/// `render` with additional objects; see `render_scene`.
+/// Render a scene with extra objects and no camera state; see [`render_scene`].
 pub fn render_with_objects(
     scene: &SceneHost,
     additional: &[&SceneObject],
@@ -890,10 +925,13 @@ pub fn render_with_objects(
     render_scene(scene, None, additional, width, height)
 }
 
-/// Additional objects (e.g. a backend's glyph images and message windows) join the
-/// same stable layer queue before the fade. Their order breaks ties after slot objects.
-/// 0x140015fc0 draws camera 0/1's queues 2/6 before queue 3, which holds the 2D
-/// objects, windows, glyphs and the fade, so projected objects lie beneath all of them.
+/// Render a scene, optional cameras, and host-supplied objects to an RGBA frame.
+///
+/// `width` and `height` are logical output pixels. `additional` objects, such as
+/// message windows and glyph images, join the stable layer queue before the fade;
+/// their input order breaks ties after ordinary slot objects. Projected objects
+/// require camera state. Invalid dimensions or unsupported draw state return errors.
+// 0x140015fc0 draws camera 0/1's queues 2/6 before the 2D queue 3.
 pub fn render_scene(
     scene: &SceneHost,
     cameras: Option<&CameraHost>,
@@ -917,6 +955,17 @@ pub fn prepare_scene<'a>(
         .ok_or(FormatError("scene surface size overflow"))?;
     if width == 0 || height == 0 || size > MAX_PAYLOAD as u64 {
         return Err(FormatError("invalid scene surface dimensions"));
+    }
+    if let Some(cvns) = scene.cvns() {
+        return cvns::prepare_gpu(cvns::prepare(
+            cvns,
+            scene.clear_enabled(),
+            scene.clear().color,
+            scene.layer_fade_alpha(),
+            additional,
+            width,
+            height,
+        ));
     }
     // Validate the entire scene before rasterizing. Slot order is the stable tie-breaker.
     let mut entries = Vec::new();
@@ -1129,7 +1178,7 @@ pub fn prepare_scene<'a>(
             }
             _ => {}
         }
-        check_screen(d, scene.allow_screen_coordinates_one)?;
+        check_screen(d, scene.config.allow_screen_coordinates_one)?;
         let position = [d[8] as i32, d[9] as i32].map(i64::from);
         let mask = slot.and_then(|slot| scene.mask_on(slot));
         let layer = match object
@@ -1180,7 +1229,7 @@ pub fn prepare_scene<'a>(
                     continue;
                 }
                 let child_scale = logical_screen_scale(scene, child, Some(screen_scale))?;
-                check_screen(words, scene.allow_screen_coordinates_one)?;
+                check_screen(words, scene.config.allow_screen_coordinates_one)?;
                 let Some(layer) = child_layer(object, d, child, words, child_scale)? else {
                     continue;
                 };
@@ -1406,6 +1455,7 @@ pub fn prepare_scene<'a>(
         height,
         clear: scene.clear().rgba(),
         commands,
+        precomposited: None,
     })
 }
 
@@ -1720,6 +1770,10 @@ fn screen_mask<'a>(
 
 fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
     let (image, [sx, sy, w, h], [left, top], opacity, mask, screen_mask, blend) = match layer {
+        Layer::Cvns(draw) => {
+            draw.render(pixels, width);
+            return;
+        }
         Layer::Billboard { image, quad, alpha } => {
             draw_projected::<true>(
                 pixels,
@@ -1934,6 +1988,7 @@ mod scale_tests {
             height: 64,
             clear: [0, 0, 0, 255],
             commands: layers,
+            precomposited: None,
         };
         assert!(
             frame
@@ -2000,6 +2055,7 @@ mod scale_tests {
             height: 64,
             clear: [0, 0, 0, 255],
             commands: layers,
+            precomposited: None,
         };
         let pixels = frame.render_cpu().unwrap();
         assert_eq!(
@@ -2043,6 +2099,7 @@ mod scale_tests {
             height: 64,
             clear: [0, 0, 0, 255],
             commands: layers,
+            precomposited: None,
         };
         let pixels = frame.render_cpu().unwrap();
         let green = pixels
@@ -2743,6 +2800,24 @@ mod scale_tests {
 #[cfg(test)]
 mod prepared_frame_tests {
     use super::*;
+
+    #[test]
+    fn cvns_translucent_layers_truncate_each_write() {
+        use crate::scene::cvns::{CvnsSprite, CvnsSpriteKind};
+
+        let mut scene = SceneHost::default();
+        let sprites = &mut scene.cvns_mut().sprites;
+        let solid = |color, alpha| CvnsSprite {
+            kind: CvnsSpriteKind::SolidRect { color },
+            src_rect: [0, 0, 1, 1],
+            alpha,
+            ..CvnsSprite::default()
+        };
+        sprites[64] = Some(solid(0x646464, 256));
+        sprites[..64].fill(Some(solid(0, 1)));
+        let frame = prepare_scene(&scene, None, &[], 1, 1).unwrap();
+        assert_eq!(frame.precomposited().unwrap().pixels(), [36, 36, 36, 255]);
+    }
 
     #[test]
     fn prepared_queue_preserves_equal_layer_order_and_pixel_result() {

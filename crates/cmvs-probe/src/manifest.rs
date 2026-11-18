@@ -85,7 +85,8 @@ impl Manifest {
             String::from_utf8(bytes.clone()).map_err(|_| "manifest must be UTF-8".to_owned())?;
         let mut manifest = Self::parse(&text)?;
         manifest.path = path.to_path_buf();
-        manifest.sha256 = cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(&bytes));
+        manifest.sha256 =
+            cmvs_core::format::digest::to_hex(&cmvs_core::format::digest::sha256(&bytes));
         Ok(manifest)
     }
     pub fn parse(text: &str) -> Result<Self, String> {

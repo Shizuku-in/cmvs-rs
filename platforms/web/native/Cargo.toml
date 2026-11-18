@@ -13,11 +13,11 @@ crate-type = ["cdylib", "rlib"]
 workspace = true
 
 [dependencies]
-cmvs-core = { path = "../../../crates/cmvs-core" }
+cmvs-core = { path = "../../../crates/cmvs-core", default-features = false }
+cmvs-host = { path = "../../../crates/cmvs-host", default-features = false }
 cmvs-audio = { path = "../../../crates/cmvs-audio", default-features = false }
 cmvs-font = { path = "../../../crates/cmvs-font" }
 wasm-bindgen.workspace = true
-self_cell.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 cmvs-wgpu = { path = "../../../crates/cmvs-wgpu", features = ["webgpu"] }

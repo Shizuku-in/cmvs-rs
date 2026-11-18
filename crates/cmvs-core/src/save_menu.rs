@@ -1,64 +1,15 @@
 //! Read-only gameplay-save header scanning, signature queries and menu state.
 //! Header recognition does not validate or restore the saved engine snapshot.
-use crate::filesystem as fs;
-use crate::filesystem::File;
-use crate::{FormatError, bytecode::DecodeError, dispatch::Call, machine::Machine};
+use crate::filesystem::{File, HostFs, resolve_under_with_fs};
+use crate::{FormatError, bytecode::DecodeError, dispatch::Call};
 use std::{
     error::Error,
     io::{self, Read},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
-pub const HEADER_READ_LIMIT: usize = 512;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SaveHeader {
-    /// ASCII version digit, currently accepted by the original menu: '2'..='9'.
-    pub version: u8,
-    /// Original bytes at offset 16, excluding the terminating NUL.
-    pub label: Vec<u8>,
-    /// Original ordering key; only the last two year digits and even seconds count.
-    pub ordering_key: u32,
-}
-
-impl SaveHeader {
-    pub fn parse(bytes: &[u8]) -> Result<Self, FormatError> {
-        let bytes = &bytes[..bytes.len().min(HEADER_READ_LIMIT)];
-        if bytes.len() < 4 || &bytes[..3] != b"CSV" || !(b'2'..=b'9').contains(&bytes[3]) {
-            return Err(FormatError("unsupported gameplay-save signature"));
-        }
-        let label = bytes
-            .get(16..)
-            .and_then(|b| b.iter().position(|v| *v == 0).map(|end| &b[..end]))
-            .ok_or(FormatError("save label is truncated or not NUL terminated"))?;
-        // Explicit malformed-input policy: no stale read-buffer bytes or unbounded C strings.
-        if label.len() < 19
-            || label[4] != b'-'
-            || label[7] != b'-'
-            || label[10] != b' '
-            || label[13] != b':'
-            || label[16] != b':'
-            || !label[..19]
-                .iter()
-                .enumerate()
-                .all(|(i, b)| matches!(i, 4 | 7 | 10 | 13 | 16) || b.is_ascii_digit())
-        {
-            return Err(FormatError("save label lacks YYYY-MM-DD HH:MM:SS prefix"));
-        }
-        let pair = |i: usize| u32::from(label[i] - b'0') * 10 + u32::from(label[i + 1] - b'0');
-        let ordering_key = pair(2).wrapping_shl(25)
-            | ((pair(5) & 15) << 21)
-            | ((pair(8) & 31) << 16)
-            | ((pair(11) & 31) << 11)
-            | ((pair(14) & 63) << 5)
-            | ((pair(17) / 2) & 31);
-        Ok(Self {
-            version: bytes[3],
-            label: label.to_vec(),
-            ordering_key,
-        })
-    }
-}
+pub use crate::save::{HEADER_READ_LIMIT, SaveFamily, SaveHeader};
 
 /// Slots 0..999; a source returns at most the first 512 bytes, None for absent files.
 /// I/O failures are distinct from missing or malformed saves and stop the command.
@@ -66,40 +17,79 @@ pub trait SaveSource {
     fn read_header(&mut self, slot: u16) -> io::Result<Option<Vec<u8>>>;
 }
 
-/// An explicitly selected directory; no writes or game-relative path inference.
-/// A missing directory represents an empty set of saves on first startup.
+/// A read-only slot directory. A missing directory represents an empty set of saves.
 pub struct DirectorySaves {
-    root: PathBuf,
+    fs: Arc<dyn HostFs>,
+    directory: SlotDirectory,
+}
+
+enum SlotDirectory {
+    Fixed(PathBuf),
+    Registered { game_root: PathBuf, prefix: Vec<u8> },
 }
 
 impl DirectorySaves {
-    pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
-        let root = match fs::canonicalize(root.as_ref()) {
-            Ok(root) => root,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                return Ok(Self {
-                    root: fs::absolute(root)?,
-                });
+    pub fn with_fs(root: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> io::Result<Self> {
+        let directory = match fs.canonicalize(root.as_ref()) {
+            Ok(root) if fs.is_dir(&root) => root,
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "save root is not a directory",
+                ));
             }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => fs.absolute(root.as_ref())?,
             Err(e) => return Err(e),
         };
-        if !fs::is_dir(&root) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "save root is not a directory",
-            ));
+        Ok(Self {
+            fs,
+            directory: SlotDirectory::Fixed(directory),
+        })
+    }
+
+    pub(crate) fn set_registered_directory(&mut self, game_root: &Path, directory: &[u8]) {
+        let mut prefix = directory.to_vec();
+        if !prefix.is_empty() && !prefix.ends_with(b"/") && !prefix.ends_with(b"\\") {
+            prefix.push(b'/');
         }
-        Ok(Self { root })
+        self.directory = SlotDirectory::Registered {
+            game_root: game_root.to_owned(),
+            prefix,
+        };
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
+        Self::with_fs(root, crate::filesystem::default_fs())
     }
 }
 
 impl DirectorySaves {
+    fn open_slot(&self, slot: u16) -> io::Result<Option<File>> {
+        let filename = format!("save{slot:03}.dat");
+        let path = match &self.directory {
+            SlotDirectory::Fixed(root) => root.join(filename),
+            SlotDirectory::Registered { game_root, prefix } => {
+                let mut name = prefix.clone();
+                name.extend_from_slice(filename.as_bytes());
+                match resolve_under_with_fs(&*self.fs, game_root, &name) {
+                    Ok(path) => path,
+                    Err(e) if e.is_not_found() => return Ok(None),
+                    Err(e) => return Err(io::Error::other(e)),
+                }
+            }
+        };
+        match self.fs.open_read(&path) {
+            Ok(file) => Ok(Some(file)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// A whole slot file for loading (0x1400087c0), bounded by the research payload limit.
     pub(crate) fn read_slot(&self, slot: u16) -> io::Result<Option<Vec<u8>>> {
-        let file = match File::open(self.root.join(format!("save{slot:03}.dat"))) {
-            Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e),
+        let Some(file) = self.open_slot(slot)? else {
+            return Ok(None);
         };
         let mut bytes = Vec::new();
         file.take(crate::MAX_PAYLOAD as u64 + 1)
@@ -122,10 +112,8 @@ impl SaveSource for DirectorySaves {
                 "save slot outside 0..999",
             ));
         }
-        let file = match File::open(self.root.join(format!("save{slot:03}.dat"))) {
-            Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e),
+        let Some(file) = self.open_slot(slot)? else {
+            return Ok(None);
         };
         let mut bytes = Vec::new();
         file.take(HEADER_READ_LIMIT as u64)
@@ -156,13 +144,24 @@ impl SaveMenu {
         } else {
             requested.min(256)
         };
+        Self::scan_family(source, count as u16, SaveFamily::Cmvs)
+    }
+    /// CVNS 0x21a1 (0x467a20): the count is unsigned and clamped to 256.
+    pub fn scan_cvns(source: &mut (impl SaveSource + ?Sized), requested: u32) -> io::Result<Self> {
+        Self::scan_family(source, requested.min(256) as u16, SaveFamily::Cvns)
+    }
+    fn scan_family(
+        source: &mut (impl SaveSource + ?Sized),
+        count: u16,
+        family: SaveFamily,
+    ) -> io::Result<Self> {
         let mut slots = Vec::with_capacity(count as usize);
         let mut latest = None;
         let mut newest_key = 0;
-        for slot in 0..count as u16 {
-            let status = match source.read_header(slot)? {
+        for slot in 0..count {
+            let status = match source.read_header(family.file(slot))? {
                 None => SlotStatus::Missing,
-                Some(bytes) => match SaveHeader::parse(&bytes) {
+                Some(bytes) => match SaveHeader::parse_family(&bytes, family) {
                     Ok(header) => {
                         if header.ordering_key > newest_key {
                             newest_key = header.ordering_key;
@@ -181,6 +180,7 @@ impl SaveMenu {
 
 #[derive(Debug)]
 pub struct SaveMenuHost {
+    family: SaveFamily,
     menu: Option<SaveMenu>,
     /// 0x22b4 enables position 0 unconditionally and sets position 1 to this value.
     second_group_enabled: Option<bool>,
@@ -188,32 +188,48 @@ pub struct SaveMenuHost {
     popup_enabled: bool,
     /// +1496 / +1500: DLG_LOAD / DLG_SAVE, whether the scripts ask before loading / saving.
     confirm: [bool; 2],
+    /// CVNS +6173 (`0x206b`): transient UI/menu cancel mark.
+    cvns_menu_triggered: bool,
 }
 
 impl Default for SaveMenuHost {
     fn default() -> Self {
         Self {
+            family: SaveFamily::Cmvs,
             menu: None,
             second_group_enabled: None,
             // Constructor 0x140016e20, reset 0x140080700 and load 0x140081960 all set 1.
             popup_enabled: true,
             confirm: [false; 2],
+            cvns_menu_triggered: false,
         }
     }
 }
 
 impl SaveMenuHost {
+    pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        Self {
+            family: profile.save_family(),
+            ..Self::default()
+        }
+    }
+
     /// Slot exchange/move refreshes the first-ten native menu labels. Preserve the
     /// previously requested scan extent in the portable menu model.
     pub(crate) fn refresh_slots(&mut self, source: &mut impl SaveSource) -> io::Result<()> {
         if let Some(menu) = &self.menu {
-            self.menu = Some(SaveMenu::scan(source, menu.slots.len() as i32)?);
+            self.menu = Some(SaveMenu::scan_family(
+                source,
+                menu.slots.len() as u16,
+                self.family,
+            )?);
         }
         Ok(())
     }
     /// RESET writes only +12092; the menu and confirmation settings survive.
     pub(crate) fn reset_popup(&mut self) {
         self.popup_enabled = true;
+        self.cvns_menu_triggered = false;
     }
     pub fn menu(&self) -> Option<&SaveMenu> {
         self.menu.as_ref()
@@ -247,23 +263,8 @@ impl SaveMenuHost {
         self.popup_enabled = popup != 0;
         self.second_group_enabled = Some(true);
     }
-    /// 0x22d3 / 0x14007be00 and 0x22d4 / 0x14007be70: nonzero SP-4 sets +1496 / +1500 to
-    /// bool(SP-8) through 0x140090da0 (menu items 32764 / 32765 are checked accordingly);
-    /// zero SP-4 copies the flag to system result 0. Both return 0x4008. The original keeps
-    /// changed values for its registry; Rust keeps them for the session only.
-    /// 0x22cd stores SP-4 != 0 in +12092; 0x22ce copies +12092 to system result 0. 0x22ee
-    /// (inline) sets system result 0 to +1644 != 0, the copy of the second menu group flag
-    /// 0x140092ea0 keeps (constructor 0). None needs a save directory or creates native UI.
-    pub fn try_handle_popup(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x2cd | 0x2ce | 0x2d3 | 0x2d4 | 0x2ee))) = vm.pending_system()
-        else {
-            return Ok(false);
-        };
-        self.handle_popup(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle_popup(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle_popup(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let command = call.command;
         match command {
             0x2d3 | 0x2d4 => {
@@ -302,34 +303,23 @@ impl SaveMenuHost {
                     .set_system_integer(0, u32::from(value))
                     .expect("slot 0 exists");
             }
+            0x46b => {
+                call.complete(0x4000)?;
+                self.cvns_menu_triggered = true;
+            }
             _ => return Err(call.error("unregistered popup command")),
         }
         Ok(())
     }
-    /// Returns true only when a verified command completed. No native UI is created.
-    pub fn try_handle(
-        &mut self,
-        vm: &mut Machine<'_>,
-        source: &mut impl SaveSource,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(command, 0x2b3 | 0x2b4 | 0x2bb) {
-            return Ok(false);
-        }
-        self.handle(&mut Call::new(vm, pc, command), source)?;
-        Ok(true)
-    }
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn SaveSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let command = call.command;
         let argument = call.argument(
             4,
-            if command == 0x2b3 {
+            if command == 0x2b3 || command == 0x5a1 {
                 "slot count"
             } else if command == 0x2b4 {
                 "second group enabled"
@@ -338,17 +328,14 @@ impl SaveMenuHost {
             },
         )?;
         if command == 0x2bb {
-            // 0x14007cb60 reads up to 64 bytes and tests only CSV[2-9]. Unlike the
-            // menu scan, this accepts a signature without a valid date/label/body.
-            // Out-of-range u32 values (including negative words) perform no I/O.
-            // Short reads use only available bytes, never the original stale buffer.
-            let recognized = if argument <= 999 {
-                source.read_header(argument as u16)?.is_some_and(|bytes| {
-                    bytes.len() >= 4 && &bytes[..3] == b"CSV" && (b'2'..=b'9').contains(&bytes[3])
-                })
-            } else {
-                false
-            };
+            // 0x14007cb60 reads up to 64 bytes and tests only CSV[2-9]; CVNS 0x21ae
+            // (`0x4683c0`) checks `slot != 0` and CSP[1-9]. Unlike the menu scan, both accept
+            // a signature without a valid date/label/body.
+            let recognized = argument <= 999
+                && (self.family != SaveFamily::Cvns || argument != 0)
+                && source
+                    .read_header(argument as u16)?
+                    .is_some_and(|bytes| self.family.accepts(&bytes));
             call.complete(0x4004)?;
             call.vm
                 .state_mut()
@@ -356,6 +343,10 @@ impl SaveMenuHost {
                 .expect("slot 0 exists");
         } else if command == 0x2b3 {
             let menu = SaveMenu::scan(source, argument as i32)?;
+            call.complete(0x4004)?;
+            self.menu = Some(menu);
+        } else if command == crate::cvns::cmd::MENU_SCAN {
+            let menu = SaveMenu::scan_cvns(source, argument)?;
             call.complete(0x4004)?;
             self.menu = Some(menu);
         } else {

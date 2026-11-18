@@ -121,7 +121,7 @@ pub(crate) fn check(draw: &DrawState, command: u16, args: &[u32; 8]) -> Result<(
 }
 
 /// Applies a checked command after the caller completed it; 0x1f8 writes system result 0.
-pub(crate) fn apply(draw: &mut DrawState, command: u16, args: &[u32; 8], call: &mut Call<'_, '_>) {
+pub(crate) fn apply(draw: &mut DrawState, command: u16, args: &[u32; 8], call: &mut Call<'_>) {
     match command {
         0x1f4 => draw.position_motion = Some(Box::default()),
         0x1f5 => {
@@ -162,7 +162,7 @@ pub(crate) fn apply(draw: &mut DrawState, command: u16, args: &[u32; 8], call: &
 impl SceneHost {
     pub(super) fn handle_position_motion(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
     ) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
 
@@ -187,7 +187,9 @@ impl SceneHost {
             Some(
                 u16::try_from(args[1])
                     .ok()
-                    .filter(|id| *id < self.child_slots.count() && parent.children.contains_key(id))
+                    .filter(|id| {
+                        *id < self.config.child_slots.count() && parent.children.contains_key(id)
+                    })
                     .ok_or_else(|| {
                         fail("position motion child outside this build's table or missing")
                     })?,

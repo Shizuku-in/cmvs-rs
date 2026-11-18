@@ -1,18 +1,16 @@
-//! Execution of the shared scene queue (`cmvs_core::scene_render::shader`) on a console
+//! Execution of the shared scene queue (`cmvs_core::render::scene_render::shader`) on a console
 //! GPU, with the content-keyed texture cache policy of cmvs-wgpu. Glyph rasterization
 //! and movie decoding stay on the CPU; the device composites. Presenting and readback
 //! are device specific and live with each player.
 use cmvs_core::{
-    raster::{CacheKey, RgbaImage},
-    scene_render::{
-        RenderFrame,
-        shader::{ShaderBlend, shader_draw},
-    },
+    render::raster::CacheKey, render::raster::RgbaImage, render::scene_render::RenderFrame,
+    render::scene_render::shader::ShaderBlend, render::scene_render::shader::precomposited_draw,
+    render::scene_render::shader::shader_draw,
 };
 use cmvs_native::{GpuDevice, GpuError, GpuTexture};
 use std::{collections::HashMap, error::Error, io::ErrorKind, path::Path};
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 /// Movie frames live apart from the content cache so replaced frames never evict
 /// static images. Each player shows one frame (three scene slots and the full-screen
 /// player), which leaves room for images that stopped players retain.
@@ -242,6 +240,15 @@ impl<D: GpuDevice> Compositor<D> {
         size: [u32; 2],
         transient: &mut Vec<GpuTexture>,
     ) -> Result<()> {
+        if let Some(image) = frame.precomposited() {
+            let draw = precomposited_draw(image, size);
+            let texture = self.upload(image)?;
+            transient.push(texture);
+            self.begin_canvas(size, frame.clear_color())?;
+            self.device
+                .draw(0, draw.used_params(), [texture, self.white, self.white])?;
+            return Ok(());
+        }
         // Every upload precedes the pass, so the pass needs a single barrier.
         let queue: Vec<_> = frame
             .commands()
@@ -296,7 +303,10 @@ fn parse_renderer(setting: Option<&str>) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::scene::{DrawState, ObjectImage, SceneHost, SceneObject};
+    use cmvs_core::{
+        render::scene::DrawState, render::scene::ObjectImage, render::scene::SceneHost,
+        render::scene::SceneObject,
+    };
 
     /// Records calls; `capacity` live textures fit before uploads report exhaustion.
     #[derive(Default)]
@@ -358,10 +368,10 @@ mod tests {
             .enumerate()
             .map(|(i, &color)| {
                 let mut draw = DrawState::default();
-                draw.words[1] = 1;
-                draw.words[2..6].copy_from_slice(&[0, 0, 2, 2]);
-                draw.words[8..10].copy_from_slice(&[i as u32 * 2, 0]);
-                draw.words[18..20].fill(1.0f32.to_bits());
+                draw.set_blend_mode(1);
+                draw.set_source_rect([0, 0, 2, 2]);
+                draw.set_position_raw([i as u32 * 2, 0]);
+                draw.set_scale([1.0, 1.0]);
                 SceneObject {
                     image: Some(ObjectImage {
                         name: Vec::new(),
@@ -381,7 +391,7 @@ mod tests {
         let scene = SceneHost::default();
         let objects = objects(colors);
         let extra: Vec<_> = objects.iter().collect();
-        let frame = cmvs_core::scene_render::prepare_scene(&scene, None, &extra, 8, 4)?;
+        let frame = cmvs_core::render::scene_render::prepare_scene(&scene, None, &extra, 8, 4)?;
         gpu.render(&frame)
     }
 
@@ -446,6 +456,48 @@ mod tests {
         // Once the frame no longer needs them, they make room again.
         render(&mut gpu, &[40]).unwrap();
         assert!(gpu.device().calls.iter().any(|c| c.starts_with("release")));
+    }
+
+    #[test]
+    fn cvns_masked_frame_uploads_and_releases_software_composite() {
+        use cmvs_core::render::scene::cvns::{CvnsImageBuffer, CvnsMaskLayer, CvnsSprite};
+
+        let device = FakeDevice {
+            capacity: 4,
+            ..FakeDevice::default()
+        };
+        let mut gpu = Compositor::new(device, 1 << 20).unwrap();
+        let mut scene = SceneHost::default();
+        let cvns = scene.cvns_mut();
+        cvns.images[0] = Some(CvnsImageBuffer {
+            layers: vec![None],
+            composited: Some(RgbaImage::new(1, 1, vec![200, 100, 0, 255]).unwrap()),
+            mask: Some(CvnsMaskLayer {
+                name: Vec::new(),
+                width: 1,
+                height: 1,
+                data: vec![128],
+            }),
+        });
+        cvns.sprites[0] = Some(CvnsSprite {
+            image_slot: 0,
+            src_rect: [0, 0, 1, 1],
+            ..CvnsSprite::default()
+        });
+        let frame =
+            cmvs_core::render::scene_render::prepare_scene(&scene, None, &[], 8, 4).unwrap();
+        assert_eq!(
+            &frame.precomposited().unwrap().pixels()[..4],
+            &[99, 49, 0, 255]
+        );
+        gpu.render(&frame).unwrap();
+        let calls = &gpu.device().calls;
+        assert!(calls.contains(&"upload 2 8x4".to_owned()), "{calls:?}");
+        assert!(
+            calls.contains(&"draw 0 24 [2, 1, 1]".to_owned()),
+            "{calls:?}"
+        );
+        assert!(calls.contains(&"release 2".to_owned()), "{calls:?}");
     }
 
     #[test]

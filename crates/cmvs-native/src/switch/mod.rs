@@ -11,7 +11,7 @@ mod input;
 mod keyboard;
 #[cfg(target_os = "horizon")]
 mod performance;
-#[cfg(target_os = "horizon")]
+#[cfg(all(target_os = "horizon", feature = "switch-smoke"))]
 mod smoke;
 #[cfg(target_os = "horizon")]
 mod window;

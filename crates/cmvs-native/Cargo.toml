@@ -15,6 +15,10 @@ unsafe_code = "deny"
 [lints.clippy]
 all = "warn"
 
+[features]
+default = ["switch-smoke"]
+switch-smoke = ["dep:cmvs-core"]
+
 [dependencies]
 raw-window-handle = "=0.6.2"
 
@@ -37,4 +41,4 @@ windows-sys = { version = "=0.61.2", features = [
 crate-type = ["rlib", "staticlib"]
 
 [target.'cfg(target_os = "horizon")'.dependencies]
-cmvs-core = { path = "../cmvs-core" }
+cmvs-core = { path = "../cmvs-core", optional = true, default-features = false, features = ["std-fs"] }

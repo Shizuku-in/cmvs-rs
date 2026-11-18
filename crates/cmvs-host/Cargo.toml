@@ -5,10 +5,15 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "Window-independent CMVS player and versioned C host interface"
+description = "Window-independent CMVS session layer, embedded player and versioned C host interface"
 
 [lib]
 crate-type = ["rlib", "staticlib"]
+
+[features]
+default = ["std-fs", "native-audio"]
+std-fs = ["cmvs-core/std-fs", "cmvs-font/std-fs", "dep:rustix"]
+native-audio = ["std-fs", "dep:cmvs-audio", "cmvs-audio/native", "dep:ndk-context"]
 
 [lints.rust]
 unsafe_code = "deny"
@@ -16,11 +21,11 @@ unsafe_code = "deny"
 all = "warn"
 
 [dependencies]
-cmvs-core = { path = "../cmvs-core" }
-cmvs-font = { path = "../cmvs-font" }
-cmvs-audio = { path = "../cmvs-audio" }
+cmvs-core = { path = "../cmvs-core", default-features = false }
+cmvs-font = { path = "../cmvs-font", default-features = false }
+cmvs-audio = { path = "../cmvs-audio", default-features = false, optional = true }
 cmvs-video = { path = "../cmvs-video" }
-self_cell.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
-ndk-context = "=0.1.1"
+ndk-context = { version = "=0.1.1", optional = true }
+rustix = { version = "=1.1.6", features = ["fs"], optional = true }

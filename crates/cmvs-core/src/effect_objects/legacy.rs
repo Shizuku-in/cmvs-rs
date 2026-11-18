@@ -1,5 +1,5 @@
 //! cmvs-20070119 effect slots of types 0x50.. (engine +2928, four slots shared with the
-//! particle pools); evidence and addresses are in games/puriring/research.md.
+//! particle pools); evidence and addresses are in games/puriring/README.md.
 use crate::{
     audio::{AudioBackend, AudioSettings},
     camera::CameraHost,
@@ -321,7 +321,7 @@ impl Circle {
         delta: u32,
         backend: &mut dyn AudioBackend,
         volume: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.clock = self.clock.wrapping_add(delta);
         let angle = (self.clock.wrapping_mul(360) / 5000 % 360) as f32;
         let reverse = 360.0 - angle;
@@ -499,14 +499,22 @@ impl Walk {
             self.requested = -1;
         }
     }
-    fn play(&mut self, out: &mut WalkOutput<'_>, slot: u8) -> Result<(), Box<dyn Error>> {
+    fn play(
+        &mut self,
+        out: &mut WalkOutput<'_>,
+        slot: u8,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         out.backend.play_preloaded(slot, false, out.volume)?;
         self.played = true;
         Ok(())
     }
 
     /// One frame of 0x4211b0; `delta` is the frame clock, capped at 200 inside the steps.
-    fn advance(&mut self, delta: u32, out: &mut WalkOutput<'_>) -> Result<(), Box<dyn Error>> {
+    fn advance(
+        &mut self,
+        delta: u32,
+        out: &mut WalkOutput<'_>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         match self.state {
             0 => {
                 if self.requested != -1 {
@@ -541,7 +549,7 @@ impl Walk {
         bob: f32,
         sound: u8,
         then: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.elapsed = self.elapsed.wrapping_add(delta.min(200));
         let base = floats(self.base);
         if self.elapsed >= total {
@@ -574,7 +582,11 @@ impl Walk {
 
     /// 0x420b50: a 2 s final step that rises, tilts the view from 35 to 60 degrees, plays
     /// sound 20 at 1.8 s and ends at 80 degrees, idle, with device channel 10 stopped.
-    fn final_step(&mut self, delta: u32, out: &mut WalkOutput<'_>) -> Result<(), Box<dyn Error>> {
+    fn final_step(
+        &mut self,
+        delta: u32,
+        out: &mut WalkOutput<'_>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.elapsed = self.elapsed.wrapping_add(delta.min(200));
         let base = floats(self.base);
         if self.elapsed >= 2000 {
@@ -625,7 +637,7 @@ impl SceneHost {
         &mut self,
         slot: u8,
         backend: Option<&mut dyn AudioBackend>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.release_legacy(slot, backend)?;
         self.legacy_flakes.remove(&slot);
         self.rain_effects.remove(&slot);
@@ -655,7 +667,7 @@ impl SceneHost {
     pub(crate) fn release_legacy_effects(
         &mut self,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         while let Some(&slot) = self.legacy_effects.keys().next() {
             self.release_legacy(slot, Some(&mut *backend))?;
             self.legacy_effects.remove(&slot);
@@ -667,10 +679,10 @@ impl SceneHost {
     /// cover image; returns 0x400c without a result write.
     pub(crate) fn create_snow_field(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         backend: Option<&mut dyn AudioBackend>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         let floor_name = call.argument(8, "floor image")?;
         let cover_name = call.argument(12, "cover image")?;
@@ -678,7 +690,7 @@ impl SceneHost {
             call.complete(0x400c)?;
             return Ok(());
         }
-        let mut load = |raw| -> Result<ObjectImage, Box<dyn Error>> {
+        let mut load = |raw| -> Result<ObjectImage, Box<dyn Error + Send + Sync>> {
             let name = call.vm.resolve_string(raw)?;
             let decoded = image::load(source, &name)?
                 .ok_or_else(|| call.error("snow field image did not decode"))?;
@@ -705,10 +717,10 @@ impl SceneHost {
     /// angle 0, and prepares the walk sounds. Returns 0x4004.
     pub(crate) fn create_walk(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         camera: &mut CameraHost,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         if slot > 3 {
             call.complete(0x4004)?;
@@ -740,10 +752,10 @@ impl SceneHost {
     /// and prepares sounds 16/17. Returns 0x4004.
     pub(crate) fn create_circle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         if slot > 3 {
             call.complete(0x4004)?;
@@ -776,10 +788,10 @@ impl SceneHost {
     /// 0x2296 / 0x43c910 reads only the slot but returns 0x4008.
     pub(crate) fn create_floating_planes(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         call.ignore_argument(8, "unused")?;
         if slot > 3 {
@@ -809,12 +821,12 @@ impl SceneHost {
 
     pub(crate) fn create_magic(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         backend: &mut dyn AudioBackend,
         camera: &mut CameraHost,
         random: &mut crate::random::CrtRandom,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         if slot > 3 {
             call.complete(0x4004)?;
@@ -834,11 +846,11 @@ impl SceneHost {
 
     pub(crate) fn create_curtain(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         backend: &mut dyn AudioBackend,
         camera: &mut CameraHost,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         if slot > 3 {
             call.complete(0x4004)?;
@@ -857,10 +869,10 @@ impl SceneHost {
 
     pub(crate) fn create_sprites(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         if slot > 3 {
             call.complete(0x4004)?;
@@ -895,7 +907,7 @@ impl SceneHost {
         &self,
         slot: u8,
         backend: Option<&mut dyn AudioBackend>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (sounds, stop): (&[u8], bool) = match self.legacy_effects.get(&slot) {
             Some(LegacyEffect::Walk(_)) => (&WALK_RELEASED, true),
             // 0x41bd20 releases the two prepared sounds.
@@ -933,8 +945,8 @@ impl SceneHost {
     /// A walk accepts the next state 1..3 (0x420a60); the snow field ignores the call.
     pub(crate) fn set_legacy_effect(
         &mut self,
-        call: &mut Call<'_, '_>,
-    ) -> Result<(), Box<dyn Error>> {
+        call: &mut Call<'_>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         let value = call.argument(8, "effect parameter")?;
         call.argument(12, "effect parameter")?;
@@ -983,7 +995,7 @@ impl SceneHost {
         camera: &mut CameraHost,
         settings: AudioSettings,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         for slot in 0..4 {
             match self.legacy_effects.get_mut(&slot) {
                 Some(LegacyEffect::SnowField(field)) => {

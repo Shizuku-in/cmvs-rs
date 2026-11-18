@@ -1,10 +1,13 @@
-//! Public script initialization and explicit cross-script control.
-//! No save snapshot, callback scheduling, rendering, or filesystem search policy.
+//! Script loading, cross-script calls, and callback scheduling.
+//!
+//! [`ScriptControl`] manages script registrations and scheduled callback entry points.
+//! [`ArchiveScripts`] supplies scripts from the registered archive. The runtime
+//! coordinates these operations through [`crate::runtime::Runtime`]; rendering and
+//! save-snapshot orchestration remain separate.
 use crate::{
     cpz::{ArchiveIndex, Cpz7Parameters},
     dispatch::Call,
     evaluate::error,
-    machine::Machine,
     ps3::Script,
 };
 use std::{
@@ -13,7 +16,7 @@ use std::{
     io::{Read, Seek},
 };
 
-pub type LoadError = Box<dyn Error>;
+pub type LoadError = Box<dyn Error + Send + Sync>;
 
 /// Open an archive using its literal startup registration when CPZ7 requires keys.
 /// Other archive versions keep their existing detection policy.
@@ -43,12 +46,12 @@ pub fn packing_mode_from_start(script: &Script) -> Result<u32, crate::FormatErro
         bytecode::{self, InstructionKind, Term},
     };
     let instructions =
-        bytecode::decode_layout(script.code(), script.header.entry_pc, &script.labels())
+        bytecode::decode_layout(script.code(), script.header().entry_pc, &script.labels())
             .map_err(|_| FormatError("invalid startup script layout"))?;
     let mut value = None;
     let mut pushed = None;
     for instruction in instructions {
-        if instruction.pc < script.header.entry_pc as usize {
+        if instruction.pc < script.header().entry_pc as usize {
             continue;
         }
         match instruction.kind {
@@ -92,12 +95,12 @@ pub fn cpz7_parameters_from_start(
         bytecode::{self, InstructionKind, Term},
     };
     let instructions =
-        bytecode::decode_layout(script.code(), script.header.entry_pc, &script.labels())
+        bytecode::decode_layout(script.code(), script.header().entry_pc, &script.labels())
             .map_err(|_| FormatError("invalid startup script layout"))?;
     let strings = script.strings()?;
     let literal = |at: usize, kind: u16, tag: u16| -> Option<u32> {
         let expr = instructions.get(at)?;
-        if expr.pc < script.header.entry_pc as usize {
+        if expr.pc < script.header().entry_pc as usize {
             return None;
         }
         if instructions.get(at + 1)?.opcode != 0x430 {
@@ -121,7 +124,7 @@ pub fn cpz7_parameters_from_start(
     let mut pack_mode = None;
     let mut found = None;
     for (i, instruction) in instructions.iter().enumerate() {
-        if instruction.pc < script.header.entry_pc as usize {
+        if instruction.pc < script.header().entry_pc as usize {
             continue;
         }
         match &instruction.kind {
@@ -240,6 +243,8 @@ pub enum ControlEvent {
 #[derive(Clone)]
 pub struct ScriptControl {
     callbacks: BTreeMap<u8, Callback>,
+    armed: [bool; 64],
+    cvns: bool,
     settings: BTreeMap<u16, u32>,
     virtual_tick: u32,
     close_requested: bool,
@@ -250,9 +255,19 @@ impl ScriptControl {
     pub fn new(virtual_tick: u32) -> Self {
         Self {
             callbacks: BTreeMap::new(),
+            armed: [false; 64],
+            cvns: false,
             settings: BTreeMap::new(),
             virtual_tick,
             close_requested: false,
+        }
+    }
+
+    /// Configures script control rules for `profile` (`cvns` uses `0x446660` callback rules).
+    pub fn for_profile(profile: &crate::profile::EngineProfile, virtual_tick: u32) -> Self {
+        Self {
+            cvns: profile.family == crate::profile::Family::Cvns,
+            ..Self::new(virtual_tick)
         }
     }
     pub fn callbacks(&self) -> &BTreeMap<u8, Callback> {
@@ -274,7 +289,7 @@ impl ScriptControl {
     /// consumed once dispatched. Returned in push order: the last one runs
     /// first.
     pub fn due_callbacks(&mut self, windows_shown: [bool; 8]) -> Vec<(u8, usize)> {
-        if self.settings.get(&0x208c).copied().unwrap_or(0) != 0 {
+        if !self.cvns && self.settings.get(&0x208c).copied().unwrap_or(0) != 0 {
             return Vec::new();
         }
         let close_requested = std::mem::take(&mut self.close_requested);
@@ -284,9 +299,24 @@ impl ScriptControl {
                 .filter(|c| c.enabled)
                 .map(|c| (c.script_slot, c.target as usize))
         };
+        let armed = std::mem::replace(&mut self.armed, [false; 64]);
         if self.settings.get(&0x2089).copied().unwrap_or(0) == 0 {
-            return registered(if close_requested { 26 } else { 28 })
-                .into_iter()
+            let slot = if !self.cvns && close_requested {
+                26
+            } else {
+                28
+            };
+            return registered(slot).into_iter().collect();
+        }
+        if self.cvns {
+            return (0..64u8)
+                .filter(|&index| match index {
+                    3..=5 | 28 => true,
+                    10..=13 => windows_shown[usize::from(index - 10)],
+                    32..=63 => armed[usize::from(index)],
+                    _ => false,
+                })
+                .filter_map(registered)
                 .collect();
         }
         (0..32u8)
@@ -316,23 +346,9 @@ impl ScriptControl {
         }
     }
 
-    pub fn try_handle<S: ScriptSource>(
-        &mut self,
-        vm: &mut Machine<'_>,
-        source: &mut S,
-    ) -> Result<Option<ControlEvent>, LoadError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(None);
-        };
-        if !matches!(command, 0x80 | 0x81 | 0x83 | 0x88..=0x8c) {
-            return Ok(None);
-        }
-        self.handle(&mut Call::new(vm, pc, command), source)
-            .map(Some)
-    }
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ScriptSource,
     ) -> Result<ControlEvent, LoadError> {
         let (pc, command) = (call.pc, call.command);
@@ -349,6 +365,17 @@ impl ScriptControl {
                 };
                 let script = source.load(&name)?;
                 call.enter_common(slot, name, script)?;
+                return Ok(ControlEvent::CommonEntered {
+                    slot: call.vm.current_slot(),
+                });
+            }
+            0x412 => {
+                let name = {
+                    let raw = call.argument(4, argument_names(command)[0])?;
+                    call.vm.resolve_string(raw)?
+                };
+                let script = source.load(&name)?;
+                call.enter_cvns_common(name, script)?;
                 return Ok(ControlEvent::CommonEntered {
                     slot: call.vm.current_slot(),
                 });
@@ -425,6 +452,18 @@ impl ScriptControl {
                     callback.enabled = false;
                     callback.target = u32::MAX;
                 }
+                self.armed[slot as usize] = false;
+                0x4004
+            }
+            0x42a => {
+                let slot = call.argument(4, argument_names(command)[0])?;
+                let enabled = self.settings.get(&0x2089).copied().unwrap_or(0) != 0;
+                if enabled && (1..64).contains(&(slot as i32)) {
+                    let index = slot as usize;
+                    if self.callbacks.get(&(slot as u8)).is_some_and(|c| c.enabled) {
+                        self.armed[index] = true;
+                    }
+                }
                 0x4004
             }
             _ => unreachable!("registered script-control command"),
@@ -437,6 +476,7 @@ impl ScriptControl {
 fn argument_names(command: u16) -> &'static [&'static str] {
     match command {
         0x80 => &["main script"],
+        0x412 => &["common script"],
         0x81 => &["common slot", "common script"],
         0x83 => &["high word", "low word"],
         0x88 => &[
@@ -447,7 +487,7 @@ fn argument_names(command: u16) -> &'static [&'static str] {
             "parameter 20",
         ],
         0x89 | 0x8c => &["enabled"],
-        0x8a | 0x8b => &["callback slot"],
+        0x8a | 0x8b | 0x42a => &["callback slot"],
         _ => unreachable!("registered script-control arguments"),
     }
 }

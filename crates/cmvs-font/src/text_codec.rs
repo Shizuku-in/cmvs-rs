@@ -64,31 +64,124 @@ pub fn unmappable(encoding: TextEncoding, text: &str) -> Result<String, FormatEr
 pub const UNCERTAIN: FormatError =
     FormatError("cannot reliably detect the game text encoding from script text");
 
+/// Failure inferring a game's text encoding from its startup and archived scripts.
+#[derive(Debug)]
+pub enum DetectError {
+    /// Available script text lacked reliable evidence for Shift-JIS, GBK, or UTF-8.
+    Uncertain,
+    /// Filesystem failure opening or reading the script archive.
+    Io(std::io::Error),
+    /// Malformed or unsupported script archive container.
+    Archive(cmvs_core::format::cpz::ArchiveError),
+    /// Invalid script header, startup registration, or payload format.
+    Format(FormatError),
+}
+
+impl DetectError {
+    /// Whether detection failed because script text lacked reliable encoding evidence.
+    pub fn is_uncertain(&self) -> bool {
+        matches!(self, Self::Uncertain)
+    }
+}
+
+impl std::fmt::Display for DetectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Uncertain => UNCERTAIN.fmt(f),
+            Self::Io(error) => error.fmt(f),
+            Self::Archive(error) => error.fmt(f),
+            Self::Format(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for DetectError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Uncertain => None,
+            Self::Io(error) => Some(error),
+            Self::Archive(error) => Some(error),
+            Self::Format(error) => Some(error),
+        }
+    }
+}
+
+impl From<std::io::Error> for DetectError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<cmvs_core::format::cpz::ArchiveError> for DetectError {
+    fn from(error: cmvs_core::format::cpz::ArchiveError) -> Self {
+        Self::Archive(error)
+    }
+}
+
+impl From<FormatError> for DetectError {
+    fn from(error: FormatError) -> Self {
+        if error == UNCERTAIN {
+            Self::Uncertain
+        } else {
+            Self::Format(error)
+        }
+    }
+}
+
 /// Try startup text first, then at most 32 archived scripts in archive order.
 /// Fallback reads and decoded payloads each share a 16 MiB budget; uncertain
 /// samples never select a default encoding. Archive and script errors propagate.
+#[cfg(feature = "std-fs")]
 pub fn detect_game(
     root: &std::path::Path,
     files: &cmvs_core::profile::GameFiles,
-    startup: &cmvs_core::ps3::Script,
-) -> Result<TextEncoding, Box<dyn std::error::Error>> {
+    startup: &cmvs_core::format::ps3::Script,
+) -> Result<TextEncoding, DetectError> {
+    detect_game_with_fs(&cmvs_core::host::filesystem::StdFs, root, files, startup)
+}
+
+/// Detect the encoding by reading the script archive through `fs`.
+pub fn detect_game_with_fs(
+    fs: &dyn cmvs_core::host::filesystem::HostFs,
+    root: &std::path::Path,
+    files: &cmvs_core::profile::GameFiles,
+    startup: &cmvs_core::format::ps3::Script,
+) -> Result<TextEncoding, DetectError> {
     use cmvs_core::{
-        filesystem::File,
-        ps3::{Header, Script},
-        script_control::archive_index_from_start,
+        format::ps3::Header, format::ps3::Script, runtime::script_control::archive_index_from_start,
     };
     if let Ok(encoding) = detect(startup.text()) {
         return Ok(encoding);
     }
-    let mut reader = File::open(root.join(&files.script_archive))?;
-    let basename = files.script_archive.file_name().ok_or(UNCERTAIN)?;
-    let index = archive_index_from_start(&mut reader, startup, basename.as_encoded_bytes())?;
+    let mut reader = fs.open_read(&root.join(&files.script_archive))?;
+    let basename = files
+        .script_archive
+        .file_name()
+        .ok_or(DetectError::Uncertain)?;
+    let index = archive_index_from_start(&mut reader, startup, basename.as_encoded_bytes())
+        .map_err(|error| {
+            let error = match error.downcast::<std::io::Error>() {
+                Ok(error) => return DetectError::Io(*error),
+                Err(error) => error,
+            };
+            let error = match error.downcast::<cmvs_core::format::cpz::ArchiveError>() {
+                Ok(error) => return DetectError::Archive(*error),
+                Err(error) => error,
+            };
+            match error.downcast::<FormatError>() {
+                Ok(error) => (*error).into(),
+                Err(_) => DetectError::Format(FormatError("failed to open script archive")),
+            }
+        })?;
     let mut stored_budget = 16 * 1024 * 1024;
     let mut decoded_budget = stored_budget;
     let mut scripts = 0;
     for (i, entry) in index.entries().iter().enumerate() {
         let extension = entry.name.rsplit(|&b| b == b'.').next().unwrap_or_default();
-        if !extension.eq_ignore_ascii_case(b"ps3") && !extension.eq_ignore_ascii_case(b"ps2") {
+        if !extension.eq_ignore_ascii_case(b"ps3")
+            && !extension.eq_ignore_ascii_case(b"ps2")
+            && !extension.eq_ignore_ascii_case(b"pss")
+        {
             continue;
         }
         if scripts == 32 {
@@ -112,7 +205,50 @@ pub fn detect_game(
             return Ok(encoding);
         }
     }
-    Err(UNCERTAIN.into())
+    Err(DetectError::Uncertain)
+}
+
+/// Reads `root/encoding.txt` via `fs` when present, stripping an optional UTF-8 BOM and
+/// validating the declared encoding name within a 64-byte limit.
+pub fn encoding_txt_with_fs(
+    fs: &dyn cmvs_core::host::filesystem::HostFs,
+    root: &std::path::Path,
+) -> Result<Option<TextEncoding>, Box<dyn std::error::Error + Send + Sync>> {
+    use std::io::{ErrorKind, Read as _};
+    match fs.open_read(&root.join("encoding.txt")) {
+        Ok(file) => {
+            let mut raw = Vec::new();
+            file.take(65).read_to_end(&mut raw)?;
+            if raw.len() > 64 {
+                return Err("encoding.txt exceeds 64 bytes".into());
+            }
+            let setting = std::str::from_utf8(&raw)?;
+            let name = setting.strip_prefix('\u{feff}').unwrap_or(setting).trim();
+            parse(name).map(Some).map_err(|_| {
+                format!("encoding.txt must be shift-jis, gbk or utf-8, not {name:?}").into()
+            })
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Box::new(error)),
+    }
+}
+
+/// Resolves `root/encoding.txt` when present, otherwise runs [`detect_game_with_fs`] and
+/// falls back to [`TextEncoding::ShiftJis`] only when script text is purely ASCII/uncertain.
+pub fn select_or_default_with_fs(
+    fs: &dyn cmvs_core::host::filesystem::HostFs,
+    root: &std::path::Path,
+    files: &cmvs_core::profile::GameFiles,
+    startup: &cmvs_core::format::ps3::Script,
+) -> Result<TextEncoding, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(encoding) = encoding_txt_with_fs(fs, root)? {
+        return Ok(encoding);
+    }
+    match detect_game_with_fs(fs, root, files, startup) {
+        Ok(encoding) => Ok(encoding),
+        Err(DetectError::Uncertain) => Ok(TextEncoding::ShiftJis),
+        Err(error) => Err(Box::new(error)),
+    }
 }
 
 #[derive(Default)]
@@ -235,6 +371,7 @@ mod tests {
         assert_eq!(detect(&over_limit), Err(UNCERTAIN));
     }
 
+    #[cfg(feature = "std-fs")]
     fn script_bytes(text: &[u8]) -> Vec<u8> {
         let size = text.len() as u32;
         let mut raw = b"PS2A".to_vec();
@@ -250,12 +387,12 @@ mod tests {
         raw
     }
 
+    #[cfg(feature = "std-fs")]
     #[test]
     fn fallback_reads_archived_scripts_without_guessing_ascii_or_binary() {
         use cmvs_core::{
-            cpz::{ArchiveDirectory, ArchiveFile, Cpz6Index},
-            profile::GameFiles,
-            ps3::Script,
+            format::cpz::ArchiveDirectory, format::cpz::ArchiveFile, format::cpz::Cpz6Index,
+            format::ps3::Script, profile::GameFiles,
         };
         use std::{fs, io::Cursor};
         let root = std::env::temp_dir().join(format!("cmvs-font-encoding-{}", std::process::id()));
@@ -302,7 +439,7 @@ mod tests {
             .unwrap();
             fs::write(root.join(&files.script_archive), archive.into_inner()).unwrap();
             assert_eq!(detect_game(&root, &files, &startup).unwrap(), encoding);
-            // Startup evidence takes priority, without opening the archive.
+            // Runtime evidence takes priority, without opening the archive.
             let strong_start = Script::decode(&script_bytes(&text)).unwrap();
             let empty = GameFiles {
                 script_archive: "missing.cpz".into(),
@@ -330,10 +467,10 @@ mod tests {
         .unwrap();
         fs::write(root.join(&files.script_archive), archive.into_inner()).unwrap();
         let error = detect_game(&root, &files, &startup).unwrap_err();
-        assert_eq!(error.downcast_ref::<FormatError>(), Some(&UNCERTAIN));
+        assert!(error.is_uncertain());
         fs::write(root.join(&files.script_archive), b"broken archive").unwrap();
         let error = detect_game(&root, &files, &startup).unwrap_err();
-        assert_ne!(error.downcast_ref::<FormatError>(), Some(&UNCERTAIN));
+        assert!(!error.is_uncertain());
         fs::remove_dir_all(root).unwrap();
     }
 

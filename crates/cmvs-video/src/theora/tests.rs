@@ -1,5 +1,5 @@
 use super::*;
-use cmvs_core::digest::{sha256, to_hex};
+use cmvs_core::{format::digest::sha256, format::digest::to_hex};
 use ogg::PacketReader;
 use std::{
     io::{Cursor, Read, Seek, SeekFrom},
@@ -28,7 +28,7 @@ fn packets(data: &[u8]) -> Vec<Vec<u8>> {
 
 fn fixture() -> Vec<Vec<u8>> {
     let bytes = hex(include_str!("../../tests/fixtures/mgv1.hex"));
-    let index = cmvs_core::mgv::MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
+    let index = cmvs_core::format::mgv::MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
     packets(&bytes[index.video_offset as usize..])
 }
 
@@ -243,7 +243,7 @@ fn quant_ranges_and_three_block_quantizers_match_recorded_reference() {
         assert_eq!(to_hex(&sha256(&bytes)), expected);
     }
     let qiis: Vec<_> = (0..decoder.geometry.blocks.len())
-        .map(|bi| bi % 3)
+        .map(|bi| (bi % 3) as u8)
         .collect();
     let hashes: Vec<_> = include_str!("../../tests/fixtures/theora-quant.coded.sha256")
         .lines()
@@ -277,6 +277,50 @@ fn golden_and_four_vector_frames_match_recorded_reference() {
         0,
         "golden-reference path was exercised"
     );
+}
+
+#[test]
+fn extreme_aspect_surfaces_preserve_block_coordinates() {
+    let mut wide = fixture()[0].clone();
+    wide[10..12].copy_from_slice(&32769u16.to_be_bytes()); // 524304 luma px (65538 blocks)
+    wide[12..14].copy_from_slice(&1u16.to_be_bytes()); // 16 luma px
+    wide[14..17].copy_from_slice(&[0, 0, 16]);
+    wide[17..20].copy_from_slice(&[0, 0, 16]);
+    wide[20] = 0;
+    wide[21] = 0;
+    let wide_ident = Ident::parse(&wide).unwrap();
+    assert_eq!(wide_ident.width, 524_304);
+    assert_eq!(wide_ident.height, 16);
+
+    let mut tall = wide;
+    tall[10..12].copy_from_slice(&1u16.to_be_bytes());
+    tall[12..14].copy_from_slice(&32769u16.to_be_bytes());
+    let tall_ident = Ident::parse(&tall).unwrap();
+    let tall_geom = Geometry::new(&tall_ident);
+    assert!(
+        tall_geom
+            .blocks
+            .iter()
+            .any(|b| b.plane == 0 && b.y == 65537)
+    );
+
+    // Minimal Setup packet: 0 loop limits, 0 quant base, 80 leaf-6 Huffman trees (EOBRUN 0).
+    let mut setup_bits = Vec::new();
+    setup_bits.extend([0; 3 + 2 * (4 + 64) + 9 + 512]); // limits, scales, 1 zero matrix
+    setup_bits.extend([1, 1, 1, 1, 1, 0]); // table 0 range delta 62 -> qi 63
+    setup_bits.extend([0, 0, 0, 0, 0, 0, 0, 0]); // tables 1..5 copy previous
+    for _ in 0..80 {
+        setup_bits.extend([1, 0, 0, 1, 1, 0]); // single leaf token 6
+    }
+    let mut setup = b"\x82theora".to_vec();
+    setup.extend(bits::packed(&setup_bits));
+
+    let mut decoder = Decoder::new(&wide_ident, &setup).unwrap();
+    let frame = decoder.decode_frame(&[0u8; 5]).unwrap();
+    assert!(frame.planes[0][524_288..524_304].iter().all(|&p| p == 128));
+    assert!(frame.planes[0].iter().all(|&p| p == 128));
+    assert!(frame.planes[1].iter().all(|&p| p == 128));
+    assert!(frame.planes[2].iter().all(|&p| p == 128));
 }
 
 /// Optional large-corpus comparison. CMVS_THEORA_OGV is an Ogg/Theora file;
@@ -441,7 +485,7 @@ fn external_decoder_timing() {
 #[test]
 #[ignore = "requires CMVS_THEORA_MGV"]
 fn external_mgv_playback_matches_packet_decoder() {
-    use cmvs_core::mgv::{Decoder as _, MgvIndex};
+    use cmvs_core::{format::mgv::Decoder as _, format::mgv::MgvIndex};
     let path = std::env::var("CMVS_THEORA_MGV").unwrap();
     let mut source = std::fs::File::open(&path).unwrap();
     let index = MgvIndex::read(&mut source).unwrap();

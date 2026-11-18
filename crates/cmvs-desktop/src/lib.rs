@@ -1,14 +1,16 @@
 //! Optional native window/input adapter. Static scene rendering lives in `scene_render`.
 mod app;
 mod encoding;
-pub use cmvs_font::{font, font_library};
+pub use cmvs_core::TextEncoding;
+pub use cmvs_font::{font, font_library, text_codec};
+#[cfg(all(test, feature = "wgpu-renderer"))]
 mod frame_boundary;
 pub mod game_input;
-pub use app::{movie_canvas, run_cli};
+pub use app::run_cli;
+pub use cmvs_core::render::raster::movie_canvas;
 use cmvs_core::{
-    FormatError,
-    cursor::CursorBitmap,
-    platform::{MAX_PLATFORM_ASSET, PlatformBackend, PlatformRequest},
+    FormatError, format::cursor::CursorBitmap, host::platform::MAX_PLATFORM_ASSET,
+    host::platform::PlatformBackend, host::platform::PlatformRequest,
 };
 pub use cmvs_video as video;
 use std::{
@@ -21,66 +23,13 @@ use winit::{
     window::{CursorIcon, CustomCursor, Icon, Window},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextEncoding {
-    ShiftJis,
-    Gbk,
-    Utf8,
-}
-impl TextEncoding {
-    pub fn parse(name: &str) -> Result<Self, FormatError> {
-        match name {
-            "shift-jis" => Ok(Self::ShiftJis),
-            "gbk" => Ok(Self::Gbk),
-            "utf-8" => Ok(Self::Utf8),
-            _ => Err(FormatError("encoding must be shift-jis, gbk or utf-8")),
-        }
-    }
-    /// The engine scanner matching the host codec.
-    pub fn engine_encoding(self) -> cmvs_core::TextEncoding {
-        match self {
-            Self::ShiftJis => cmvs_core::TextEncoding::ShiftJis,
-            Self::Gbk => cmvs_core::TextEncoding::Gbk,
-            Self::Utf8 => cmvs_core::TextEncoding::Utf8,
-        }
-    }
-    fn encoding(self) -> &'static encoding_rs::Encoding {
-        match self {
-            Self::ShiftJis => encoding_rs::SHIFT_JIS,
-            Self::Gbk => encoding_rs::GBK,
-            Self::Utf8 => encoding_rs::UTF_8,
-        }
-    }
-    pub fn decode(self, bytes: &[u8]) -> Result<String, FormatError> {
-        self.encoding()
-            .decode_without_bom_handling_and_without_replacement(bytes)
-            .map(|s| s.into_owned())
-            .ok_or(FormatError("invalid title bytes for selected encoding"))
-    }
-    fn decode_font_face(self, bytes: &[u8]) -> Result<String, FormatError> {
-        if bytes == cmvs_core::settings::DEFAULT_FONT_FACE {
-            return Ok("ＭＳ ゴシック".to_owned());
-        }
-        self.decode(bytes)
-    }
-    pub fn encode(self, text: &str) -> Result<Vec<u8>, FormatError> {
-        let (bytes, _, unmappable) = self.encoding().encode(text);
-        if unmappable {
-            return Err(FormatError(
-                "text is not representable in the selected encoding",
-            ));
-        }
-        Ok(bytes.into_owned())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IconPixels {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
 }
-pub fn decode_icon(bytes: &[u8]) -> Result<IconPixels, Box<dyn Error>> {
+pub fn decode_icon(bytes: &[u8]) -> Result<IconPixels, Box<dyn Error + Send + Sync>> {
     if bytes.len() < 6 || bytes.len() > MAX_PLATFORM_ASSET || bytes[..4] != [0, 0, 1, 0] {
         return Err("invalid or oversized ICO".into());
     }
@@ -139,16 +88,16 @@ pub fn cursor_rgba(bitmap: &CursorBitmap) -> Result<Vec<u8>, FormatError> {
 
 /// A completed logical device frame, read only when the VM requests it.
 pub trait DeviceFrame {
-    fn read(&self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>>;
+    fn read(&self) -> Result<cmvs_core::render::raster::RgbaImage, Box<dyn Error + Send + Sync>>;
 }
-impl DeviceFrame for cmvs_core::raster::RgbaImage {
-    fn read(&self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
+impl DeviceFrame for cmvs_core::render::raster::RgbaImage {
+    fn read(&self) -> Result<cmvs_core::render::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
         Ok(self.clone())
     }
 }
 #[cfg(feature = "wgpu-renderer")]
 impl DeviceFrame for cmvs_wgpu::GpuFrame {
-    fn read(&self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
+    fn read(&self) -> Result<cmvs_core::render::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
         self.read()
     }
 }
@@ -168,7 +117,7 @@ impl FullscreenMonitor {
     fn resolve(
         window: &Window,
         mode: u32,
-    ) -> Result<Option<winit::monitor::MonitorHandle>, Box<dyn Error>> {
+    ) -> Result<Option<winit::monitor::MonitorHandle>, Box<dyn Error + Send + Sync>> {
         let monitor = match mode {
             0 => window
                 .primary_monitor()
@@ -206,7 +155,10 @@ pub struct NativeBackend<'a> {
     pub masked_cursor: &'a std::cell::RefCell<Option<cmvs_native::MaskedCursor>>,
 }
 impl PlatformBackend for NativeBackend<'_> {
-    fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool, Box<dyn Error>> {
+    fn select_fullscreen_monitor(
+        &mut self,
+        mode: u32,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         let target = FullscreenMonitor::resolve(self.window, mode)?;
         let mut state = self.fullscreen_monitor.borrow_mut();
         let previous = match &state.selected {
@@ -224,62 +176,70 @@ impl PlatformBackend for NativeBackend<'_> {
         Ok(changed)
     }
 
-    fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+    fn display_count(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Ok(self.window.available_monitors().count().try_into()?)
     }
     fn logical_size(&self) -> [u32; 2] {
         self.logical_size
     }
-    fn read_device_frame(&mut self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
+    fn read_device_frame(
+        &mut self,
+    ) -> Result<cmvs_core::render::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
         self.device_frame
             .ok_or("native device has no completed frame")?
             .read()
     }
-    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error + Send + Sync>> {
         if self.fullscreen()? {
             Ok(self.windowed_size.get())
         } else {
             self.window_size()
         }
     }
-    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error + Send + Sync>> {
         let size = self.window.inner_size();
         Ok([size.width, size.height])
     }
-    fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+    fn aspect_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Ok(self.aspect_mode.get())
     }
-    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
+    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.aspect_scaling.get())
     }
-    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(true)
     }
     /// Software bilinear presentation in `RgbaImage::draw_scaled`.
-    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(true)
     }
-    fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+    fn resizable(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.window.is_resizable())
     }
-    fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+    fn render_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Ok(self.render_mode.get())
     }
-    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
         Ok(0)
     }
-    fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+    fn fullscreen(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.window.fullscreen().is_some())
+    }
+    fn poll_message_dialog(
+        &mut self,
+        _: &cmvs_core::host::platform::MessageDialogRequest,
+    ) -> Result<cmvs_core::host::platform::MessageDialogResult, Box<dyn Error + Send + Sync>> {
+        Ok(cmvs_core::host::platform::MessageDialogResult::Accepted)
     }
     fn poll_text_dialog(
         &mut self,
-        request: &cmvs_core::platform::TextDialogRequest,
-    ) -> Result<cmvs_core::platform::TextDialogResult, Box<dyn Error>> {
+        request: &cmvs_core::host::platform::TextDialogRequest,
+    ) -> Result<cmvs_core::host::platform::TextDialogResult, Box<dyn Error + Send + Sync>> {
         use winit::raw_window_handle::HasWindowHandle;
         let owner = self.window.window_handle()?.as_raw();
-        let title = self.encoding.decode(&request.title)?;
-        let prompt = self.encoding.decode(&request.prompt)?;
-        let initial = self.encoding.decode(&request.initial)?;
+        let title = text_codec::decode(self.encoding, &request.title)?;
+        let prompt = text_codec::decode(self.encoding, &request.prompt)?;
+        let initial = text_codec::decode(self.encoding, &request.initial)?;
         Ok(
             match cmvs_native::edit_text(
                 owner,
@@ -292,21 +252,24 @@ impl PlatformBackend for NativeBackend<'_> {
                     request.max_bytes.min(255) / 2
                 },
             )? {
-                Some(text) => {
-                    cmvs_core::platform::TextDialogResult::Accepted(self.encoding.encode(&text)?)
-                }
-                None => cmvs_core::platform::TextDialogResult::Cancelled,
+                Some(text) => cmvs_core::host::platform::TextDialogResult::Accepted(
+                    text_codec::encode(self.encoding, &text)?,
+                ),
+                None => cmvs_core::host::platform::TextDialogResult::Cancelled,
             },
         )
     }
-    fn choose_font(&mut self, current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn choose_font(
+        &mut self,
+        current: &[u8],
+    ) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         use winit::raw_window_handle::HasWindowHandle;
         let owner = self.window.window_handle()?.as_raw();
         let current = match self.fonts {
             Some(fonts) => fonts
                 .family_name(current)
                 .unwrap_or_else(|_| "ＭＳ ゴシック".to_owned()),
-            None => self.encoding.decode_font_face(current)?,
+            None => encoding::decode_font_face(self.encoding, current)?,
         };
         let Some(face) = cmvs_native::choose_font(owner, &current)? else {
             println!("# native font dialog cancelled");
@@ -314,28 +277,28 @@ impl PlatformBackend for NativeBackend<'_> {
         };
         let selected = match self.fonts {
             Some(fonts) => fonts.select_unicode_face(&face),
-            None => self.encoding.encode(&face),
+            None => text_codec::encode(self.encoding, &face),
         };
         let bytes = match selected {
             Ok(bytes) => bytes,
             Err(error) => {
                 println!("# native font {face} is unavailable ({error}); using default font");
-                return Ok(Some(cmvs_core::settings::DEFAULT_FONT_FACE.to_vec()));
+                return Ok(Some(cmvs_core::host::settings::DEFAULT_FONT_FACE.to_vec()));
             }
         };
         if let Some(fonts) = self.fonts
             && !fonts.has_face(&bytes)
         {
             println!("# native font {face} is not loadable; using default font");
-            return Ok(Some(cmvs_core::settings::DEFAULT_FONT_FACE.to_vec()));
+            return Ok(Some(cmvs_core::host::settings::DEFAULT_FONT_FACE.to_vec()));
         }
         println!("# native font dialog chose {face}");
         Ok(Some(bytes))
     }
-    fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+    fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         match request {
             PlatformRequest::WindowSize(size) => {
-                cmvs_core::viewport::ScreenSize::new(*size)?;
+                cmvs_core::render::viewport::ScreenSize::new(*size)?;
                 self.windowed_size.set(*size);
                 if !self.fullscreen()? {
                     let _ = self
@@ -396,7 +359,7 @@ impl PlatformBackend for NativeBackend<'_> {
                 println!("# native fullscreen={value}");
             }
             PlatformRequest::Title(bytes) => {
-                let title = self.encoding.decode(bytes)?;
+                let title = text_codec::decode(self.encoding, bytes)?;
                 self.window.set_title(&title);
                 println!("# native title={title}");
             }
@@ -557,25 +520,22 @@ mod tests {
             TextEncoding::Gbk,
             TextEncoding::Utf8,
         ] {
-            let displayed = cmvs_core::settings::font_face_for_encoding(
-                cmvs_core::settings::DEFAULT_FONT_FACE,
-                encoding.engine_encoding(),
+            let displayed = cmvs_core::host::settings::font_face_for_encoding(
+                cmvs_core::host::settings::DEFAULT_FONT_FACE,
+                encoding,
             );
             assert_eq!(
-                encoding.decode_font_face(displayed).unwrap(),
+                encoding::decode_font_face(encoding, displayed).unwrap(),
                 "ＭＳ ゴシック"
             );
             assert_eq!(
-                encoding
-                    .decode_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)
+                encoding::decode_font_face(encoding, cmvs_core::host::settings::DEFAULT_FONT_FACE)
                     .unwrap(),
                 "ＭＳ ゴシック"
             );
         }
         assert_eq!(
-            TextEncoding::Gbk
-                .decode_font_face(b"\xba\xda\xcc\xe5")
-                .unwrap(),
+            encoding::decode_font_face(TextEncoding::Gbk, b"\xba\xda\xcc\xe5").unwrap(),
             "黑体"
         );
     }

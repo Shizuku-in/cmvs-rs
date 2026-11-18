@@ -20,21 +20,49 @@ fn sample_linear(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
     let q=uv-0.5; let f=fract(q); let xy=vec2<i32>(floor(q));
     return round(mix(mix(load(t,xy),load(t,xy+vec2<i32>(1,0)),f.x),mix(load(t,xy+vec2<i32>(0,1)),load(t,xy+vec2<i32>(1,1)),f.x),f.y));
 }
+fn div255(x: f32) -> f32 {
+    return floor(x / 255.0 + 0.001);
+}
 @fragment fn fs(in: Vertex) -> @location(0) vec4<f32> {
     let flags=u32(p.v[4].w);
     var texel=vec4<f32>(p.v[4].xyz,255.0);
+    if ((flags & 32u)!=0u) {
+        if ((flags & 64u)!=0u) {
+            let at=vec2<i32>(floor(in.position.xy)-p.v[2].xy);
+            let uv=vec2<i32>(p.v[6].xy)+at.x*vec2<i32>(p.v[6].zw)+at.y*vec2<i32>(p.v[7].xy);
+            let xy=vec2<i32>(p.v[1].xy)+(uv >> vec2<u32>(10u));
+            if (any(xy < max(vec2<i32>(p.v[1].xy),vec2<i32>(0))) ||
+                any(xy >= min(vec2<i32>(p.v[1].zw),vec2<i32>(textureDimensions(image))))) {
+                discard;
+            }
+            texel=load(image,xy);
+        } else if ((flags & 1u)==0u) {
+            texel=load(image,vec2<i32>(floor(in.uv)));
+        }
+        let weight=p.v[5].x;
+        var rgb=floor((weight*texel.rgb+(256.0-weight)*p.v[4].xyz)/256.0);
+        var alpha=p.v[0].z;
+        if (p.v[5].y!=0.0 && texel.a<255.0) {
+            alpha=floor(alpha*texel.a/256.0);
+        }
+        if (p.v[5].z!=0.0) {
+            rgb=floor(rgb*alpha/256.0);
+            alpha=256.0;
+        }
+        return vec4<f32>(rgb/255.0,alpha/256.0);
+    }
     if ((flags & 1u)==0u) {
         texel=load(image,vec2<i32>(floor(in.uv)));
         if (p.v[0].w>0.0) { texel=sample_linear(image,in.uv); }
     }
-    var alpha=floor((texel.a*p.v[0].z+127.0)/255.0);
+    var alpha=div255(texel.a*p.v[0].z+127.0);
     if ((flags & 4u)!=0u) {
         let green=u32(load(mask,vec2<i32>(floor(in.uv))).g);
         alpha=round(alpha*p.v[6u+green/4u][green%4u]);
     }
     if ((flags & 8u)!=0u) {
         let uv=(in.position.xy-0.5)*vec2<f32>(textureDimensions(screen))/p.v[0].xy;
-        alpha=floor((alpha*sample_linear(screen,uv).g+127.0)/255.0);
+        alpha=div255(alpha*sample_linear(screen,uv).g+127.0);
     }
     if ((flags & 2u)!=0u) { texel=vec4<f32>(0.0,0.0,0.0,texel.a); }
     return vec4<f32>(texel.rgb/255.0,alpha/255.0);

@@ -2,7 +2,7 @@
 
 构建、运行与当前边界见[浏览器运行器说明](../../platforms/web/README.md)。
 
-`platforms/web/native` 是独立 `cdylib`，依赖 core、共享字体光栅化、禁用原生设备 feature 的 cmvs-audio、wasm-bindgen 与 self_cell；wasm32 另外连接 cmvs-wgpu、web-sys 与 wasm-bindgen-futures。脚本与借用它的 `Startup` 由 self_cell 管理，销毁运行器会释放状态，不泄漏静态脚本。
+`platforms/web/native` 是独立 `cdylib`，依赖 core、共享字体光栅化、禁用原生设备 feature 的 cmvs-audio 与 wasm-bindgen；wasm32 另外连接 cmvs-wgpu、web-sys 与 wasm-bindgen-futures。`Runtime` 直接持有共享脚本状态，销毁运行器即释放状态，不泄漏静态脚本。
 
 核心的 `filesystem` 模块在原生目标转发标准文件系统调用，在 wasm32 目标导入 Worker 提供的文件接口。`File` 实现 `Read + Seek`，CPZ、影片及档案哈希继续使用现有读取器；宿主以 FileReaderSync 读取 Blob 片段，每次最多 1 MiB，无需将整个游戏包复制进 wasm 内存。路径解析及资源校验仍由核心执行，浏览器侧额外限制游戏根只读、用户目录可写并拒绝路径穿越。原生核心没有新增第三方依赖，wasm32 核心使用 wasm-bindgen 连接宿主。
 

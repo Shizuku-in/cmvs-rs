@@ -1,0 +1,235 @@
+use crate::support;
+use crate::support::css1_fixture;
+use crate::support::shared_storage::SharedControl;
+use cmvs_core::{
+    format::ps3::Script, format::system_save::Css1Save, format::system_save::SystemSaveEvent,
+    format::system_save::SystemSaveHost, format::system_save::SystemSaveSink,
+    format::system_save::SystemSaveSource, host::random::CrtRandom, profile::Semantics,
+    runtime::save_menu::SaveMenuHost, runtime::save_menu::SaveSource,
+    runtime::script_control::ControlEvent, runtime::script_control::ScriptControl,
+    runtime::script_control::ScriptSource, vm::dispatch, vm::dispatch::Capability,
+    vm::dispatch::Flow, vm::dispatch::Hosts, vm::dispatch::ScriptHosts,
+    vm::dispatch::SystemReadHosts, vm::dispatch::SystemWriteHosts, vm::machine::Machine,
+};
+use std::{error::Error, io};
+use support::bytecode::{command, pending};
+fn bytes(code: &[u8]) -> Vec<u8> {
+    let text = b"main.ps3\0common.ps3\0broken\0";
+    let mut raw = b"PS2A".to_vec();
+    for word in [
+        48u32,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+        text.len() as u32,
+        0,
+        0,
+        (code.len() + text.len()) as u32,
+        0,
+    ] {
+        raw.extend(word.to_le_bytes());
+    }
+    raw.extend(
+        code.iter()
+            .chain(text)
+            .map(|b| b.rotate_left(1).wrapping_add(124)),
+    );
+    raw
+}
+fn script(code: &[u8]) -> Script {
+    Script::decode(&bytes(code)).unwrap()
+}
+
+#[derive(Default, Debug)]
+struct Store {
+    reads: usize,
+    writes: Vec<Vec<u8>>,
+    fail: bool,
+}
+impl ScriptSource for Store {
+    fn load(&mut self, _: &[u8]) -> Result<Script, Box<dyn Error + Send + Sync>> {
+        self.reads += 1;
+        if self.fail {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "source unavailable").into());
+        }
+        Ok(script(&[0x00, 0x20, 0x14, 0x04, 0, 0]))
+    }
+}
+impl SystemSaveSource for Store {
+    fn read(&mut self) -> io::Result<Option<Vec<u8>>> {
+        self.reads += 1;
+        if self.fail {
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "source unavailable",
+            ))
+        } else {
+            Ok(Some(css1_fixture::css1()))
+        }
+    }
+}
+impl SystemSaveSink for Store {
+    fn write(&mut self, raw: &[u8]) -> io::Result<()> {
+        if self.fail {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "source unavailable",
+            ));
+        }
+        self.writes.push(raw.to_vec());
+        Ok(())
+    }
+}
+impl SaveSource for Store {
+    fn read_header(&mut self, _: u16) -> io::Result<Option<Vec<u8>>> {
+        self.reads += 1;
+        if self.fail {
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "source unavailable",
+            ))
+        } else {
+            Ok(Some(b"CSV2".to_vec()))
+        }
+    }
+}
+struct State {
+    control: ScriptControl,
+    system: SystemSaveHost,
+    menu: SaveMenuHost,
+    store: Store,
+    random: CrtRandom,
+}
+impl Default for State {
+    fn default() -> Self {
+        let save = Css1Save::decode(&css1_fixture::css1()).unwrap();
+        Self {
+            control: ScriptControl::new(17),
+            system: SystemSaveHost {
+                loaded: Some(save),
+                ..Default::default()
+            },
+            menu: Default::default(),
+            store: Default::default(),
+            random: CrtRandom::new(0),
+        }
+    }
+}
+impl State {
+    fn setup(&mut self, vm: &mut Machine) {
+        *vm.state_mut() = self
+            .system
+            .loaded
+            .as_ref()
+            .unwrap()
+            .applied(vm.state(), Some(0x12345678))
+            .unwrap();
+        let mut code = vec![];
+        command(&mut code, 0x2088, &[1, 0, 3, 4, 5]);
+        let script = script(&code);
+        let mut registration = Machine::new(&script).unwrap();
+        pending(&mut registration);
+        self.control
+            .shared_control(&mut registration, &mut self.store)
+            .unwrap();
+    }
+    fn hosts(&mut self, cap: Capability) -> Hosts<'_> {
+        match cap {
+            Capability::ScriptControl => Hosts {
+                scripts: Some(ScriptHosts {
+                    host: &mut self.control,
+                    source: &mut self.store,
+                }),
+                ..Default::default()
+            },
+            Capability::SystemRead => Hosts {
+                system_read: Some(SystemReadHosts {
+                    host: &mut self.system,
+                    source: &mut self.store,
+                    game_id: Some(0x12345678),
+                    persistent: Default::default(),
+                }),
+                ..Default::default()
+            },
+            Capability::SystemWrite => Hosts {
+                system_write: Some(SystemWriteHosts {
+                    host: &mut self.system,
+                    sink: &mut self.store,
+                    random: &mut self.random,
+                    game_id: Some(0x12345678),
+                }),
+                ..Default::default()
+            },
+            Capability::SaveMenu => Hosts {
+                popup: Some(&mut self.menu),
+                save_source: Some(&mut self.store),
+                ..Default::default()
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+fn expected(op: u16) -> Flow {
+    match op {
+        0x2080 => Flow::Control(ControlEvent::MainPreparedNeedsSnapshot),
+        0x2081 => Flow::Control(ControlEvent::CommonEntered { slot: 1 }),
+        0x2083 | 0x2088..=0x208c => Flow::Control(ControlEvent::Applied),
+        0x2128 => Flow::SystemSave(SystemSaveEvent::Applied),
+        0x2129 => Flow::SystemWritten,
+        _ => Flow::Done,
+    }
+}
+#[test]
+fn storage_io_failures_preserve_typed_cause_and_allow_retry() {
+    for (op, args, cap) in [
+        (0x2080, vec![0], Capability::ScriptControl),
+        (0x2081, vec![0, 9], Capability::ScriptControl),
+        (0x2128, vec![], Capability::SystemRead),
+        (0x2129, vec![], Capability::SystemWrite),
+        (0x22b3, vec![2], Capability::SaveMenu),
+        (0x22bb, vec![0], Capability::SaveMenu),
+    ] {
+        let mut code = vec![];
+        command(&mut code, op, &args);
+        command(&mut code, 0x2000, &[]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut state = State::default();
+        state.setup(&mut vm);
+        state.store.fail = true;
+        pending(&mut vm);
+        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+        let random = state.random.clone();
+        let vars = format!("{:?}", vm.state());
+        let err = dispatch::run(Semantics::Root, &mut vm, &mut state.hosts(cap)).unwrap_err();
+        assert_eq!(err.as_io().unwrap().kind(), io::ErrorKind::Interrupted);
+        assert_eq!(
+            err.source()
+                .unwrap()
+                .downcast_ref::<io::Error>()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::Interrupted
+        );
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "system command 0x{op:04x} at 0x{:x}: source unavailable",
+                before.0
+            )
+        );
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            before
+        );
+        assert_eq!(state.random, random);
+        assert_eq!(format!("{:?}", vm.state()), vars);
+        state.store.fail = false;
+        assert_eq!(
+            dispatch::run(Semantics::Root, &mut vm, &mut state.hosts(cap)).unwrap(),
+            Some(expected(op))
+        );
+    }
+}

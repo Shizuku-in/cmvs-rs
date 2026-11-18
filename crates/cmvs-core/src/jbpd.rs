@@ -1,7 +1,11 @@
-//! Bounded CMV6 JBPD and CMV8 JBPE decoder. Evidence: documented cmvs64.exe hash,
-//! 0x1400ab650 / 0x1400af100 (tiles/entropy), 0x1400b51c0 (integer IDCT), 0x1400a2300
-//! (color), 0x1400a3850 (alpha).
-//! Always decodes all blocks, like the original non-consecutive-frame path.
+//! JBPD/JBPE movie-frame decoding for CMV6 and CMV8.
+//!
+//! All blocks are decoded independently of the previous frame. Container indexing
+//! and frame selection are provided by [`crate::cmv`].
+
+// Hash-bound decoder: 0x1400ab650 / 0x1400af100 (tiles and entropy),
+// 0x1400b51c0 (integer IDCT), 0x1400a2300 (color), 0x1400a3850 (alpha).
+// Uses the original non-consecutive-frame path, which decodes every block.
 use crate::{FormatError, MAX_PAYLOAD, raster::RgbaImage};
 
 /// Zigzag scan; JBP1's 0x1400e4730 holds entries 1..64 of the same order.

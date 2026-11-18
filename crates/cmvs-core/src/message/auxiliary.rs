@@ -29,33 +29,9 @@ pub(super) struct PositionMotion {
 }
 
 impl super::MessageHost {
-    /// 0x239d binds +1472. The bound branch of 0x2383 also moves that scene object.
-    pub fn try_handle_scene(
-        &mut self,
-        vm: &mut crate::machine::Machine<'_>,
-        scene: &mut crate::scene::SceneHost,
-    ) -> Result<bool, crate::bytecode::DecodeError> {
-        let Some((pc, command @ (0x39d | 0x383))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        let mut call = crate::dispatch::Call::new(vm, pc, command);
-        if command == 0x383 {
-            let slot = call.argument(4, "auxiliary slot")? as usize;
-            let group = self
-                .auxiliary_texts
-                .get(slot)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| call.error("auxiliary text group does not exist or outside 0..7"))?;
-            if group.associated_scene.is_none() {
-                return Ok(false);
-            }
-        }
-        Ok(self.handle_auxiliary_scene(&mut call, Some(scene))? == crate::dispatch::Flow::Done)
-    }
-
     pub(crate) fn handle_auxiliary_scene(
         &mut self,
-        call: &mut crate::dispatch::Call<'_, '_>,
+        call: &mut crate::dispatch::Call<'_>,
         scene: Option<&mut crate::scene::SceneHost>,
     ) -> Result<crate::dispatch::Flow, crate::bytecode::DecodeError> {
         use crate::dispatch::Flow;

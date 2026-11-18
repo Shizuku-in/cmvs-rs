@@ -98,7 +98,7 @@ impl Default for Animation {
 impl SceneHost {
     pub(super) fn handle_frame_animation(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
     ) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
 
@@ -123,7 +123,9 @@ impl SceneHost {
             Some(
                 u16::try_from(args[1])
                     .ok()
-                    .filter(|id| *id < self.child_slots.count() && parent.children.contains_key(id))
+                    .filter(|id| {
+                        *id < self.config.child_slots.count() && parent.children.contains_key(id)
+                    })
                     .ok_or_else(|| {
                         fail("frame animation child outside this build's table or missing")
                     })?,

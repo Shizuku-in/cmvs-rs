@@ -1,5 +1,5 @@
 //! Runtime configuration commands, researched against cmvs-20160201 x64.
-use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine};
+use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error};
 mod profile;
 pub(crate) use profile::render_mode_to_ini;
 pub use profile::{Configuration, DisplayPreferences, MAX_CONFIGURATION};
@@ -29,6 +29,7 @@ pub struct SettingsHost {
     read_skip: bool,
     active_draw: bool,
     cursor_auto_clear: u32,
+    cvns: CvnsSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +111,9 @@ impl AutoAdvanceSettings {
         Ok(result.max(self.base.wrapping_mul(100)))
     }
 }
+mod cvns;
+pub use cvns::CvnsSettings;
+
 impl Default for SettingsHost {
     fn default() -> Self {
         Self {
@@ -119,6 +123,7 @@ impl Default for SettingsHost {
             read_skip: false,
             active_draw: true,
             cursor_auto_clear: 1,
+            cvns: CvnsSettings::default(),
         }
     }
 }
@@ -179,6 +184,7 @@ impl SettingsHost {
                 DEFAULT_FONT_FACE,
                 0x80,
             ),
+            cvns: CvnsSettings::from_ini(bytes),
         }
     }
     pub fn font_face(&self) -> &[u8] {
@@ -196,26 +202,10 @@ impl SettingsHost {
         self.font_face = face.to_vec();
         Ok(())
     }
-    /// 0x22de / 0x14007c2d0: SP-4 selects write/read, SP-8 is a string reference.
-    /// Read writes the global font name in the game encoding and result 0 = 1. A write only
-    /// changes the global face used by font objects created afterwards.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x2d5 | 0x2de..=0x2e4 | 0x2e6..=0x2e9 | 0x2f8 | 0x2f9))) =
-            vm.pending_system()
-        else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
-
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
-        self.handle_with_font_name(call, None)
-    }
 
     pub(crate) fn handle_with_font_name(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         display_name: Option<&[u8]>,
     ) -> Result<(), DecodeError> {
         let pc = call.pc;

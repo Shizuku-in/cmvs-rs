@@ -1,6 +1,6 @@
 //! Byte-preserving INI updates; original game files are never written.
 use crate::FormatError;
-use crate::filesystem::File;
+use crate::filesystem::HostFs;
 use std::{
     io::{self, Read},
     path::Path,
@@ -71,8 +71,8 @@ impl Configuration {
         }
         Ok(Self(bytes))
     }
-    pub fn read(path: &Path) -> io::Result<Option<Self>> {
-        let file = match File::open(path) {
+    pub fn read_with_fs(fs: &dyn HostFs, path: &Path) -> io::Result<Option<Self>> {
+        let file = match fs.open_read(path) {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
@@ -81,6 +81,11 @@ impl Configuration {
         file.take(MAX_CONFIGURATION as u64 + 1)
             .read_to_end(&mut bytes)?;
         Self::new(bytes).map(Some).map_err(io::Error::other)
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn read(path: &Path) -> io::Result<Option<Self>> {
+        Self::read_with_fs(&crate::filesystem::StdFs, path)
     }
     pub fn bytes(&self) -> &[u8] {
         &self.0
@@ -93,17 +98,16 @@ impl Configuration {
         // ASUKIMI 0x404e00 and Harouse 0x40538c select WINDOW_SIZE; Harouse's
         // 0x40d0f0 sets the logical device size. Evidence: docs/games/{asukimi,harouse}.
         // cmvs-20070119 0x403f60 has the same branches (docs/games/puriring).
-        if profile.is_inspected_20070119()
-            || profile.is_inspected_20071117()
-            || profile.is_inspected_20080719()
-            || profile.is_inspected_20080903()
-            || profile.is_inspected_20090815()
-            || profile.is_inspected_20100314()
-        {
+        if profile.uses_legacy_window_size_ini() {
             let value = |section, key, default| {
                 crate::save_menu::profile_int(&self.0, section, key, default) as u32
             };
-            let pixels = match value("CMVS_SYSTEM_MAIN", "WINDOW_SIZE", 1) {
+            let section = if profile.is_cvns() {
+                "CVNS_SYSTEM_MAIN"
+            } else {
+                "CMVS_SYSTEM_MAIN"
+            };
+            let pixels = match value(section, "WINDOW_SIZE", 1) {
                 0 => [640, 480],
                 2 => [1024, 768],
                 9 => [

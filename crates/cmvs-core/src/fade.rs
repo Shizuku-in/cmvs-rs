@@ -1,4 +1,8 @@
-//! Engine +4616 full-screen color fade; addresses refer to the documented binary hash.
+//! Full-screen color fades and input-aware effect skipping.
+//!
+//! Fade state advances with frame time and is consumed by [`crate::scene_render`].
+
+// Engine +4616 holds the full-screen color fade.
 use crate::{
     bytecode::DecodeError,
     dispatch::{Call, Flow},
@@ -127,21 +131,7 @@ impl Default for SkipGate {
     }
 }
 
-/// 0x22d1 / 0x14007bcf0: nonzero SP-4 sets EFFECT_USE (+1508) to bool(SP-8) through
-/// 0x140091040, which also checks popup menu item 32773 (no native menu is modeled); zero
-/// SP-4 copies it to system result 0 without reading SP-8. Both pop 8 bytes.
-pub fn try_handle_effects(vm: &mut Machine<'_>, effects: &mut bool) -> Result<bool, DecodeError> {
-    let Some((pc, 0x2d1)) = vm.pending_system() else {
-        return Ok(false);
-    };
-    handle_effects(&mut Call::new(vm, pc, 0x2d1), effects)?;
-    Ok(true)
-}
-
-pub(crate) fn handle_effects(
-    call: &mut Call<'_, '_>,
-    effects: &mut bool,
-) -> Result<(), DecodeError> {
+pub(crate) fn handle_effects(call: &mut Call<'_>, effects: &mut bool) -> Result<(), DecodeError> {
     let mode = call.argument(4, "mode")?;
     let value = if mode != 0 {
         Some(call.argument(8, "value")? != 0)
@@ -173,7 +163,7 @@ impl FadeHost {
     /// system result 0 to 1 and returns 0xc004; waiting returns 0xa000 with result 0.
     pub fn try_wait(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Option<crate::machine::Step>, DecodeError> {
@@ -186,7 +176,7 @@ impl FadeHost {
 
     pub(crate) fn handle_wait(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Flow, DecodeError> {
@@ -242,18 +232,8 @@ impl FadeHost {
             self.current = None;
         }
     }
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(command, 0x220..=0x223) {
-            return Ok(false);
-        }
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
 
         let fail = |why| error(pc, command + 0x2000, why);

@@ -1,0 +1,20 @@
+[package]
+license.workspace = true
+name = "cmvs-patch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Offline fan-patch script and asset converters for supported CMVS games"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "cmvs-patch"
+path = "src/main.rs"
+
+[dependencies]
+cmvs-core = { path = "../cmvs-core" }
+encoding_rs.workspace = true
+png.workspace = true

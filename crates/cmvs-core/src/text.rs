@@ -1,23 +1,12 @@
 //! Stateless string utility commands of the 0x20f0..0x20ff group; only verified ones are handled.
-use crate::{
-    TextEncoding, bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine,
-    vm::StringRef,
-};
+use crate::{TextEncoding, bytecode::DecodeError, dispatch::Call, evaluate::error, vm::StringRef};
 
-pub fn try_handle(vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-    let Some((pc, command @ (0xf1 | 0xf3 | 0xf8 | 0xfc))) = vm.pending_system() else {
-        return Ok(false);
-    };
-    handle(&mut Call::new(vm, pc, command))?;
-    Ok(true)
-}
-
-pub(crate) fn handle(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+pub(crate) fn handle(call: &mut Call<'_>) -> Result<(), DecodeError> {
     match call.command {
         0xf1 => compare(call),
         0xf3 => substring(call),
         0xf8 => strlen(call),
-        0xfc => format(call),
+        0xfc | 0x4fb => format(call),
         _ => Err(call.error("unregistered string utility")),
     }
 }
@@ -25,7 +14,7 @@ pub(crate) fn handle(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
 /// 0x20f3 / 0x1400744d0: byte offset/count, copying complete encoded pairs.
 /// Result 0 counts characters copied, not bytes. An empty range leaves the
 /// destination untouched, including when the source already ends at the offset.
-fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+fn substring(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let pc = call.pc;
     let (target, source, start, count) = (
         call.argument(4, "destination")?,
@@ -33,7 +22,7 @@ fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         call.argument(12, "byte offset")? as i32,
         call.argument(16, "byte count")? as i32,
     );
-    let slot = bank_slot(target).ok_or_else(|| {
+    let slot = bank_slot_for(call.vm.state(), target).ok_or_else(|| {
         error(
             pc,
             0x20f3,
@@ -78,7 +67,7 @@ fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         position = position.wrapping_add(width as i32);
         copied += 1;
     }
-    if copied != 0 && bank_slot(source) == Some(slot) {
+    if copied != 0 && bank_slot_for(call.vm.state(), source) == Some(slot) {
         return Err(error(
             pc,
             0x20f3,
@@ -101,7 +90,7 @@ fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
 
 /// 0x20f1 / 0x140074400: system result 0 = 1 when the SP-4 and SP-8 strings are equal under
 /// 0x140008140, else 0; returns 0x4008.
-fn compare(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+fn compare(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let pc = call.pc;
     let (first, second) = (
         call.argument(4, "first string")?,
@@ -123,7 +112,7 @@ fn compare(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
 /// byte exactly, any other byte compares with a-z folded to A-Z; the second string must
 /// end where the first does. A trailing lead byte whose pair matches steps past the first
 /// string's terminator, which is not modeled.
-fn equal_ignoring_ascii_case(
+pub(crate) fn equal_ignoring_ascii_case(
     encoding: TextEncoding,
     first: &[u8],
     second: &[u8],
@@ -153,7 +142,7 @@ fn equal_ignoring_ascii_case(
 }
 
 /// 0x20f8 / 0x1400747c0: system result 0 = lstrlenA of the SP-4 string reference.
-fn strlen(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+fn strlen(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let raw = call.argument(4, "string")?;
     let length = call.vm.resolve_string(raw)?.len() as u32;
     call.complete(0x4004)?;
@@ -169,29 +158,35 @@ fn strlen(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
 /// result. The original writes unbounded into the destination; only a string-bank slot
 /// (1024 bytes, index > 127 meaning slot 0 as in 0x14006b850) is modeled, and it must not
 /// be the format's own slot.
-fn format(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+fn format(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let pc = call.pc;
+    let op = call.command + 0x2000;
     let (target, pattern, value) = (
         call.argument(4, "destination")?,
         call.argument(8, "format string")?,
         call.argument(12, "format value")?,
     );
-    let slot = bank_slot(target).ok_or_else(|| {
+    let slot = bank_slot_for(call.vm.state(), target).ok_or_else(|| {
         error(
             pc,
-            0x20fc,
+            op,
             "format destination outside the string bank is not modeled",
         )
     })?;
-    if bank_slot(pattern) == Some(slot) {
-        return Err(error(pc, 0x20fc, "format string overlaps its destination"));
+    if bank_slot_for(call.vm.state(), pattern) == Some(slot) {
+        return Err(error(pc, op, "format string overlaps its destination"));
     }
     let bytes = call.vm.resolve_string(pattern)?;
-    let output = sprintf(&bytes, value).map_err(|why| error(pc, 0x20fc, why))?;
+    let output = if call.command == 0x4fb {
+        cvns_sprintf(&bytes, value, |raw| call.vm.resolve_string(raw))
+            .map_err(|why| error(pc, op, why))?
+    } else {
+        sprintf(&bytes, value).map_err(|why| error(pc, op, why))?
+    };
     if output.len() >= 1024 {
         return Err(error(
             pc,
-            0x20fc,
+            op,
             "formatted string overflows its 1024-byte slot",
         ));
     }
@@ -201,6 +196,18 @@ fn format(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         .set_string(slot, &output)
         .expect("slot and length checked above");
     Ok(())
+}
+
+/// String-bank slot of a reference bounded by `state.string_slots()` (wrapping overflow to 0).
+pub(crate) fn bank_slot_for(state: &crate::evaluate::State, raw: u32) -> Option<u32> {
+    match StringRef::decode(raw) {
+        StringRef::StringBank(index) => Some(if index >= state.string_slots() {
+            0
+        } else {
+            index
+        }),
+        _ => None,
+    }
 }
 
 /// String-bank slot of a reference; 0x14006b850 maps indexes above 127 to slot 0.
@@ -269,6 +276,119 @@ fn sprintf(pattern: &[u8], value: u32) -> Result<Vec<u8>, &'static str> {
             }
             None => return Err("format ends in %; the original reads past the terminator"),
             Some(_) => return Err("format conversion not implemented"),
+        }
+    }
+    Ok(output)
+}
+
+fn cvns_sprintf(
+    pattern: &[u8],
+    value: u32,
+    resolve_str: impl Fn(u32) -> Result<Vec<u8>, DecodeError>,
+) -> Result<Vec<u8>, &'static str> {
+    let mut output = Vec::new();
+    let mut used = false;
+    let mut i = 0;
+    while i < pattern.len() {
+        let byte = pattern[i];
+        i += 1;
+        if byte != b'%' {
+            output.push(byte);
+            continue;
+        }
+        let Some(&spec) = pattern.get(i) else {
+            return Err("format ends in %; the original reads past the terminator");
+        };
+        i += 1;
+        if spec == b'%' {
+            output.push(b'%');
+            continue;
+        }
+        if used {
+            return Err("a second format argument reads an undefined register");
+        }
+        used = true;
+        let fullwidth = spec.is_ascii_uppercase();
+        let mut sign_mode = 0u8;
+        if matches!(pattern.get(i), Some(b'+' | b'-')) {
+            sign_mode = if pattern[i] == b'+' { 1 } else { 2 };
+            i += 1;
+        }
+        let mut width = 0usize;
+        while let Some(&digit @ b'0'..=b'9') = pattern.get(i) {
+            width = width * 10 + usize::from(digit - b'0');
+            i += 1;
+        }
+        let mut formatted = Vec::new();
+        match spec.to_ascii_lowercase() {
+            b'z' => {
+                let s = format!("{value:0width$}");
+                formatted.extend_from_slice(s.as_bytes());
+            }
+            b'd' => {
+                let signed = value as i32;
+                let mag = signed.unsigned_abs();
+                let mut body = if width > 0 {
+                    format!("{mag:>width$}")
+                } else {
+                    mag.to_string()
+                };
+                if sign_mode != 0 {
+                    let sign = if signed < 0 {
+                        '-'
+                    } else if sign_mode == 1 {
+                        '+'
+                    } else {
+                        ' '
+                    };
+                    if let Some(pos) = body.find(|c: char| c != ' ')
+                        && pos > 0
+                    {
+                        body.replace_range(pos - 1..pos, &sign.to_string());
+                    } else if signed < 0 || sign_mode == 1 {
+                        body.insert(0, sign);
+                    }
+                } else if signed < 0 {
+                    body.insert(0, '-');
+                }
+                formatted.extend_from_slice(body.as_bytes());
+            }
+            b'u' => {
+                if width > 0 {
+                    formatted.extend_from_slice(format!("{value:>width$}").as_bytes());
+                } else {
+                    formatted.extend_from_slice(value.to_string().as_bytes());
+                }
+            }
+            b'x' => {
+                let s = if fullwidth || spec == b'X' {
+                    format!("{value:>width$X}")
+                } else {
+                    format!("{value:>width$x}")
+                };
+                formatted.extend_from_slice(s.as_bytes());
+            }
+            b'c' => formatted.push(value as u8),
+            b's' => {
+                let s = resolve_str(value).map_err(|_| "failed to resolve %s string argument")?;
+                formatted.extend_from_slice(&s);
+            }
+            _ => return Err("CVNS format conversion not implemented"),
+        }
+        if fullwidth {
+            for b in formatted {
+                match b {
+                    b' ' => output.extend_from_slice(&[0x81, 0x40]),
+                    b'+' => output.extend_from_slice(&[0x81, 0x7b]),
+                    b'-' => output.extend_from_slice(&[0x81, 0x7c]),
+                    b'0'..=b'9' => output.extend_from_slice(&[0x82, 0x4f + (b - b'0')]),
+                    b'A'..=b'Z' => output.extend_from_slice(&[0x82, 0x60 + (b - b'A')]),
+                    b'a'..=b'z' => output.extend_from_slice(&[0x82, 0x81 + (b - b'a')]),
+                    other => output.push(other),
+                }
+            }
+        } else {
+            output.extend_from_slice(&formatted);
         }
     }
     Ok(output)

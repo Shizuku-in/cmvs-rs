@@ -1,10 +1,8 @@
 //! GPU execution of validated CMVS draw commands, with lazy logical-frame readback.
 use cmvs_core::{
-    raster::{CacheKey, RgbaImage},
-    scene_render::{
-        Layer, RenderFrame,
-        shader::{ShaderBlend, shader_draw},
-    },
+    render::raster::CacheKey, render::raster::RgbaImage, render::scene_render::Layer,
+    render::scene_render::RenderFrame, render::scene_render::shader::ShaderBlend,
+    render::scene_render::shader::shader_draw,
 };
 use std::{
     collections::HashMap,
@@ -15,7 +13,7 @@ pub use wgpu;
 mod bindings;
 mod textures;
 use textures::{Shared, Texture, TexturePool, Weak};
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const CACHE_LIMIT: usize = 128 * 1024 * 1024;
 /// Movie frames live apart from the content cache so replaced frames never evict
 /// static images. Each player shows one frame (three scene slots and the full-screen
@@ -134,7 +132,9 @@ pub struct Renderer {
     frames: HashMap<u64, Cached>,
     canvases: TexturePool,
     movie_textures: TexturePool,
+    white: Shared<Texture>,
     clock: u64,
+    frame_start: u64,
     errors: Arc<Mutex<Option<String>>>,
     pub uploaded_bytes: u64,
 }
@@ -179,7 +179,7 @@ impl Renderer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: true,
                 min_binding_size: wgpu::BufferSize::new(
-                    (cmvs_core::scene_render::shader::PARAM_FLOATS * 4) as u64,
+                    (cmvs_core::render::scene_render::shader::PARAM_FLOATS * 4) as u64,
                 ),
             },
             count: None,
@@ -253,6 +253,21 @@ impl Renderer {
                 cache: None,
             })
         });
+        let white = Texture::new(
+            &device,
+            [1, 1],
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        queue.write_texture(
+            white.texture.as_image_copy(),
+            &[255u8; 4],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            white.texture.size(),
+        );
         let bindings = bindings::DrawBindings::new(&device);
         let renderer = Self {
             device,
@@ -278,7 +293,9 @@ impl Renderer {
                     | wgpu::TextureUsages::COPY_DST
                     | wgpu::TextureUsages::COPY_SRC,
             ),
+            white,
             clock: 0,
+            frame_start: 0,
             errors,
             uploaded_bytes: 0,
         };
@@ -292,13 +309,6 @@ impl Renderer {
         Ok(())
     }
     fn texture(&mut self, image: &RgbaImage) -> Result<Shared<Texture>> {
-        self.with_texture(image, Shared::clone)
-    }
-    fn with_texture<T>(
-        &mut self,
-        image: &RgbaImage,
-        use_texture: impl FnOnce(&Shared<Texture>) -> T,
-    ) -> Result<T> {
         let [w, h] = [image.width(), image.height()];
         if w > self.device.limits().max_texture_dimension_2d
             || h > self.device.limits().max_texture_dimension_2d
@@ -306,26 +316,29 @@ impl Renderer {
             return Err("GPU image exceeds device texture limits".into());
         }
         let key = match image.cache_key() {
-            CacheKey::Frame(id) => return Ok(use_texture(&self.frame_texture(id, image))),
+            CacheKey::Frame(id) => return Ok(self.frame_texture(id, image)),
             CacheKey::Content(digest, w, h) => (digest, w, h),
         };
         self.clock += 1;
         if let Some(cached) = self.cache.get_mut(&key) {
             cached.used = self.clock;
-            return Ok(use_texture(&cached.target));
+            return Ok(Shared::clone(&cached.target));
         }
         let bytes = image.pixels().len();
-        while self.cache_bytes + bytes > CACHE_LIMIT && !self.cache.is_empty() {
-            let oldest = *self
+        while self.cache_bytes + bytes > CACHE_LIMIT {
+            let Some(oldest) = self
                 .cache
                 .iter()
+                .filter(|(_, c)| c.used <= self.frame_start)
                 .min_by_key(|(_, c)| c.used)
-                .expect("nonempty cache")
-                .0;
+                .map(|(key, _)| *key)
+            else {
+                break;
+            };
             self.cache_bytes -= self.cache.remove(&oldest).expect("cache entry").bytes;
         }
         let texture = self.upload(image);
-        if bytes <= CACHE_LIMIT {
+        if bytes <= CACHE_LIMIT && self.cache_bytes + bytes <= CACHE_LIMIT {
             self.cache.insert(
                 key,
                 Cached {
@@ -336,7 +349,17 @@ impl Renderer {
             );
             self.cache_bytes += bytes;
         }
-        Ok(use_texture(&texture))
+        Ok(texture)
+    }
+    fn touch(&mut self, image: &RgbaImage) {
+        let cached = match image.cache_key() {
+            CacheKey::Frame(id) => self.frames.get_mut(&id),
+            CacheKey::Content(digest, w, h) => self.cache.get_mut(&(digest, w, h)),
+        };
+        if let Some(cached) = cached {
+            self.clock += 1;
+            cached.used = self.clock;
+        }
     }
     fn frame_texture(&mut self, id: u64, image: &RgbaImage) -> Shared<Texture> {
         self.clock += 1;
@@ -344,13 +367,16 @@ impl Renderer {
             cached.used = self.clock;
             return Shared::clone(&cached.target);
         }
-        if self.frames.len() >= FRAME_TEXTURES {
-            let oldest = *self
+        while self.frames.len() >= FRAME_TEXTURES {
+            let Some(oldest) = self
                 .frames
                 .iter()
+                .filter(|(_, c)| c.used <= self.frame_start)
                 .min_by_key(|(_, c)| c.used)
-                .expect("nonempty frames")
-                .0;
+                .map(|(id, _)| *id)
+            else {
+                break;
+            };
             self.frames.remove(&oldest);
         }
         let texture = self
@@ -393,10 +419,42 @@ impl Renderer {
         self.uploaded_bytes += image.pixels().len() as u64;
     }
     pub fn render(&mut self, frame: &RenderFrame<'_>) -> Result<GpuFrame> {
+        if let Some(image) = frame.precomposited() {
+            return self.render_precomposited(image);
+        }
+        if frame.cvns_source_exceeds(self.device.limits().max_texture_dimension_2d) {
+            return self.render_precomposited(&frame.render_cpu()?);
+        }
         self.compose(frame.dimensions(), frame.clear_color(), frame.commands())
+    }
+    /// Uploads a CPU-composited scene (e.g. CVNS) into a transient pooled texture so
+    /// animated frames never hash or evict the static content cache.
+    fn render_precomposited(&mut self, image: &RgbaImage) -> Result<GpuFrame> {
+        self.check()?;
+        let [w, h] = [image.width(), image.height()];
+        if w == 0
+            || h == 0
+            || w > self.device.limits().max_texture_dimension_2d
+            || h > self.device.limits().max_texture_dimension_2d
+        {
+            return Err("invalid GPU canvas size".into());
+        }
+        self.bindings.clear();
+        let target = self.movie_textures.acquire(&self.device, [w, h]);
+        self.write_image(&target, image);
+        if let Some(scaling) = &mut self.scaling {
+            scaling.prune();
+        }
+        Ok(GpuFrame {
+            target,
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+            size: [w, h],
+        })
     }
     /// Preserves the source alpha for the desktop checkerboard preview path.
     pub fn preview_image(&mut self, image: &RgbaImage) -> Result<GpuFrame> {
+        self.frame_start = self.clock;
         self.bindings.clear();
         let target = self.texture(image)?;
         if let Some(scaling) = &mut self.scaling {
@@ -416,6 +474,7 @@ impl Renderer {
         size: [u32; 2],
         linear: bool,
     ) -> Result<GpuFrame> {
+        self.frame_start = self.clock;
         present::scale_image(self, image, size, linear)
     }
     fn compose(
@@ -432,16 +491,23 @@ impl Renderer {
         {
             return Err("invalid GPU canvas size".into());
         }
+        self.frame_start = self.clock;
         self.bindings.prepare(&self.device, commands.len())?;
         let target = self.canvases.acquire(&self.device, size);
-        let white = RgbaImage::new(1, 1, vec![255; 4])?;
-        let dummy = self.texture(&white)?;
+        let dummy = Shared::clone(&self.white);
         let mut draws = Vec::with_capacity(commands.len());
-        // Pin every input until submission: an eviction later in this scene must
-        // not recycle a movie texture already referenced by an earlier draw.
-        let mut inputs = Vec::new();
-        for (index, command) in commands.iter().enumerate() {
+        let mut resolved = Vec::with_capacity(commands.len());
+        for command in commands {
             let draw = shader_draw(command, size);
+            for image in draw.textures.into_iter().flatten() {
+                self.touch(image);
+            }
+            resolved.push(draw);
+        }
+        // Pin every input until submission: an eviction or transient uncached upload
+        // must remain alive until the command encoder is submitted.
+        let mut inputs = HashMap::new();
+        for (index, draw) in resolved.into_iter().enumerate() {
             let mode = match draw.blend {
                 ShaderBlend::Replace => 0,
                 ShaderBlend::Alpha => 1,
@@ -450,12 +516,16 @@ impl Renderer {
             let mut views = [dummy.view.clone(), dummy.view.clone(), dummy.view.clone()];
             for (view, image) in views.iter_mut().zip(draw.textures) {
                 if let Some(image) = image {
-                    *view = self.with_texture(image, |texture| {
-                        if image.frame_id().is_some() {
-                            inputs.push(Shared::clone(texture));
+                    let texture = match inputs.entry(image.cache_key()) {
+                        std::collections::hash_map::Entry::Occupied(entry) => {
+                            self.touch(image);
+                            entry.into_mut()
                         }
-                        texture.view.clone()
-                    })?;
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(self.texture(image)?)
+                        }
+                    };
+                    *view = texture.view.clone();
                 }
             }
             let offset = self.bindings.write(index, draw.used_params());
@@ -495,11 +565,21 @@ impl Renderer {
         self.bindings.upload(&self.queue);
         self.queue.submit([encoder.finish()]);
         drop(inputs);
+        while self.frames.len() > FRAME_TEXTURES {
+            let oldest = self
+                .frames
+                .iter()
+                .min_by_key(|(_, c)| c.used)
+                .map(|(id, _)| *id)
+                .expect("frame entry");
+            self.frames.remove(&oldest);
+        }
         self.bindings.retain(
             self.cache
                 .values()
                 .chain(self.frames.values())
-                .map(|c| &c.target.view),
+                .map(|c| &c.target.view)
+                .chain(std::iter::once(&self.white.view)),
         );
         if let Some(scaling) = &mut self.scaling {
             scaling.prune();
@@ -521,9 +601,9 @@ pub use present::Presenter;
 mod tests {
     use super::*;
     use cmvs_core::{
-        scene::{DrawState, ObjectImage, SceneHost, SceneObject},
-        scene_render::Blend,
-        scene_render::prepare_scene,
+        render::scene::DrawState, render::scene::ObjectImage, render::scene::SceneHost,
+        render::scene::SceneObject, render::scene_render::Blend,
+        render::scene_render::prepare_scene,
     };
     #[test]
     #[ignore = "requires a native GPU adapter; run explicitly"]
@@ -554,11 +634,11 @@ mod tests {
             (1.0, 60.0, 1, [u32::MAX, u32::MAX, 8, 6]),
         ] {
             let mut draw = DrawState::default();
-            draw.words[1] = mode;
-            draw.words[2..6].copy_from_slice(&rect);
-            draw.words[8..10].copy_from_slice(&[2, 1]);
-            draw.words[18..20].fill(scale.to_bits());
-            draw.words[20] = angle.to_bits();
+            draw.set_blend_mode(mode);
+            draw.set_source_rect(rect);
+            draw.set_position_raw([2, 1]);
+            draw.set_scale([scale; 2]);
+            draw.set_rotation_hundredths((angle * 100.0) as i32);
             let object = SceneObject {
                 image: Some(ObjectImage {
                     name: Vec::new(),
@@ -635,7 +715,7 @@ mod tests {
                 .unwrap(),
             ..image.clone()
         };
-        let transition = cmvs_core::scene::MaskTransition {
+        let transition = cmvs_core::render::scene::MaskTransition {
             put: true,
             slot: 0,
             ramp: 100,
@@ -733,7 +813,7 @@ mod tests {
                 }
             }
         }
-        let fade = cmvs_core::fade::Fade {
+        let fade = cmvs_core::render::fade::Fade {
             direction: 0,
             color: 0xff804020,
             duration: 100,

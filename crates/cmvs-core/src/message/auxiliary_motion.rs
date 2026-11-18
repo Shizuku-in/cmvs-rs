@@ -7,7 +7,7 @@ use crate::{
 impl MessageHost {
     pub(super) fn handle_auxiliary_motion(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
     ) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let fail = |why| error(pc, command + 0x2000, why);

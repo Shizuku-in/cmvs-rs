@@ -67,12 +67,12 @@ fn lines(glyphs: impl Iterator<Item = (u16, i32)>) -> Vec<String> {
 pub fn shown_texts(session: &Session<'_>) -> Vec<String> {
     let messages = session.startup().messages();
     let mut texts = Vec::new();
-    for slot in 0..cmvs_core::message::TEXT_OBJECTS {
+    for slot in 0..cmvs_core::render::message::TEXT_OBJECTS {
         if let Some(text) = messages.text(slot).filter(|t| t.visible) {
             texts.extend(lines(text.glyphs.iter().map(|g| (g.code, g.position[1]))));
         }
     }
-    for slot in 0..cmvs_core::message::AUXILIARY_TEXTS {
+    for slot in 0..cmvs_core::render::message::AUXILIARY_TEXTS {
         if let Some(text) = messages.auxiliary_text(slot) {
             texts.extend(lines(text.glyphs.iter().map(|g| (g.code, g.position[1]))));
         }
@@ -205,6 +205,11 @@ impl Scenario {
     }
     pub fn in_scenario(&self) -> bool {
         self.in_scenario
+    }
+    /// Carries the ambient HUD button groups already observed before a save point into a
+    /// resumed scenario so they are not mistaken for a choice while the first line prints.
+    pub fn inherit_ambient(&mut self, prior: &Self) {
+        self.ambient.extend(&prior.ambient);
     }
     /// Advances the current message wait.
     pub fn advance(&mut self, session: &mut Session<'_>) -> Result<(), Stop> {
@@ -345,14 +350,8 @@ impl Scenario {
                 let Some(group) = crate::controls::group(session.startup(), shape.slot) else {
                     return Err(Stop::Error("choice group vanished".into()));
                 };
-                let enabled = group
-                    .buttons
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| group.enabled(*i))
-                    .map(|(i, _)| i)
-                    .collect();
-                let buttons = group.buttons.len();
+                let enabled = (0..group.len()).filter(|&i| group.enabled(i)).collect();
+                let buttons = group.len();
                 let texts = shown_texts(session);
                 return Ok(Some(Event::Choice(Choice {
                     observation: o,
@@ -375,7 +374,7 @@ impl Scenario {
 
 /// Starts holding skip; false when key.cfg binds no key to it.
 fn hold_skip(session: &mut Session<'_>) -> bool {
-    match crate::device::skip_code(session.bindings()) {
+    match crate::device::skip_code(session.bindings(), session.is_cvns()) {
         Some(code) => {
             session.hold(vec![code]);
             true
@@ -395,11 +394,33 @@ pub fn view_digest(session: &Session<'_>, o: &Observation) -> String {
         .filter(|(_, object)| object.shown)
         .map(|(slot, _)| *slot)
         .collect();
-    let windows: Vec<bool> = (0..cmvs_core::message::MESSAGE_WINDOWS)
-        .map(|slot| run.messages().window(slot).is_some_and(|w| w.visible))
+    let windows: Vec<bool> = (0..cmvs_core::render::message::MESSAGE_WINDOWS)
+        .map(|slot| run.messages().window_visible(slot))
         .collect();
-    let text = format!("{} {objects:?} {windows:?}", o.page.digest());
-    cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(text.as_bytes()))[..16].to_owned()
+    let cvns_sprites: Vec<_> = run
+        .scene()
+        .cvns()
+        .into_iter()
+        .flat_map(|cvns| cvns.sprites.iter().enumerate())
+        .filter_map(|(slot, sp)| {
+            sp.as_ref()
+                .filter(|s| s.visible)
+                .map(|s| (slot, s.image_slot, s.x, s.y, s.w, s.h, s.src_rect, s.alpha))
+        })
+        .collect();
+    let cvns_msgs: Vec<_> = run
+        .messages()
+        .cvns()
+        .into_iter()
+        .flat_map(|cvns| cvns.messages.iter().enumerate())
+        .filter_map(|(slot, m)| m.as_ref().filter(|m| m.visible).map(|m| (slot, m.x, m.y)))
+        .collect();
+    let text = format!(
+        "{} {objects:?} {windows:?} {cvns_sprites:?} {cvns_msgs:?}",
+        o.page.digest()
+    );
+    cmvs_core::format::digest::to_hex(&cmvs_core::format::digest::sha256(text.as_bytes()))[..16]
+        .to_owned()
 }
 
 /// Where a message wait stood, and a digest of the newest backlog entry (its text).
@@ -419,10 +440,10 @@ impl WaitPoint {
             .entries()
             .front()
             .map(|entry| entry.strings.concat());
-        let text =
-            cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(format!("{newest:?}").as_bytes()))
-                [..12]
-                .to_owned();
+        let text = cmvs_core::format::digest::to_hex(&cmvs_core::format::digest::sha256(
+            format!("{newest:?}").as_bytes(),
+        ))[..12]
+            .to_owned();
         Self {
             script: o.script.escape_ascii().to_string(),
             pc: o.pc,
@@ -502,5 +523,35 @@ mod tests {
         assert_eq!(text, "\u{3042}\u{ff71}A");
         let split = lines([(0x0041u16, 0), (0x0042, 0), (0x0043, 30)].into_iter());
         assert_eq!(split, ["AB", "C"]);
+    }
+
+    #[test]
+    fn inherit_ambient_preserves_observed_hud_groups() {
+        let sig = PageSignature {
+            script: b"menu.pss".to_vec(),
+            groups: Vec::new(),
+        };
+        let make = |sig: PageSignature| Scenario {
+            start: sig,
+            skip: false,
+            ambient: HashSet::new(),
+            answered: HashSet::new(),
+            pending: Vec::new(),
+            pending_frames: 0,
+            settle: Settle::new(STABLE_FRAMES),
+            quiet_since: 0,
+            in_scenario: true,
+            advancing_wait: false,
+            advances: 0,
+            nudges: 0,
+        };
+        let mut prior = make(sig.clone());
+        let hud = (1usize, [0xabu8; 32]);
+        prior.ambient.insert(hud);
+
+        let mut resumed = make(sig);
+        assert!(!resumed.ambient.contains(&hud));
+        resumed.inherit_ambient(&prior);
+        assert!(resumed.ambient.contains(&hud));
     }
 }

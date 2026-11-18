@@ -1,0 +1,143 @@
+use crate::support::shared_state::SharedState;
+use cmvs_core::{format::ps3::Script, runtime::VmTimers, vm::machine::Machine, vm::machine::Step};
+
+fn command(code: &mut Vec<u8>, op: u16, slot: u32) {
+    code.extend(0x440u16.to_le_bytes());
+    code.extend(4u16.to_le_bytes());
+    code.extend(slot.to_le_bytes());
+    code.extend(op.to_le_bytes());
+}
+fn program(code: &[u8]) -> Script {
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48u32,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(code.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    Script::decode(&raw).unwrap()
+}
+fn pending(vm: &mut Machine) {
+    while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+}
+
+#[test]
+fn reset_is_local_query_returns_raw_word_and_commands_do_not_advance_time() {
+    let mut code = vec![];
+    command(&mut code, 0x200b, 9);
+    command(&mut code, 0x200c, 9);
+    command(&mut code, 0x200c, 0);
+    let program = program(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut timers = VmTimers::default();
+    timers.begin_run(0x80000001);
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    pending(&mut vm);
+    timers.shared_state(&mut vm).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(123));
+    assert_eq!(timers.values()[9], 0);
+    for expected in [0, 0x80000001] {
+        pending(&mut vm);
+        let pc = vm.pc();
+        timers.shared_state(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+    assert_eq!(&timers.values()[..9], &[0x80000001; 9]);
+}
+
+#[test]
+fn stopwatch_preserves_stack_and_other_results_and_wraps_without_resetting_slots() {
+    let mut code = vec![];
+    // Keep a sentinel on the stack: neither stopwatch command consumes it.
+    command(&mut code, 0x200f, 0x12345678);
+    for op in [0x200eu16, 0x200f, 0x200f, 0x200e, 0x200f] {
+        code.extend(op.to_le_bytes());
+    }
+    let program = program(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut timers = VmTimers::default();
+    timers.begin_run(u32::MAX - 2);
+    vm.state_mut().set_system_integer(4, 99).unwrap();
+    // Before the first mark, the constructor's zero mark is used.
+    pending(&mut vm);
+    timers.shared_state(&mut vm).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX - 2));
+    pending(&mut vm);
+    timers.shared_state(&mut vm).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX - 2));
+    timers.begin_run(10);
+    for _ in 0..2 {
+        pending(&mut vm);
+        let pc = vm.pc();
+        timers.shared_state(&mut vm).unwrap();
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.state().system_integer(0), Some(10));
+        assert_eq!(vm.state().system_integer(4), Some(99));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x12345678);
+    }
+    pending(&mut vm);
+    timers.shared_state(&mut vm).unwrap();
+    pending(&mut vm);
+    timers.shared_state(&mut vm).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    assert_eq!(timers.clock(), 7);
+    assert_eq!(timers.values(), &[7; 10]);
+}
+
+#[test]
+fn frame_clock_and_delta_queries_follow_the_last_run_entry() {
+    let mut code = vec![];
+    for op in [0x2008u16, 0x2009, 0x2008, 0x2009] {
+        code.extend(op.to_le_bytes());
+    }
+    let script = program(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut timers = VmTimers::default();
+    let query = |vm: &mut Machine, timers: &mut VmTimers| {
+        pending(vm);
+        assert!(timers.shared_state(vm).unwrap());
+        vm.state().system_integer(0)
+    };
+    timers.begin_run(16);
+    assert_eq!(query(&mut vm, &mut timers), Some(16));
+    assert_eq!(query(&mut vm, &mut timers), Some(16));
+    timers.begin_run(u32::MAX);
+    assert_eq!(query(&mut vm, &mut timers), Some(15));
+    assert_eq!(query(&mut vm, &mut timers), Some(u32::MAX));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn uptime_seconds_truncates_wraps_and_preserves_stack_and_other_results() {
+    let mut code = vec![];
+    command(&mut code, 0x2007, 0x12345678);
+    for _ in 0..4 {
+        code.extend(0x2007u16.to_le_bytes());
+    }
+    let script = program(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut timers = VmTimers::default();
+    vm.state_mut().set_system_integer(1, 99).unwrap();
+    for (delta, expected) in [(999, 0), (1, 1), (0, 1), (u32::MAX - 1000, 4294967), (2, 0)] {
+        timers.begin_run(delta);
+        pending(&mut vm);
+        assert!(timers.shared_state(&mut vm).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.state().system_integer(1), Some(99));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x12345678);
+    }
+}

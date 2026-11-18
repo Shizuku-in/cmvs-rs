@@ -79,11 +79,11 @@ impl LegacyFlakes {
 impl SceneHost {
     pub(crate) fn create_legacy_flakes(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
         backend: Option<&mut dyn AudioBackend>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         let reference = call.argument(8, "flake image")?;
         let name = call.vm.resolve_string(reference)?;
@@ -205,7 +205,7 @@ mod tests {
         let records = scene.saved_effect_pools_with_legacy(true).unwrap();
         struct NoImage;
         impl ImageSource for NoImage {
-            fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+            fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
                 Ok(Some(b"NONE".to_vec()))
             }
         }
@@ -285,12 +285,12 @@ pub(crate) mod dispatch_tests {
         raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
         Script::decode(&raw).unwrap()
     }
-    pub(crate) fn pending(vm: &mut Machine<'_>) {
+    pub(crate) fn pending(vm: &mut Machine) {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
     }
     struct Images(usize, bool);
     impl ImageSource for Images {
-        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             self.0 += 1;
             if self.1 {
                 Err("read failed".into())

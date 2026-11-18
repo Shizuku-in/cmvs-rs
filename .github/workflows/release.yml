@@ -87,7 +87,10 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           echo "/usr/local/vitasdk/bin" >> "$GITHUB_PATH"
       - name: Build player
-        run: sh platforms/psvita/scripts/build-player.sh
+        env:
+          TAG: ${{ github.ref_name }}
+          CMVS_APP_VER: ${{ vars.CMVS_APP_VER }}
+        run: CMVS_VERSION="${TAG#v}" sh platforms/psvita/scripts/build-player.sh
       - name: Stage asset
         env:
           TAG: ${{ github.ref_name }}

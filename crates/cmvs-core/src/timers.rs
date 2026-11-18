@@ -1,6 +1,12 @@
-//! Ten cumulative VM timers at engine +14748 (snapshot record 0x109), and the
-//! independent 0x200e/0x200f stopwatch at +0x4160.
-use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
+//! Cumulative VM timers and an independent stopwatch.
+//!
+//! [`VmTimers`] consumes elapsed milliseconds when a VM run begins. Hosts using
+//! [`crate::runtime::Runtime`] pass frame time to its `advance_frame` or
+//! `advance_playback` method once per frame.
+
+// Ten cumulative VM timers at engine +14748 (snapshot record 0x109), and the
+// independent 0x200e/0x200f stopwatch at +0x4160.
+use crate::{bytecode::DecodeError, dispatch::Call};
 
 pub const TIMER_SLOTS: usize = 10;
 
@@ -40,17 +46,8 @@ impl VmTimers {
             *value = value.wrapping_add(delta_ms);
         }
     }
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x07 | 0x08 | 0x09 | 0x0b | 0x0c | 0x0e | 0x0f))) =
-            vm.pending_system()
-        else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let command = call.command;
         // Inline 0x140082437 / 0x14008244d: system result 0 = the frame time (0x140007eb0)
         // or the frame delta (0x140007ed0), here the explicit research clock; 0x4000.

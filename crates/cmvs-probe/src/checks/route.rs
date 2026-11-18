@@ -15,10 +15,7 @@ use crate::{
     session::{Coverage, Options, Session, Stop},
     target::Target,
 };
-use cmvs_core::{
-    digest::{sha256, to_hex},
-    ps3::Script,
-};
+use cmvs_core::{format::digest::sha256, format::digest::to_hex, format::ps3::Script};
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
@@ -30,8 +27,6 @@ use std::{
 /// Virtual frames a start-page button gets to show its effect. Frames with a movie
 /// player do not count: an opening movie ends on its own, and the step budget still applies.
 const ENTRY_FRAMES: u64 = 3600;
-/// The engine's system save inside a user directory.
-const SYSTEM_SAVE: &str = "system.dat";
 /// The gameplay slot a fork checkpoint is written to and loaded from.
 const FORK_SLOT: u16 = 900;
 
@@ -59,9 +54,9 @@ struct Branch {
 /// Creates sessions with fresh user directories under the output directory.
 pub struct Runner<'t> {
     pub target: &'t Target,
-    pub script: &'t Script,
+    pub script: &'t std::sync::Arc<Script>,
     pub options: &'t Options,
-    pub font: Option<&'t cmvs_desktop::font::FontRenderer>,
+    pub font: Option<&'t cmvs_font::font::FontRenderer>,
     pub out: &'t Path,
     /// Optional per-game corrections; see `manifest`.
     pub manifest: Option<&'t crate::manifest::Manifest>,
@@ -71,9 +66,9 @@ pub struct Runner<'t> {
 impl<'t> Runner<'t> {
     pub fn new(
         target: &'t Target,
-        script: &'t Script,
+        script: &'t std::sync::Arc<Script>,
         options: &'t Options,
-        font: Option<&'t cmvs_desktop::font::FontRenderer>,
+        font: Option<&'t cmvs_font::font::FontRenderer>,
         out: &'t Path,
     ) -> Self {
         Self {
@@ -95,7 +90,10 @@ impl<'t> Runner<'t> {
     /// A new session in a fresh user directory. With `seed`, the directory starts with
     /// that system save; without it the engine falls back to the game's own template.
     pub fn session(&self, label: &str, seed: Option<&[u8]>) -> Result<Session<'t>, String> {
-        let files: Vec<(&str, &[u8])> = seed.map(|s| (SYSTEM_SAVE, s)).into_iter().collect();
+        let files: Vec<(&str, &[u8])> = seed
+            .map(|s| (self.target.system_save_name(), s))
+            .into_iter()
+            .collect();
         self.session_with(label, &files)
     }
     /// A new session whose fresh user directory first receives `files` (name, bytes).
@@ -459,7 +457,7 @@ fn make_fork(session: &mut Session<'_>, depth: usize) -> Option<std::rc::Rc<Fork
         return None;
     }
     let slot = fs::read(session.user_dir().join(fork_file())).ok()?;
-    let system = fs::read(session.user_dir().join(SYSTEM_SAVE)).ok();
+    let system = fs::read(session.user_dir().join(session.system_save_name())).ok();
     session.note("fork-saved", Json::obj([("depth", Json::from(depth))]));
     Some(std::rc::Rc::new(Fork {
         slot,
@@ -652,7 +650,7 @@ fn explore_tree(
                 let name = fork_file();
                 let mut files = vec![(name.as_str(), fork.slot.as_slice())];
                 if let Some(system) = system {
-                    files.push((SYSTEM_SAVE, system));
+                    files.push((runner.target.system_save_name(), system));
                 }
                 runner.session_with("route-fork", &files)?
             }
@@ -689,7 +687,7 @@ fn explore_tree(
         route.events = session.take_events();
         let user = session.user_dir().to_path_buf();
         drop(session);
-        if carry && let Ok(saved) = fs::read(user.join(SYSTEM_SAVE)) {
+        if carry && let Ok(saved) = fs::read(user.join(runner.target.system_save_name())) {
             current = Some(saved);
         }
         if let Some(page) = &route.end_page

@@ -1,18 +1,139 @@
 //! Opt-in game-local storage for embedding applications. Research/CLI players
 //! retain their explicit external-profile policy.
-use cmvs_core::system_save::ProfileSystemSave;
+use cmvs_core::{format::system_save::ProfileSystemSave, host::filesystem::HostFs};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
+
+#[cfg(target_os = "android")]
+mod android_fs {
+    use cmvs_core::{
+        host::filesystem::File, host::filesystem::HostFile, host::filesystem::HostFs,
+        host::filesystem::Metadata, host::filesystem::OpenOptions, host::filesystem::StdFs,
+        host::filesystem::metadata_from_std,
+    };
+    use std::{
+        io::{self, Read, Seek, SeekFrom, Write},
+        path::{Path, PathBuf},
+    };
+
+    struct AndroidFile(std::fs::File);
+
+    impl Read for AndroidFile {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.0.read(buf)
+        }
+    }
+
+    impl Write for AndroidFile {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.write(buf)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.0.flush()
+        }
+    }
+
+    impl Seek for AndroidFile {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.0.seek(pos)
+        }
+    }
+
+    impl HostFile for AndroidFile {
+        fn metadata(&self) -> io::Result<Metadata> {
+            Ok(metadata_from_std(&self.0.metadata()?))
+        }
+        fn sync_all(&self) -> io::Result<()> {
+            self.0.sync_all()
+        }
+        fn try_lock(&self) -> io::Result<()> {
+            rustix::fs::flock(
+                &self.0,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive,
+            )
+            .map_err(io::Error::from)
+        }
+    }
+
+    /// Android filesystem adapter using non-blocking OS `flock` for save-directory locks.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct AndroidHostFs;
+
+    impl HostFs for AndroidHostFs {
+        fn open(&self, path: &Path, options: &OpenOptions) -> io::Result<File> {
+            Ok(File::from_host(Box::new(AndroidFile(
+                StdFs::open_std_file(path, options)?,
+            ))))
+        }
+        fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+            StdFs.metadata(path)
+        }
+        fn symlink_metadata(&self, path: &Path) -> io::Result<Metadata> {
+            StdFs.symlink_metadata(path)
+        }
+        fn try_exists(&self, path: &Path) -> io::Result<bool> {
+            StdFs.try_exists(path)
+        }
+        fn is_file(&self, path: &Path) -> bool {
+            StdFs.is_file(path)
+        }
+        fn is_dir(&self, path: &Path) -> bool {
+            StdFs.is_dir(path)
+        }
+        fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+            StdFs.canonicalize(path)
+        }
+        fn absolute(&self, path: &Path) -> io::Result<PathBuf> {
+            StdFs.absolute(path)
+        }
+        fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+            StdFs.create_dir_all(path)
+        }
+        fn remove_file(&self, path: &Path) -> io::Result<()> {
+            StdFs.remove_file(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            StdFs.rename(from, to)
+        }
+        fn session_id(&self) -> u32 {
+            StdFs.session_id()
+        }
+        fn read_dir_names(&self, dir: &Path) -> io::Result<Option<Vec<std::ffi::OsString>>> {
+            StdFs.read_dir_names(dir)
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+pub use android_fs::AndroidHostFs;
+
+/// Default standard-library [`HostFs`] for this OS (`AndroidHostFs` on Android, `StdFs` elsewhere).
+pub fn default_host_fs() -> Arc<dyn HostFs> {
+    #[cfg(target_os = "android")]
+    {
+        Arc::new(AndroidHostFs)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        cmvs_core::host::filesystem::default_fs()
+    }
+}
 
 const IMPORTED: &str = ".cmvs-legacy-imported";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
-pub(super) fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSystemSave> {
-    let profile = match ProfileSystemSave::open_game_savedata(root) {
+/// Opens `<root>/savedata`, importing legacy external saves once without overwriting local files,
+/// or falls back to `legacy` on read-only game media.
+pub fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSystemSave> {
+    let fs = default_host_fs();
+    let profile = match ProfileSystemSave::open_game_savedata_with_fs(root, fs.clone()) {
         Ok(profile) => profile,
         Err(error)
             if matches!(
@@ -20,7 +141,7 @@ pub(super) fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSys
                 io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
             ) =>
         {
-            return ProfileSystemSave::open(legacy, root);
+            return ProfileSystemSave::open_with_fs(legacy, root, fs);
         }
         Err(error) => return Err(error),
     };
@@ -30,7 +151,7 @@ pub(super) fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSys
     }
     // Hold both locks throughout migration. An active legacy session must not
     // race copying, nor may a second local player scan a partial import.
-    let source = ProfileSystemSave::open(legacy, root)?;
+    let source = ProfileSystemSave::open_with_fs(legacy, root, fs)?;
     import_entries(
         fs::read_dir(source.directory())?.collect::<io::Result<Vec<_>>>()?,
         target,
@@ -48,7 +169,7 @@ fn import_entries(mut entries: Vec<fs::DirEntry>, target: &Path) -> io::Result<(
     // backup that prevents opening the local profile to retry the migration.
     entries.sort_by_key(|entry| {
         let name = entry.file_name();
-        name == "system.bak" || name == "cmvs.cfg.bak"
+        name == "system.bak" || name == "save000.bak" || name == "cmvs.cfg.bak"
     });
     for entry in entries {
         let name = entry.file_name();
@@ -85,7 +206,13 @@ fn import_entries(mut entries: Vec<fs::DirEntry>, target: &Path) -> io::Result<(
 fn save_file(name: &str) -> bool {
     matches!(
         name,
-        "system.dat" | "system.bak" | "cmvs.cfg" | "cmvs.cfg.bak"
+        "system.dat"
+            | "system.bak"
+            | "save000.bak"
+            | "cmvs.cfg"
+            | "cmvs.cfg.bak"
+            | "cvns.cfg"
+            | "cvns.cfg.bak"
     ) || (name.len() == 11
         && name.starts_with("save")
         && name.ends_with(".dat")

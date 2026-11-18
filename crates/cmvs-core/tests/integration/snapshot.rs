@@ -1,0 +1,329 @@
+use crate::support::shared_state::{SharedSnapshotUnavailable, SharedState};
+use cmvs_core::{
+    format::ps3::Script, format::snapshot::MAX_SNAPSHOT, format::snapshot::SaveImage,
+    format::snapshot::SaveInfo, format::snapshot::SaveTitle, format::snapshot::parse_records,
+    vm::machine::Machine,
+};
+
+fn short(tag: u16, body: &[u8]) -> Vec<u8> {
+    let mut b = tag.to_le_bytes().to_vec();
+    b.extend((body.len() as u16).to_le_bytes());
+    b.extend(body);
+    b
+}
+fn long(tag: u16, index: Option<u16>, body: &[u8]) -> Vec<u8> {
+    let mut b = tag.to_le_bytes().to_vec();
+    if let Some(index) = index {
+        b.extend(index.to_le_bytes());
+    }
+    b.extend((body.len() as u32).to_le_bytes());
+    b.extend(body);
+    b
+}
+
+#[test]
+fn every_writer_framing_is_walked_in_order() {
+    let mut stream = short(0x102, b"main.ps3\0");
+    stream.extend(long(0x282, None, &[1, 0, 0, 0]));
+    stream.extend(long(0x700, Some(29), b"abc"));
+    stream.extend(short(0x304, b"x\0"));
+    stream.extend(1u16.to_le_bytes());
+    stream.push(0);
+    stream.extend(long(0x900, None, &[]));
+    let records = parse_records(&stream).unwrap();
+    let view: Vec<_> = records
+        .iter()
+        .map(|r| (r.offset, r.tag, r.index, &stream[r.body.clone()]))
+        .collect();
+    assert_eq!(
+        view,
+        [
+            (0, 0x102, None, &b"main.ps3\0"[..]),
+            (13, 0x282, None, &[1, 0, 0, 0][..]),
+            (23, 0x700, Some(29), &b"abc"[..]),
+            (34, 0x304, None, &[2, 0, b'x', 0, 1, 0, 0][..]),
+            (43, 0x900, None, &[][..]),
+        ]
+    );
+    assert!(parse_records(&[]).unwrap().is_empty());
+}
+
+#[test]
+fn unknown_tags_and_truncation_fail_without_partial_records() {
+    let valid = short(0x100, b"t\0");
+    let mut unknown = valid.clone();
+    unknown.extend(short(0x116, b""));
+    assert_eq!(
+        parse_records(&unknown).unwrap_err().0,
+        "unknown snapshot record tag"
+    );
+    let pair = {
+        let mut b = short(0x304, b"x\0");
+        b.extend(5u16.to_le_bytes());
+        b.push(0);
+        b
+    };
+    let indexed = long(0x380, Some(7), b"body");
+    for bad in [
+        &valid[..valid.len() - 1],
+        &valid[..1],
+        &valid[..3],
+        &indexed[..4],
+        &indexed[..indexed.len() - 1],
+        &pair[..],
+    ] {
+        assert!(parse_records(bad).is_err(), "{bad:?}");
+    }
+    let mut huge = 0x243u16.to_le_bytes().to_vec();
+    huge.extend(u32::MAX.to_le_bytes());
+    assert!(parse_records(&huge).is_err());
+}
+
+#[test]
+fn stream_larger_than_original_buffer_is_rejected() {
+    let mut stream = long(0x243, None, &vec![0; MAX_SNAPSHOT - 6]);
+    assert_eq!(stream.len(), MAX_SNAPSHOT);
+    assert_eq!(parse_records(&stream).unwrap().len(), 1);
+    stream.push(0);
+    assert_eq!(
+        parse_records(&stream).unwrap_err().0,
+        "snapshot exceeds original 3 MiB buffer"
+    );
+}
+
+#[test]
+fn unavailable_capture_clears_bit_zero_and_records_origin() {
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(0x430u16.to_le_bytes());
+    let mut raw = b"PS2A".to_vec();
+    for n in [48u32, 0, 0, 1, 2, 0, 0, 0, 0, 6, 0] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    let script = Script::decode(&raw).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    vm.set_current_name(b"main.ps3".to_vec());
+    vm.state_mut().set_bit(0, true).unwrap();
+    vm.state_mut().set_bit(1, true).unwrap();
+    let mut image = SaveImage::default();
+    assert_eq!(image, SaveImage::Absent);
+    image.capture_unavailable(&mut vm).unwrap();
+    assert_eq!(vm.state().bit(0), Some(false));
+    assert_eq!(vm.state().bit(1), Some(true));
+    assert_eq!(
+        image,
+        SaveImage::Unavailable {
+            script: b"main.ps3".to_vec(),
+            pc: 0
+        }
+    );
+}
+
+fn title_script(text: &[u8], offsets: &[u32]) -> Script {
+    let mut code = vec![];
+    for offset in offsets {
+        code.extend(0x201u16.to_le_bytes());
+        code.extend(0x120u16.to_le_bytes());
+        code.extend(offset.to_le_bytes());
+        code.extend(0x20fu16.to_le_bytes());
+        code.extend(0x430u16.to_le_bytes());
+        code.extend(0x2162u16.to_le_bytes());
+    }
+    code.extend(0x2161u16.to_le_bytes());
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(&code);
+    payload.extend(text);
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48,
+        0,
+        0,
+        1,
+        code.len() as u32,
+        0,
+        text.len() as u32,
+        0,
+        0,
+        payload.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    Script::decode(&raw).unwrap()
+}
+fn to_system(vm: &mut Machine) {
+    while !matches!(
+        vm.step().unwrap(),
+        cmvs_core::vm::machine::Step::System { .. }
+    ) {}
+}
+
+#[test]
+fn save_title_copies_short_strings_and_rejects_the_unmodeled_flag_path() {
+    let mut text = b"- main -\0".to_vec();
+    text.extend([b'x'; 128]);
+    text.push(0);
+    let script = title_script(&text, &[0, 9]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut title = SaveTitle::default();
+    assert_eq!(title.bytes(), b"");
+    assert!(!title.shared_state(&mut vm).unwrap());
+    to_system(&mut vm);
+    assert!(title.shared_state(&mut vm).unwrap());
+    assert_eq!(title.bytes(), b"- main -");
+    assert_eq!(vm.stack().len_bytes(), 0);
+    to_system(&mut vm);
+    let before = vm.pending_system();
+    assert!(title.shared_state(&mut vm).is_err());
+    assert_eq!(vm.pending_system(), before);
+    assert_eq!(title.bytes(), b"- main -");
+    vm.complete_system(cmvs_core::vm::SystemResult(0x4004))
+        .unwrap();
+    to_system(&mut vm);
+    assert!(!title.shared_state(&mut vm).unwrap());
+}
+
+#[test]
+fn save_info_starts_unknown_and_0x22b9_sets_the_first_word() {
+    let mut code = vec![];
+    for value in [1u32, 0x8000_0000] {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(value.to_le_bytes());
+        code.extend(0x22b9u16.to_le_bytes());
+    }
+    code.extend(0x22b9u16.to_le_bytes());
+    code.extend(0x22bau16.to_le_bytes());
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(&code);
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48,
+        0,
+        0,
+        1,
+        code.len() as u32,
+        0,
+        0,
+        0,
+        0,
+        payload.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    let script = Script::decode(&raw).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    let mut info = SaveInfo::default();
+    assert_eq!(info.values(), [None; 3]);
+    to_system(&mut vm);
+    assert!(info.shared_state(&mut vm).unwrap());
+    assert_eq!(info.values(), [Some(1), None, None]);
+    to_system(&mut vm);
+    assert!(info.shared_state(&mut vm).unwrap());
+    assert_eq!(info.values(), [Some(0x8000_0000), None, None]);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(9));
+    // An empty stack keeps the command pending; 0x22ba is left to other handlers.
+    to_system(&mut vm);
+    assert!(info.shared_state(&mut vm).is_err());
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x2b9));
+    assert_eq!(info.values(), [Some(0x8000_0000), None, None]);
+}
+
+fn capture_script() -> Script {
+    let mut code = 0x440u16.to_le_bytes().to_vec();
+    code.extend(4u16.to_le_bytes());
+    code.extend(123u32.to_le_bytes());
+    code.extend(0x22b2u16.to_le_bytes());
+    code.extend(0x22b2u16.to_le_bytes());
+    code.extend(0x22b6u16.to_le_bytes());
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(&code);
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48,
+        0,
+        0,
+        1,
+        code.len() as u32,
+        0,
+        0,
+        0,
+        0,
+        payload.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    Script::decode(&raw).unwrap()
+}
+
+#[test]
+fn scenario_capture_requires_explicit_policy_and_records_resume_pc() {
+    let script = capture_script();
+    let mut vm = Machine::new(&script).unwrap();
+    let mut image = SaveImage::default();
+    assert!(!image.shared_snapshot_unavailable(&mut vm, true).unwrap());
+    vm.state_mut().set_bit(0, true).unwrap();
+    vm.state_mut().set_bit(1, true).unwrap();
+    vm.state_mut().set_system_integer(0, 17).unwrap();
+    to_system(&mut vm);
+    vm.yield_pending_system().unwrap();
+    assert_eq!(vm.repeat_count(), 1);
+    for _ in 0..2 {
+        assert!(!image.shared_snapshot_unavailable(&mut vm, false).unwrap());
+        assert_eq!(vm.pc(), 8);
+        assert_eq!(vm.repeat_count(), 1);
+        assert_eq!(vm.state().bit(0), Some(true));
+        assert_eq!(image, SaveImage::Absent);
+    }
+    for expected_pc in [10, 12] {
+        assert!(image.shared_snapshot_unavailable(&mut vm, true).unwrap());
+        assert_eq!(vm.pc(), expected_pc);
+        assert_eq!(vm.pending_system(), None);
+        assert_eq!(vm.repeat_count(), 0);
+        assert_eq!(vm.state().bit(0), Some(false));
+        assert_eq!(vm.state().bit(1), Some(true));
+        assert_eq!(vm.state().system_integer(0), Some(17));
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 123);
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(
+            image,
+            SaveImage::Unavailable {
+                script: b"entry.ps3".to_vec(),
+                pc: expected_pc
+            }
+        );
+        to_system(&mut vm);
+    }
+    let before = image.clone();
+    assert!(!image.shared_snapshot_unavailable(&mut vm, true).unwrap());
+    assert_eq!(vm.pending_system(), Some((12, 0x2b6)));
+    assert_eq!(image, before);
+}
+
+#[test]
+fn failed_scenario_capture_preserves_pending_vm_and_previous_image() {
+    let script = capture_script();
+    let mut vm = Machine::new(&script).unwrap();
+    *vm.state_mut() = cmvs_core::vm::evaluate::State::new(1, 0);
+    to_system(&mut vm);
+    vm.yield_pending_system().unwrap();
+    let mut image = SaveImage::Unavailable {
+        script: b"previous.ps3".to_vec(),
+        pc: 4,
+    };
+    let before = image.clone();
+    assert!(image.shared_snapshot_unavailable(&mut vm, true).is_err());
+    assert_eq!(image, before);
+    assert_eq!(vm.pending_system(), Some((8, 0x2b2)));
+    assert_eq!(vm.pc(), 8);
+    assert_eq!(vm.repeat_count(), 1);
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), 123);
+    assert_eq!(vm.state().bit(0), None);
+}

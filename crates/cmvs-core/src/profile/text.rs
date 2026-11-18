@@ -1,7 +1,7 @@
 //! Line-oriented profile and game-record files; `#` starts a comment line.
 use super::{
     Binary, CommandStatus, EngineProfile, Family, GameRecord, MachineProof, ProfileError,
-    RecordFile, VariantBinding, VariantId,
+    RecordFile, VariantBinding, VariantId, model::lookup_sorted,
 };
 use crate::{
     digest::{parse_hex, to_hex},
@@ -17,34 +17,56 @@ pub(super) fn is_identifier(text: &str) -> bool {
 }
 
 /// Non-comment lines split into words, with their 1-based line numbers.
-struct Lines<'a> {
-    lines: Vec<(usize, Vec<&'a str>)>,
-    next: usize,
+pub(super) struct Lines<'a> {
+    lines: std::iter::Enumerate<std::str::Lines<'a>>,
+    peeked_line: usize,
+    peeked: Vec<&'a str>,
+    current: Vec<&'a str>,
 }
 
 impl<'a> Lines<'a> {
-    fn new(text: &'a str) -> Self {
-        let lines = text
-            .lines()
-            .enumerate()
-            .map(|(i, line)| (i + 1, line.split_whitespace().collect::<Vec<_>>()))
-            .filter(|(_, words)| words.first().is_some_and(|w| !w.starts_with('#')))
-            .collect();
-        Self { lines, next: 0 }
+    pub(super) fn new(text: &'a str) -> Self {
+        let mut this = Self {
+            lines: text.lines().enumerate(),
+            peeked_line: 0,
+            peeked: Vec::new(),
+            current: Vec::new(),
+        };
+        this.fill_peeked();
+        this
     }
-    fn next(&mut self) -> Option<(usize, Vec<&'a str>)> {
-        let line = self.lines.get(self.next).cloned();
-        self.next += 1;
-        line
+    fn fill_peeked(&mut self) {
+        self.peeked.clear();
+        for (i, line) in self.lines.by_ref() {
+            self.peeked.extend(line.split_whitespace());
+            if self.peeked.first().is_some_and(|w| !w.starts_with('#')) {
+                self.peeked_line = i + 1;
+                return;
+            }
+            self.peeked.clear();
+        }
+    }
+    pub(super) fn next(&mut self) -> Option<(usize, &[&'a str])> {
+        if self.peeked.is_empty() {
+            return None;
+        }
+        let line = self.peeked_line;
+        std::mem::swap(&mut self.current, &mut self.peeked);
+        self.fill_peeked();
+        Some((line, &self.current))
     }
     fn peek_key(&self) -> Option<&'a str> {
-        self.lines.get(self.next).map(|(_, words)| words[0])
+        self.peeked.first().copied()
     }
     /// The next line, which must start with `key` and hold exactly `count` values.
-    fn expect(&mut self, key: &str, count: usize) -> Result<(usize, Vec<&'a str>), ProfileError> {
+    pub(super) fn expect(
+        &mut self,
+        key: &str,
+        count: usize,
+    ) -> Result<(usize, &[&'a str]), ProfileError> {
         match self.next() {
             Some((line, words)) if words[0] == key && words.len() == count + 1 => {
-                Ok((line, words[1..].to_vec()))
+                Ok((line, &words[1..]))
             }
             Some((line, _)) => Err(at(line, format!("expected `{key}` with {count} values"))),
             None => Err(ProfileError::new(format!("missing `{key}`"))),
@@ -90,23 +112,22 @@ pub(super) fn identifier(line: usize, text: &str) -> Result<String, ProfileError
 }
 
 /// `key=value` fields in a fixed order, so the files stay diffable.
-pub(super) fn fields<'a>(
+pub(super) fn fields<'a, const N: usize>(
     line: usize,
     words: &[&'a str],
-    keys: &[&str],
-) -> Result<Vec<&'a str>, ProfileError> {
-    if words.len() != keys.len() {
+    keys: &[&str; N],
+) -> Result<[&'a str; N], ProfileError> {
+    if words.len() != N {
         return Err(at(line, format!("expected fields {}", keys.join(" "))));
     }
-    words
-        .iter()
-        .zip(keys)
-        .map(|(word, key)| {
-            word.strip_prefix(key)
-                .and_then(|rest| rest.strip_prefix('='))
-                .ok_or_else(|| at(line, format!("expected `{key}=`")))
-        })
-        .collect()
+    let mut out = [""; N];
+    for ((slot, word), key) in out.iter_mut().zip(words).zip(keys) {
+        *slot = word
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+            .ok_or_else(|| at(line, format!("expected `{key}=`")))?;
+    }
+    Ok(out)
 }
 
 const BINARY_KEYS: [&str; 8] = [
@@ -131,13 +152,14 @@ fn is_review_path(path: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(&b))
 }
 
-pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
+pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
     let mut lines = Lines::new(text);
     let (line, words) = lines.expect("profile", 1)?;
     let id = identifier(line, words[0])?;
     let (line, words) = lines.expect("family", 1)?;
     let family = match words[0] {
         "cmvs" => Family::Cmvs,
+        "cvns" => Family::Cvns,
         _ => return Err(at(line, "unknown family")),
     };
     let (line, words) = lines.expect("base", 1)?;
@@ -198,10 +220,11 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         proof_bases.push((arch, sha(line, v[0])?, line));
     }
     let mut statuses = Vec::new();
-    let mut proofs = std::collections::BTreeMap::new();
-    let mut reviews = std::collections::BTreeMap::new();
-    let mut contracts = std::collections::BTreeMap::new();
-    let mut variant = std::collections::BTreeMap::new();
+    let mut proofs = Vec::new();
+    let mut reviews = Vec::new();
+    let mut contracts = Vec::new();
+    let mut variant = Vec::new();
+    let mut maps = Vec::new();
     while let Some((line, words)) = lines.next() {
         let proof_key = match words.get(1) {
             Some(&"inherited") => Some("inherit="),
@@ -211,9 +234,17 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         let reviewed = words.get(1) == Some(&"reviewed");
         let contracted = words.get(1) == Some(&"contract-equivalent");
         let has_variant = words.iter().any(|word| word.starts_with("variant="));
+        // `map=` sits between the addresses and `review=`.
+        let map = words
+            .get(2 + binaries.len())
+            .and_then(|word| word.strip_prefix("map="));
+        if map.is_some() && (!reviewed || family != Family::Cvns) {
+            return Err(at(line, "only reviewed CVNS commands carry a map"));
+        }
         if words.len()
             != 2 + binaries.len()
                 + usize::from(proof_key.is_some() || reviewed || contracted)
+                + usize::from(map.is_some())
                 + 2 * usize::from(has_variant)
         {
             return Err(at(
@@ -262,7 +293,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                 .strip_prefix("evidence=")
                 .filter(|path| is_review_path(path))
                 .ok_or_else(|| at(line, "expected evidence=<docs-relative .md path>"))?;
-            variant.insert(
+            variant.push((
                 statuses.len() as u16,
                 VariantBinding {
                     id,
@@ -270,7 +301,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                     binary_sha256,
                     evidence: evidence.to_owned(),
                 },
-            );
+            ));
         }
         if let Some(key) = proof_key {
             let (arch, digest) = words
@@ -285,7 +316,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                 .find(|&&(a, ..)| a == arch)
                 .ok_or_else(|| at(line, "proof architecture lacks a compare line"))?;
             let derived = binaries.iter().find(|b| b.arch == arch);
-            proofs.insert(
+            proofs.push((
                 statuses.len() as u16,
                 MachineProof {
                     arch,
@@ -293,7 +324,14 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                     derived_sha256: derived.expect("compare line checked").sha256,
                     digest: sha(line, digest)?,
                 },
-            );
+            ));
+        }
+        if let Some(target) = map {
+            let target = hex_number(line, target)?
+                .checked_sub(0x2000)
+                .and_then(|t| u16::try_from(t).ok())
+                .ok_or_else(|| at(line, "map target must be a 0x2000-based system opcode"))?;
+            maps.push((statuses.len() as u16, target));
         }
         if reviewed {
             let path = words
@@ -302,7 +340,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                 .strip_prefix("review=")
                 .filter(|path| is_review_path(path))
                 .ok_or_else(|| at(line, "expected review=<docs-relative .md path>"))?;
-            reviews.insert(statuses.len() as u16, path.to_owned());
+            reviews.push((statuses.len() as u16, path.to_owned()));
         }
         if contracted {
             let id = words
@@ -310,7 +348,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                 .expect("row length checked")
                 .strip_prefix("contract=")
                 .ok_or_else(|| at(line, "expected contract=<certificate id>"))?;
-            contracts.insert(statuses.len() as u16, sha(line, id)?);
+            contracts.push((statuses.len() as u16, sha(line, id)?));
         }
         statuses.push(status);
         for (binary, word) in binaries.iter_mut().zip(&words[2..]) {
@@ -335,14 +373,15 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             "command rows do not match the declared cases",
         ));
     }
-    let unused = |&&(arch, ..): &&(Arch, [u8; 32], usize)| !proofs.values().any(|p| p.arch == arch);
+    let unused =
+        |&&(arch, ..): &&(Arch, [u8; 32], usize)| !proofs.iter().any(|(_, p)| p.arch == arch);
     if let Some(&(.., line)) = proof_bases.iter().find(unused) {
         return Err(at(
             line,
             "compare line without inherited or presumed commands",
         ));
     }
-    let profile = EngineProfile {
+    Ok(EngineProfile {
         id,
         family,
         base,
@@ -352,9 +391,8 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         contracts,
         reviews,
         variant,
-    };
-    profile.validate()?;
-    Ok(profile)
+        maps,
+    })
 }
 
 impl EngineProfile {
@@ -367,6 +405,7 @@ impl EngineProfile {
             "family {}",
             match self.family {
                 Family::Cmvs => "cmvs",
+                Family::Cvns => "cvns",
             }
         );
         let _ = writeln!(out, "base {}", self.base.as_deref().unwrap_or("-"));
@@ -387,7 +426,11 @@ impl EngineProfile {
             );
         }
         for b in &self.binaries {
-            if let Some(proof) = self.proofs.values().find(|p| p.arch == b.arch) {
+            if let Some(proof) = self
+                .proofs
+                .iter()
+                .find_map(|(_, p)| (p.arch == b.arch).then_some(p))
+            {
                 let _ = writeln!(
                     out,
                     "compare {} base-sha256={}",
@@ -410,13 +453,16 @@ impl EngineProfile {
                     Case::Default => out.push_str(" -"),
                 }
             }
-            if let Some(path) = self.review(i as u16) {
+            if let Some(&target) = lookup_sorted(&self.maps, i as u16) {
+                let _ = write!(out, " map=0x{:04x}", 0x2000 + u32::from(target));
+            }
+            if let Some(path) = lookup_sorted(&self.reviews, i as u16) {
                 let _ = write!(out, " review={path}");
             }
-            if let Some(id) = self.contract_id(i as u16) {
+            if let Some(id) = lookup_sorted(&self.contracts, i as u16) {
                 let _ = write!(out, " contract={}", to_hex(id));
             }
-            if let Some(proof) = self.proof(i as u16) {
+            if let Some(proof) = lookup_sorted(&self.proofs, i as u16) {
                 let key = match status {
                     CommandStatus::Presumed => "presume",
                     _ => "inherit",
@@ -428,7 +474,7 @@ impl EngineProfile {
                     to_hex(&proof.digest)
                 );
             }
-            if let Some(variant) = self.variant(i as u16) {
+            if let Some(variant) = lookup_sorted(&self.variant, i as u16) {
                 let _ = write!(
                     out,
                     " variant={}:{}:{} evidence={}",
@@ -444,7 +490,7 @@ impl EngineProfile {
     }
 }
 
-pub(super) fn parse_games(text: &str) -> Result<Vec<GameRecord>, ProfileError> {
+pub(crate) fn parse_games(text: &str) -> Result<Vec<GameRecord>, ProfileError> {
     let mut lines = Lines::new(text);
     let mut games = Vec::new();
     while lines.peek_key().is_some() {

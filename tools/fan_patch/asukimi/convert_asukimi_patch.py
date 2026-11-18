@@ -20,8 +20,8 @@ import sys
 import tempfile
 import zipfile
 
-# Reuse the generic script decoder in tools/, independent of the current directory.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from fan_patch.launcher import cmvs_patch_command
 from ps3_inspect import FormatError, decode_script
 
 MASK = 0xFFFFFFFF
@@ -252,6 +252,10 @@ def normalize_script_archive(raw: bytes) -> tuple[bytes, int]:
     return bytes(out), repaired
 
 
+def patch_command(*args: str) -> list[str]:
+    return cmvs_patch_command("asukimi", *args)
+
+
 def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
         raise FormatError("encoding must be utf-8, utf8 or gbk")
@@ -292,12 +296,7 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
             (Path(temp) / "start.ps2").write_bytes(start)
             recoded = Path(temp) / "utf8"
             recoded.mkdir()
-            tool = Path(__file__).resolve().parent
-            subprocess.run([
-                "cargo", "run", "--offline", "--locked", "--release", "--manifest-path",
-                str(tool / "Cargo.toml"), "--target-dir", str(tool.parents[2] / "target/fan-patch-asukimi"),
-                "--", str(game), temp, str(recoded),
-            ], check=True)
+            subprocess.run(patch_command(str(game), temp, str(recoded)), check=True)
             start = (recoded / "start.ps2").read_bytes()
             script_archive = (recoded / "script.cpz").read_bytes()
             with (recoded / "scripts.tsv").open(encoding="utf-8") as stream:

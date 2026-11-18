@@ -116,7 +116,7 @@ fn sine(angle: i32, amplitude: i32) -> i32 {
 impl SceneHost {
     /// 0x21e5..0x21e9: native wrappers 0x14006df30..0x14006e1d0.
     /// Slot/child, then constructor angle; key/next/mode/duration/angle; start key.
-    pub(super) fn rotation(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(super) fn rotation(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let count = match command {
@@ -136,7 +136,7 @@ impl SceneHost {
         let child = match u16::try_from(child) {
             Err(_) if child < 0 => None,
             Ok(id)
-                if id < self.child_slots.count()
+                if id < self.config.child_slots.count()
                     && self.objects[&slot].children.contains_key(&id) =>
             {
                 Some(id)
@@ -160,7 +160,8 @@ impl SceneHost {
             ));
         }
         if command == 0x1e6
-            && (!(RotationTrack::supports(c as u32) || self.allow_rotation_hold && c as u8 == 0xff)
+            && (!(RotationTrack::supports(c as u32)
+                || self.config.allow_rotation_hold && c as u8 == 0xff)
                 || (c as u8 == 0x80 && d == 0))
         {
             return Err(error(

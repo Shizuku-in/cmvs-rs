@@ -1,10 +1,13 @@
-//! Script-controlled message settings; addresses refer to the documented binary hash.
-//! These live in the +1496 settings block that message objects read (e.g. 0x14005e220).
-//! The two boolean flags are cleared by the constructor/reset/save loading; no
-//! configuration helper writes either boolean. The +1548 mode starts at zero and
-//! 0x140092d40 writes it while selecting popup menu items 0x809d..0x809f.
-//! The bypass flag is engine +12244, outside that block, but read by the same message waits.
-use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
+//! Message skipping, auto-advance, and voice-cut settings.
+//!
+//! [`MessageFlags`] stores the runtime settings used by message output and waits.
+//! Physical input is supplied separately through [`crate::input::ActionInput`].
+
+// Settings block +1496 is read by message objects (e.g. 0x14005e220).
+// Constructor/reset/save loading clear both booleans; configuration does not set them.
+// Mode +1548 starts at zero; 0x140092d40 updates it for menu items 0x809d..0x809f.
+// Bypass is engine +12244, outside the settings block but read by the same waits.
+use crate::{bytecode::DecodeError, dispatch::Call};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct MessageFlags {
@@ -12,6 +15,8 @@ pub struct MessageFlags {
     auto_advance: bool,
     mode_1548: u32,
     bypass: bool,
+    /// CVNS +1464 (`0x5b8`): active read-skip state toggled/queried by `0x21ec`/`0x21ed` case `0x3e7`.
+    cvns_read_skipping: bool,
 }
 impl MessageFlags {
     pub fn from_ini(bytes: &[u8]) -> Self {
@@ -48,6 +53,7 @@ impl MessageFlags {
     pub(crate) fn clear_for_load(&mut self) {
         self.skip = false;
         self.auto_advance = false;
+        self.cvns_read_skipping = false;
     }
     /// Engine +12244: zeroed by the CMainFrameWnd constructor (qword store at 0x140016ff5)
     /// and written only by 0x2340. 0x2152/0x2153/0x215c treat it as read and finish like
@@ -61,6 +67,9 @@ impl MessageFlags {
     pub fn mode_1548(&self) -> u32 {
         self.mode_1548
     }
+    pub(crate) fn set_mode_1548(&mut self, value: u32) {
+        self.mode_1548 = value;
+    }
     /// +1520, 0x22eb. Also read by 0x2224's input-skip branch and 0x22ef, which need input.
     pub fn skip(&self) -> bool {
         self.skip
@@ -69,19 +78,17 @@ impl MessageFlags {
     pub fn auto_advance(&self) -> bool {
         self.auto_advance
     }
-    /// 0x22eb / 0x14007c890 and 0x22e5 / 0x14007c5d0: nonzero SP-4 sets the flag to
-    /// bool(SP-8); zero SP-4 copies it to system result 0 without reading SP-8. Both pop 8 bytes.
-    /// 0x2340 (inline 0x1400847fa) sets the bypass to bool(SP-4) and pops 4 bytes; it has no
-    /// query form and leaves the system results alone.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x340 | 0x2d0 | 0x2eb | 0x2e5))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
+    pub(crate) fn set_auto_advance(&mut self, value: bool) {
+        self.auto_advance = value;
+    }
+    pub fn cvns_read_skipping(&self) -> bool {
+        self.cvns_read_skipping
+    }
+    pub(crate) fn set_cvns_read_skipping(&mut self, value: bool) {
+        self.cvns_read_skipping = value;
     }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         if call.command == 0x340 {
             let value = call.argument(4, "bypass")?;
             call.complete(0x4004)?;

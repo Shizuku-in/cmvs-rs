@@ -1,5 +1,5 @@
 //! Aoitori 0x23b9/0x23bb: byte/pixel counts, with a temporary pen and committed scratch.
-//! Executable-bound evidence: docs/games/aoitori/vm-semantics.md.
+//! Executable-bound evidence: docs/games/aoitori/README.md.
 use super::{GlyphMetrics, auxiliary::AuxiliaryText, output::parse_group};
 use crate::TextEncoding;
 

@@ -3,11 +3,14 @@
 //! pages keep the software path. Readback happens only when the engine requests a
 //! device frame.
 use crate::sys::VitaGpu;
-use cmvs_console::gpu::Compositor;
-use cmvs_core::{raster::RgbaImage, scene_render::RenderFrame};
+use cmvs_console::{backend::ConsoleGpu, gpu::Compositor};
+use cmvs_core::{
+    render::raster::RgbaImage,
+    render::scene_render::{Layer, RenderFrame},
+};
 use std::error::Error;
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 /// Retained texture bytes; video memory (128 MiB) also holds the display buffers, and
 /// uploads fall back to main memory once it is full.
 const CACHE_LIMIT: usize = 64 * 1024 * 1024;
@@ -24,8 +27,13 @@ impl GpuRenderer {
         self.0.clear_cache();
     }
 
-    pub fn render(&mut self, frame: &RenderFrame<'_>) -> Result<()> {
-        self.0.render(frame)
+    pub fn render(&mut self, frame: RenderFrame<'_>) -> Result<()> {
+        // The bundled GXM shader only supports the CMVS queue.
+        if matches!(frame.commands().first(), Some(Layer::Cvns(_))) {
+            let frame = RenderFrame::from_precomposited(frame.render_cpu()?);
+            return self.0.render(&frame);
+        }
+        self.0.render(&frame)
     }
 
     /// Shows the canvas scaled into `view` (screen pixels) with an optional crosshair
@@ -58,5 +66,11 @@ impl GpuRenderer {
                 .map_err(Into::into)
                 .and_then(|()| Ok(RgbaImage::new(size[0], size[1], pixels)?)),
         )
+    }
+}
+
+impl ConsoleGpu for GpuRenderer {
+    fn read_presented(&mut self) -> Option<Result<RgbaImage>> {
+        self.read()
     }
 }

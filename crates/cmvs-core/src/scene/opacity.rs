@@ -82,7 +82,7 @@ pub(crate) fn check(command: u16, args: &[i32; 7]) -> Result<(), &'static str> {
 }
 
 /// Applies a checked command after the caller completed it; 0x1ee writes system result 0.
-pub(crate) fn apply(draw: &mut DrawState, command: u16, args: &[i32; 7], call: &mut Call<'_, '_>) {
+pub(crate) fn apply(draw: &mut DrawState, command: u16, args: &[i32; 7], call: &mut Call<'_>) {
     let [_, _, a, b, c, d, e] = *args;
     let magnitude = |value: i32| value.wrapping_abs() % 256;
     match command {
@@ -149,7 +149,7 @@ impl SceneHost {
     ///   -1 without a track. Pops 8.
     ///
     /// The original bounds neither key indices nor `next`; Rust accepts keys 0..7.
-    pub(super) fn opacity(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(super) fn opacity(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let count = match command {
@@ -169,7 +169,7 @@ impl SceneHost {
         let child = match u16::try_from(child) {
             Err(_) if child < 0 => None,
             Ok(id)
-                if id < self.child_slots.count()
+                if id < self.config.child_slots.count()
                     && self.objects[&slot].children.contains_key(&id) =>
             {
                 Some(id)

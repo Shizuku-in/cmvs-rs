@@ -1,9 +1,14 @@
-//! Engine +4664 pointer drag/flick recognizer (constructor 0x1400533d0). Scripts configure
-//! it (0x2350..0x2364, plus six region records through 0x2366) and query the per-frame
-//! hold result (0x2362). The frame update
-//! 0x140054a60 runs mode 0 (0x140053930) or region drag mode 1 (0x1400541a0).
-//! Mode 2 (0x140054570) remains a barrier. Fields stay named by offset.
-use crate::{bytecode::DecodeError, dispatch::Call, input::ActionInput, machine::Machine};
+//! Pointer drag and flick recognition over frame-level input.
+//!
+//! [`PointerGesture`] tracks script-configured regions and reports held or released
+//! movements. Feed it logical pointer coordinates through [`crate::input::ActionInput`].
+//! Unimplemented gesture modes return errors.
+
+// Engine +4664; constructor 0x1400533d0. Commands 0x2350..0x2364 configure
+// and query gestures; 0x2366 sets six regions; 0x2362 queries the hold result.
+// Frame update 0x140054a60 runs mode 0 (0x140053930) or region drag mode 1
+// (0x1400541a0). Mode 2 (0x140054570) is unimplemented; fields retain offset names.
+use crate::{bytecode::DecodeError, dispatch::Call, input::ActionInput};
 use std::collections::BTreeMap;
 mod drag;
 
@@ -285,19 +290,8 @@ impl PointerGesture {
         }
         Ok(())
     }
-    /// 0x2350..0x2364 setters (0x14007fb60..0x14007fe60) on the +4664 object, and 0x2362 /
-    /// 0x14007fe20 -> 0x140053610: system result 0 = (SP-4 == 1 and +88 >= 0); pops 4.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x350..=0x353 | 0x356..=0x35b | 0x360 | 0x362 | 0x364..=0x368))) =
-            vm.pending_system()
-        else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let command = call.command;
         if matches!(command, 0x367 | 0x368) {
             call.complete(0x4000)?;
@@ -458,7 +452,10 @@ impl PointerGesture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::{CodeInput, KeyBindings};
+    use crate::{
+        input::{CodeInput, KeyBindings},
+        machine::Machine,
+    };
 
     /// Recognition enabled with left and right tracking, as the real path configures it.
     fn enabled() -> PointerGesture {
@@ -593,7 +590,10 @@ mod tests {
         gesture.set(88, 98);
         for expected in [1, 0] {
             while !matches!(vm.step().unwrap(), crate::machine::Step::System { .. }) {}
-            assert!(gesture.try_handle(&mut vm).unwrap());
+            let (pc, command) = vm.pending_system().unwrap();
+            gesture
+                .handle(&mut Call::new(&mut vm, pc, command))
+                .unwrap();
             assert_eq!(vm.state().system_integer(0), Some(expected));
         }
     }
@@ -704,7 +704,10 @@ mod tests {
                 vm.step().unwrap(),
                 crate::machine::Step::System { .. }
             ));
-            assert!(gesture.try_handle(&mut vm).unwrap());
+            let (pc, command) = vm.pending_system().unwrap();
+            gesture
+                .handle(&mut Call::new(&mut vm, pc, command))
+                .unwrap();
             let expected = if active {
                 [1, (-3i32) as u32, 25, 103, 20, 30, 5]
             } else {

@@ -271,21 +271,7 @@ impl SceneHost {
         }
     }
 
-    /// 0x222f / 0x14007a7a0: frees the wipe (0x140053380), builds one from SP-4 mode, SP-8
-    /// color, SP-12 size, SP-16 duration and SP-20 layer, sets system result 0 to 1 and
-    /// returns 0x4014. 0x2230 / 0x14007aa30 finishes it; 0x2231 / 0x14007a9e0 frees it;
-    /// 0x2232 / 0x14007aaa0 sets system result 0 to the time left, −1 without a wipe. These
-    /// three return 0x4000 and pop nothing. 0x2247 / 0x14007a8a0 builds a wipe from a slot
-    /// object instead and stays unhandled.
-    pub fn try_handle_strip(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ 0x22f..=0x232)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_strip(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
-
-    pub(crate) fn handle_strip(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle_strip(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         match command {
@@ -333,7 +319,7 @@ impl SceneHost {
     /// Otherwise 0xa000 (always for SP-4 zero) until the frame update finishes it.
     pub fn try_wait_strip(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Option<Step>, DecodeError> {
@@ -346,7 +332,7 @@ impl SceneHost {
 
     pub(crate) fn handle_wait_strip(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Flow, DecodeError> {

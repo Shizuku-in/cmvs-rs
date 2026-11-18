@@ -1,6 +1,5 @@
 use cmvs_core::{
-    digest::{sha256, to_hex},
-    mgv::{Decoder, MgvIndex},
+    format::digest::sha256, format::digest::to_hex, format::mgv::Decoder, format::mgv::MgvIndex,
 };
 use cmvs_video::TheoraStream;
 use std::{
@@ -115,8 +114,8 @@ fn with_picture(bytes: &[u8], index: &MgvIndex, x: u8, y: u8) -> Vec<u8> {
 }
 
 fn assert_crop(
-    cropped: &cmvs_core::raster::RgbaImage,
-    full: &cmvs_core::raster::RgbaImage,
+    cropped: &cmvs_core::render::raster::RgbaImage,
+    full: &cmvs_core::render::raster::RgbaImage,
     x: usize,
 ) {
     assert_eq!((cropped.width(), cropped.height()), (24, 24));
@@ -168,7 +167,7 @@ fn odd_picture_left_edge_keeps_absolute_chroma_columns() {
 
 #[test]
 fn prefetching_decoder_matches_the_inline_stream() {
-    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_core::format::mgv::DecoderFactory;
     use cmvs_video::{PrefetchTheoraFactory, TheoraFactory};
     let bytes = fixture();
     let index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
@@ -196,11 +195,18 @@ fn prefetching_decoder_matches_the_inline_stream() {
 
 #[test]
 fn repeated_frames_do_not_rewind_the_prefetching_decoder() {
-    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_core::format::mgv::DecoderFactory;
     use cmvs_video::PrefetchTheoraFactory;
     let factory = PrefetchTheoraFactory::default();
     let buffered = factory.with_lookahead(1 << 20, 16);
-    for factory in [&factory as &dyn DecoderFactory, &buffered] {
+    let one_yuv = factory.with_lookahead(1536, 16);
+    let zero_budget = factory.with_lookahead(0, 2);
+    for factory in [
+        &factory as &dyn DecoderFactory,
+        &buffered,
+        &one_yuv,
+        &zero_budget,
+    ] {
         let bytes = fixture();
         let mut index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
         let mut frames = vec![index.frames[0]; 16];
@@ -238,7 +244,7 @@ fn repeated_frames_do_not_rewind_the_prefetching_decoder() {
 #[test]
 #[ignore = "requires CMVS_THEORA_MGV"]
 fn external_prefetch_playback_never_rewinds_forward_requests() {
-    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_core::format::mgv::DecoderFactory;
     use cmvs_video::PrefetchTheoraFactory;
     let path = std::env::var("CMVS_THEORA_MGV").unwrap();
     let mut source = std::fs::File::open(&path).unwrap();
@@ -281,8 +287,8 @@ fn external_prefetch_playback_never_rewinds_forward_requests() {
 }
 
 #[test]
-fn cached_frame_does_not_wait_for_a_later_packet() {
-    use cmvs_core::mgv::DecoderFactory;
+fn cached_frame_and_drop_do_not_wait_for_a_later_packet() {
+    use cmvs_core::format::mgv::DecoderFactory;
     use cmvs_video::PrefetchTheoraFactory;
     use std::{sync::mpsc, time::Duration};
     struct BlockingReader {
@@ -290,6 +296,7 @@ fn cached_frame_does_not_wait_for_a_later_packet() {
         at: u64,
         reached: Option<mpsc::SyncSender<()>>,
         release: mpsc::Receiver<()>,
+        _alive: mpsc::Sender<()>,
     }
     impl Read for BlockingReader {
         fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
@@ -316,6 +323,7 @@ fn cached_frame_does_not_wait_for_a_later_packet() {
     let (release, release_rx) = mpsc::sync_channel(1);
     let (ask, ask_rx) = mpsc::sync_channel(1);
     let (done_tx, done) = mpsc::sync_channel(1);
+    let (alive, reader_dropped) = mpsc::channel();
     let host = std::thread::spawn(move || {
         let mut decoder = PrefetchTheoraFactory::default()
             .with_lookahead(1 << 20, 16)
@@ -325,13 +333,16 @@ fn cached_frame_does_not_wait_for_a_later_packet() {
                     at,
                     reached: Some(reached_tx),
                     release: release_rx,
+                    _alive: alive,
                 }),
                 &index,
             )
             .unwrap();
         decoder.frame(0).unwrap();
         if ask_rx.recv().is_ok() {
-            let _ = done_tx.send(decoder.frame(1).unwrap());
+            let image = decoder.frame(1).unwrap();
+            drop(decoder);
+            let _ = done_tx.send(image);
         }
     });
     // The worker has frame 1 ready and is deliberately stuck reading frame 3.
@@ -341,7 +352,11 @@ fn cached_frame_does_not_wait_for_a_later_packet() {
     let _ = release.send(());
     host.join().unwrap();
     assert_eq!(
-        cached.expect("cached frame waited for the blocked worker"),
+        cached.expect("cache hit or drop waited for the blocked worker"),
         expected
+    );
+    assert_eq!(
+        reader_dropped.recv_timeout(Duration::from_secs(5)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
     );
 }

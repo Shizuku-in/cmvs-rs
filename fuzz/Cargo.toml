@@ -1,0 +1,53 @@
+[package]
+name = "cmvs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace so offline workspace builds of cmvs-rs never pull in libfuzzer-sys.
+[workspace]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+cmvs-core = { path = "../crates/cmvs-core" }
+
+[[bin]]
+name = "ps3_bytecode"
+path = "fuzz_targets/ps3_bytecode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cpz_archive"
+path = "fuzz_targets/cpz_archive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "images"
+path = "fuzz_targets/images.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "media"
+path = "fuzz_targets/media.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "saves_and_pe"
+path = "fuzz_targets/saves_and_pe.rs"
+test = false
+doc = false
+bench = false

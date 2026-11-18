@@ -171,7 +171,7 @@ impl Presenter {
                 return Err("GPU surface validation failed".into());
             }
         };
-        let viewport = cmvs_core::viewport::Viewport::new(frame.size, size, mode)?;
+        let viewport = cmvs_core::render::viewport::Viewport::new(frame.size, size, mode)?;
         let data = [
             viewport.left as f32,
             viewport.top as f32,
@@ -289,7 +289,8 @@ pub(crate) fn scale_image(
     linear: bool,
 ) -> Result<GpuFrame> {
     renderer.check()?;
-    let viewport = cmvs_core::viewport::Viewport::new([image.width(), image.height()], size, 1)?;
+    let viewport =
+        cmvs_core::render::viewport::Viewport::new([image.width(), image.height()], size, 1)?;
     if size
         .iter()
         .any(|&v| v > renderer.device.limits().max_texture_dimension_2d)

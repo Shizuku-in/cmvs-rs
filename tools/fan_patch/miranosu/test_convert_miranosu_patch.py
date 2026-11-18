@@ -1,9 +1,12 @@
 """Synthetic compressed vectors; no game or translation data required."""
 from pathlib import Path
 import struct
+import sys
 import tempfile
 import unittest
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import convert_miranosu_patch as patch
 
 # LE32 control words interleaved with literals, an end marker, and two matches.
@@ -48,6 +51,10 @@ class ConverterTests(unittest.TestCase):
             self.assertFalse((root / "output").exists())
             with self.assertRaisesRegex(ValueError, "outside"):
                 patch.convert(root, root / "patch.zip", root / "output")
+
+    def test_patch_command_selects_miranosu(self):
+        cmd = patch.patch_command("g", "p", "o", "utf-8")
+        self.assertEqual(cmd[-5:], ["miranosu", "g", "p", "o", "utf-8"])
 
 
 if __name__ == "__main__":

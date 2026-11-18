@@ -1,4 +1,4 @@
-//! Single-image, 8-bit and 32-bit BI_RGB CUR files. No OS cursor handles.
+//! Single-image, 4-bit, 8-bit, 24-bit and 32-bit BI_RGB CUR files. No OS cursor handles.
 //! Preserve AND/XOR semantics; not every legacy cursor can be represented by RGBA.
 use crate::FormatError;
 
@@ -120,32 +120,36 @@ impl CursorBitmap {
             || dword(b, 4) != width as u32
             || dword(b, 8) != 2 * height as u32
             || word(b, 12) != 1
-            || !matches!(word(b, 14), 8 | 32)
+            || !matches!(word(b, 14), 4 | 8 | 24 | 32)
             || dword(b, 16) != 0
         {
             return Err(FormatError(
-                "unsupported CUR DIB layout; expected bottom-up 8-bit or 32-bit BI_RGB",
+                "unsupported CUR DIB layout; expected bottom-up 4-bit, 8-bit, 24-bit or 32-bit BI_RGB",
             ));
         }
         let bits = word(b, 14);
-        let colors = if bits == 32 {
-            if dword(b, 32) != 0 {
-                return Err(FormatError("32-bit CUR palette is unsupported"));
+        let colors = match bits {
+            24 | 32 => {
+                if dword(b, 32) != 0 {
+                    return Err(FormatError("24-bit or 32-bit CUR palette is unsupported"));
+                }
+                0
             }
-            0
-        } else if dword(b, 32) == 0 {
-            256
-        } else {
-            dword(b, 32) as usize
+            4 | 8 => {
+                let max_colors = 1usize << bits;
+                let used = if dword(b, 32) == 0 {
+                    max_colors
+                } else {
+                    dword(b, 32) as usize
+                };
+                if used > max_colors {
+                    return Err(FormatError("CUR palette exceeds bit-depth limit"));
+                }
+                used
+            }
+            _ => unreachable!("validated bit depth"),
         };
-        if colors > 256 {
-            return Err(FormatError("CUR palette exceeds 256 entries"));
-        }
-        let xor_stride = if bits == 32 {
-            width * 4
-        } else {
-            width.div_ceil(4) * 4
-        };
+        let xor_stride = (width * usize::from(bits)).div_ceil(32) * 4;
         let and_stride = width.div_ceil(32) * 4;
         let pixels = 40 + colors * 4;
         let mask = pixels + xor_stride * height;
@@ -157,16 +161,29 @@ impl CursorBitmap {
         let mut alpha = Vec::with_capacity(if bits == 32 { width * height } else { 0 });
         for y in (0..height).rev() {
             for x in 0..width {
-                let color = if bits == 32 {
-                    let color = pixels + y * xor_stride + x * 4;
-                    alpha.push(b[color + 3]);
-                    color
-                } else {
-                    let index = usize::from(b[pixels + y * xor_stride + x]);
-                    if index >= colors {
-                        return Err(FormatError("CUR pixel index outside palette"));
+                let color = match bits {
+                    32 => {
+                        let color = pixels + y * xor_stride + x * 4;
+                        alpha.push(b[color + 3]);
+                        color
                     }
-                    40 + index * 4
+                    24 => pixels + y * xor_stride + x * 3,
+                    _ => {
+                        let index = if bits == 4 {
+                            let byte = b[pixels + y * xor_stride + x / 2];
+                            usize::from(if x.is_multiple_of(2) {
+                                byte >> 4
+                            } else {
+                                byte & 0x0f
+                            })
+                        } else {
+                            usize::from(b[pixels + y * xor_stride + x])
+                        };
+                        if index >= colors {
+                            return Err(FormatError("CUR pixel index outside palette"));
+                        }
+                        40 + index * 4
+                    }
                 };
                 xor_rgb.push([b[color + 2], b[color + 1], b[color]]);
                 and_mask.push(b[mask + y * and_stride + x / 8] & (128 >> (x % 8)) != 0);

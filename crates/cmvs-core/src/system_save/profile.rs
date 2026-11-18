@@ -1,17 +1,19 @@
 //! Explicit user-directory storage policy, independent of original CMVS file replacement.
 use super::{Css1Save, FileSystemSave, SystemSaveSink, SystemSaveSource};
-use crate::filesystem as fs;
-use crate::filesystem::{File, OpenOptions};
+use crate::filesystem::{File, HostFs, OpenOptions};
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
-fn regular_file(path: &Path) -> io::Result<bool> {
-    match fs::symlink_metadata(path) {
+fn regular_file(fs: &dyn HostFs, path: &Path) -> io::Result<bool> {
+    match fs.symlink_metadata(path) {
         Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => Ok(true),
         Ok(_) => Err(io::Error::other(
             "profile entries must be regular files, not links or directories",
@@ -21,11 +23,11 @@ fn regular_file(path: &Path) -> io::Result<bool> {
     }
 }
 
-fn external_directory(path: &Path, game_root: &Path) -> io::Result<PathBuf> {
-    let game_root = fs::canonicalize(game_root)?;
+fn external_directory(fs: &dyn HostFs, path: &Path, game_root: &Path) -> io::Result<PathBuf> {
+    let game_root = fs.canonicalize(game_root)?;
     let mut ancestor = path.to_path_buf();
     let mut missing = Vec::new();
-    while !fs::try_exists(&ancestor)? {
+    while !fs.try_exists(&ancestor)? {
         let name = ancestor
             .file_name()
             .ok_or_else(|| io::Error::other("profile path needs an existing ancestor"))?
@@ -37,7 +39,7 @@ fn external_directory(path: &Path, game_root: &Path) -> io::Result<PathBuf> {
             .unwrap_or(Path::new("."))
             .to_owned();
     }
-    let mut resolved = fs::canonicalize(&ancestor)?;
+    let mut resolved = fs.canonicalize(&ancestor)?;
     for name in missing.into_iter().rev() {
         resolved.push(name);
     }
@@ -46,8 +48,8 @@ fn external_directory(path: &Path, game_root: &Path) -> io::Result<PathBuf> {
             "user data directory must be outside the read-only game root",
         ));
     }
-    fs::create_dir_all(&resolved)?;
-    let resolved = fs::canonicalize(&resolved)?;
+    fs.create_dir_all(&resolved)?;
+    let resolved = fs.canonicalize(&resolved)?;
     if resolved.starts_with(game_root) {
         return Err(io::Error::other(
             "user data directory resolves inside the read-only game root",
@@ -57,12 +59,13 @@ fn external_directory(path: &Path, game_root: &Path) -> io::Result<PathBuf> {
 }
 
 struct StagedFile {
+    fs: Arc<dyn HostFs>,
     path: PathBuf,
     committed: bool,
 }
 impl StagedFile {
     fn commit(mut self, target: &Path) -> io::Result<()> {
-        fs::replace(&self.path, target)?;
+        self.fs.replace(&self.path, target)?;
         self.committed = true;
         Ok(())
     }
@@ -70,53 +73,72 @@ impl StagedFile {
 impl Drop for StagedFile {
     fn drop(&mut self) {
         if !self.committed {
-            let _ = fs::remove_file(&self.path);
+            let _ = self.fs.remove_file(&self.path);
         }
     }
 }
 
-/// One session owns an OS file lock. Close/crash releases the lock automatically;
-/// the empty lock file remains and must not be removed while a session owns it.
-/// Horizon has no file locks and runs one application at a time, so there the file
-/// only marks the directory.
+/// One session owns a host directory lock handle; dropping releases it.
+/// Hosts without competing sessions (single-app consoles, browser workers) may mark
+/// the directory without OS locking.
 pub struct ProfileSystemSave {
+    fs: Arc<dyn HostFs>,
     directory: PathBuf,
+    css0: Option<super::PersistentStarts>,
     _lock: File,
 }
 impl ProfileSystemSave {
-    pub fn open(directory: &Path, game_root: &Path) -> io::Result<Self> {
-        let directory = external_directory(directory, game_root)?;
-        Self::open_directory(directory)
+    pub fn open_with_fs(
+        directory: &Path,
+        game_root: &Path,
+        fs: Arc<dyn HostFs>,
+    ) -> io::Result<Self> {
+        let directory = external_directory(&*fs, directory, game_root)?;
+        Self::open_directory(directory, fs)
     }
-    /// Explicitly opt into the game's own savedata directory. Other game files
+
+    #[cfg(feature = "std-fs")]
+    pub fn open(directory: &Path, game_root: &Path) -> io::Result<Self> {
+        Self::open_with_fs(directory, game_root, crate::filesystem::default_fs())
+    }
+
+    /// Explicitly opt into the game's own savedata directory using `fs`. Other game files
     /// remain read-only, and a symlink may not redirect writes into resources.
-    pub fn open_game_savedata(game_root: &Path) -> io::Result<Self> {
-        let game_root = fs::canonicalize(game_root)?;
+    pub fn open_game_savedata_with_fs(game_root: &Path, fs: Arc<dyn HostFs>) -> io::Result<Self> {
+        let game_root = fs.canonicalize(game_root)?;
         let directory = game_root.join("savedata");
-        match fs::create_dir_all(&directory) {
+        match fs.create_dir_all(&directory) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
         }
-        let metadata = fs::symlink_metadata(&directory)?;
-        if !fs::is_dir(&directory) || metadata.file_type().is_symlink() {
+        let metadata = fs.symlink_metadata(&directory)?;
+        if !fs.is_dir(&directory) || metadata.file_type().is_symlink() {
             return Err(io::Error::other("savedata must be a real directory"));
         }
-        let directory = fs::canonicalize(directory)?;
+        let directory = fs.canonicalize(&directory)?;
         if directory.parent() != Some(game_root.as_path()) {
             return Err(io::Error::other(
                 "savedata resolves outside the game directory",
             ));
         }
-        let profile = Self::open_directory(directory)?;
+        let profile = Self::open_directory(directory, fs)?;
         // Opening an existing lock alone does not prove that saves can be
         // created or atomically replaced in this directory.
         drop(profile.stage(&[])?);
         Ok(profile)
     }
-    fn open_directory(directory: PathBuf) -> io::Result<Self> {
+
+    /// Explicitly opt into the game's own savedata directory. Other game files
+    /// remain read-only, and a symlink may not redirect writes into resources.
+    #[cfg(feature = "std-fs")]
+    pub fn open_game_savedata(game_root: &Path) -> io::Result<Self> {
+        Self::open_game_savedata_with_fs(game_root, crate::filesystem::default_fs())
+    }
+
+    fn open_directory(directory: PathBuf, fs: Arc<dyn HostFs>) -> io::Result<Self> {
         let lock_path = directory.join(".cmvs-system.lock");
-        if regular_file(&lock_path)? && fs::metadata(&lock_path)?.len() != 0 {
+        if regular_file(&*fs, &lock_path)? && fs.metadata(&lock_path)?.len() != 0 {
             return Err(io::Error::other("profile lock file must be empty"));
         }
         let lock = OpenOptions::new()
@@ -124,41 +146,24 @@ impl ProfileSystemSave {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(lock_path)?;
+            .open_with(&*fs, &lock_path)?;
         if lock.metadata()?.len() != 0 {
             return Err(io::Error::other("profile lock file must be empty"));
         }
-        // std::fs::File locking is unsupported on Android. Use the same
-        // nonblocking OS flock there, retaining the descriptor until drop.
-        #[cfg(target_os = "android")]
-        let locked = rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-            .map_err(io::Error::from);
-        // The browser adapter already returns io::Error rather than std's
-        // TryLockError; keep its worker-local lock result unchanged.
-        #[cfg(target_arch = "wasm32")]
-        let locked = lock.try_lock();
-        // Horizon and the Vita run one application at a time and their std has no
-        // file locks; the open lock file alone marks the profile.
-        #[cfg(not(any(
-            target_os = "android",
-            target_os = "horizon",
-            target_os = "vita",
-            target_arch = "wasm32"
-        )))]
-        let locked = lock.try_lock().map_err(io::Error::from);
-        #[cfg(not(any(target_os = "horizon", target_os = "vita")))]
-        locked.map_err(|error| {
+        lock.try_lock().map_err(|error| {
             io::Error::new(
                 error.kind(),
                 format!("cannot lock user data directory: {error}"),
             )
         })?;
         let profile = Self {
+            fs,
             directory,
+            css0: None,
             _lock: lock,
         };
-        let primary = regular_file(&profile.path())?;
-        let backup = regular_file(&profile.backup_path())?;
+        let primary = regular_file(&*profile.fs, &profile.path())?;
+        let backup = regular_file(&*profile.fs, &profile.backup_path())?;
         if !primary && backup {
             return Err(io::Error::other(
                 "profile system.dat is missing but system.bak exists; restore the backup explicitly",
@@ -169,23 +174,60 @@ impl ProfileSystemSave {
     pub fn directory(&self) -> &Path {
         &self.directory
     }
+    pub fn fs(&self) -> &Arc<dyn HostFs> {
+        &self.fs
+    }
+    pub fn is_css0(&self) -> bool {
+        self.css0.is_some()
+    }
+    /// Selects CSS0 (`save000.dat` / `save000.bak`) validation when `starts` is `Some`.
+    pub fn set_css0(&mut self, starts: Option<super::PersistentStarts>) -> io::Result<()> {
+        let first_css0 = self.css0.is_none() && starts.is_some();
+        self.css0 = starts;
+        if first_css0 {
+            let primary = regular_file(&*self.fs, &self.path())?;
+            let backup = regular_file(&*self.fs, &self.backup_path())?;
+            if !primary && backup {
+                return Err(io::Error::other(
+                    "profile save000.dat is missing but save000.bak exists; restore the backup explicitly",
+                ));
+            }
+        }
+        Ok(())
+    }
     pub fn path(&self) -> PathBuf {
-        self.directory.join("system.dat")
+        self.directory.join(if self.css0.is_some() {
+            "save000.dat"
+        } else {
+            "system.dat"
+        })
     }
     pub fn backup_path(&self) -> PathBuf {
-        self.directory.join("system.bak")
+        self.directory.join(if self.css0.is_some() {
+            "save000.bak"
+        } else {
+            "system.bak"
+        })
+    }
+    fn config_names(&self) -> (&'static str, &'static str) {
+        if self.css0.is_some() {
+            ("cvns.cfg", "cvns.cfg.bak")
+        } else {
+            ("cmvs.cfg", "cmvs.cfg.bak")
+        }
     }
     pub fn read_configuration(&self) -> io::Result<Option<crate::settings::Configuration>> {
-        let path = self.directory.join("cmvs.cfg");
-        let primary = regular_file(&path)?;
-        let backup = regular_file(&self.directory.join("cmvs.cfg.bak"))?;
+        let (name, bak) = self.config_names();
+        let path = self.directory.join(name);
+        let primary = regular_file(&*self.fs, &path)?;
+        let backup = regular_file(&*self.fs, &self.directory.join(bak))?;
         if !primary && backup {
-            return Err(io::Error::other(
-                "profile cmvs.cfg is missing but its backup exists; restore explicitly",
-            ));
+            return Err(io::Error::other(format!(
+                "profile {name} is missing but its backup exists; restore explicitly"
+            )));
         }
         if primary {
-            crate::settings::Configuration::read(&path)
+            crate::settings::Configuration::read_with_fs(&*self.fs, &path)
         } else {
             Ok(None)
         }
@@ -194,9 +236,10 @@ impl ProfileSystemSave {
         &mut self,
         configuration: &crate::settings::Configuration,
     ) -> io::Result<()> {
-        let path = self.directory.join("cmvs.cfg");
-        let backup = self.directory.join("cmvs.cfg.bak");
-        regular_file(&backup)?;
+        let (name, bak) = self.config_names();
+        let path = self.directory.join(name);
+        let backup = self.directory.join(bak);
+        regular_file(&*self.fs, &backup)?;
         let previous = self.read_configuration()?;
         let staged = self.stage(configuration.bytes())?;
         if let Some(previous) = previous {
@@ -209,13 +252,18 @@ impl ProfileSystemSave {
             let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
             let path = self
                 .directory
-                .join(format!(".cmvs-system-{}-{id}.tmp", fs::session_id()));
-            let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+                .join(format!(".cmvs-system-{}-{id}.tmp", self.fs.session_id()));
+            let mut file = match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open_with(&*self.fs, &path)
+            {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             };
             let staged = StagedFile {
+                fs: Arc::clone(&self.fs),
                 path,
                 committed: false,
             };
@@ -231,24 +279,37 @@ impl ProfileSystemSave {
 }
 impl SystemSaveSink for ProfileSystemSave {
     fn write(&mut self, raw: &[u8]) -> io::Result<()> {
-        let incoming = Css1Save::decode(raw).map_err(io::Error::other)?;
         let primary = self.path();
         let backup = self.backup_path();
-        let previous = if regular_file(&primary)? {
-            let raw = FileSystemSave::new(&primary)
-                .read()?
-                .ok_or_else(|| io::Error::other("profile system.dat disappeared"))?;
-            let previous = Css1Save::decode(&raw).map_err(io::Error::other)?;
-            if previous.layout().game_id != 0
-                && previous.layout().game_id != incoming.layout().game_id
-            {
-                return Err(io::Error::other("profile CSS1 game identifier mismatch"));
+        let previous = if let Some(starts) = self.css0 {
+            super::Css0Save::decode(raw, starts).map_err(io::Error::other)?;
+            if regular_file(&*self.fs, &primary)? {
+                let raw = FileSystemSave::css0_with_fs(&primary, Arc::clone(&self.fs))
+                    .read()?
+                    .ok_or_else(|| io::Error::other("profile save000.dat disappeared"))?;
+                super::Css0Save::decode(&raw, starts).map_err(io::Error::other)?;
+                Some(raw)
+            } else {
+                None
             }
-            Some(raw)
         } else {
-            None
+            let incoming = Css1Save::decode(raw).map_err(io::Error::other)?;
+            if regular_file(&*self.fs, &primary)? {
+                let raw = FileSystemSave::with_fs(&primary, Arc::clone(&self.fs))
+                    .read()?
+                    .ok_or_else(|| io::Error::other("profile system.dat disappeared"))?;
+                let previous = Css1Save::decode(&raw).map_err(io::Error::other)?;
+                if previous.layout().game_id != 0
+                    && previous.layout().game_id != incoming.layout().game_id
+                {
+                    return Err(io::Error::other("profile CSS1 game identifier mismatch"));
+                }
+                Some(raw)
+            } else {
+                None
+            }
         };
-        regular_file(&backup)?;
+        regular_file(&*self.fs, &backup)?;
         let staged = self.stage(raw)?;
         if let Some(previous) = previous {
             self.stage(&previous)?.commit(&backup)?;

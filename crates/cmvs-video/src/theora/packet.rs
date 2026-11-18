@@ -1,5 +1,5 @@
 use super::{
-    bits::{Bits, Result},
+    bits::{Bits, CoeffToken, Result},
     geometry::Geometry,
     headers::Setup,
 };
@@ -9,16 +9,22 @@ pub(super) struct State {
     pub coded: Vec<u8>,
     pub modes: Vec<u8>,
     pub vectors: Vec<[i16; 2]>,
-    pub qi: Vec<usize>,
+    pub qi: Vec<u8>,
     pub coeffs: Vec<[i16; 64]>,
     pub ncoeffs: Vec<u8>,
-    pub coded_blocks: Vec<usize>,
-    positions: Vec<u8>,
-    active: Vec<usize>,
+    pub coded_blocks: Vec<u32>,
+    active: Vec<u32>,
     partial: Vec<u8>,
     full: Vec<u8>,
     runs: Vec<u8>,
+    dirty_qi: bool,
 }
+
+const POS_SHIFT: u32 = 25;
+const CHROMA_SHIFT: u32 = 24;
+const CHROMA_BIT: u32 = 1 << CHROMA_SHIFT;
+const POS_MASK: u32 = !0u32 << POS_SHIFT;
+const BLOCK_MASK: u32 = CHROMA_BIT - 1;
 
 /// Tables 7.7 / 7.11. All run writes are bounded before filling the scratch slice.
 fn runs(b: &mut Bits<'_>, out: &mut [u8], long: bool) -> Result<()> {
@@ -28,7 +34,7 @@ fn runs(b: &mut Bits<'_>, out: &mut [u8], long: bool) -> Result<()> {
     let mut value = b.read(1)? as u8;
     let mut position = 0;
     loop {
-        let code = unary(b, if long { 6 } else { 5 })?;
+        let code = b.read_unary(if long { 6 } else { 5 })?;
         let (base, extra) = if long {
             [(1, 0), (2, 1), (4, 1), (6, 2), (10, 3), (18, 4), (34, 12)][code]
         } else {
@@ -49,15 +55,6 @@ fn runs(b: &mut Bits<'_>, out: &mut [u8], long: bool) -> Result<()> {
             value ^ 1
         };
     }
-}
-
-fn unary(b: &mut Bits<'_>, maximum: usize) -> Result<usize> {
-    for i in 0..maximum {
-        if b.read(1)? == 0 {
-            return Ok(i);
-        }
-    }
-    Ok(maximum)
 }
 
 fn component(b: &mut Bits<'_>, fixed: bool) -> Result<i16> {
@@ -102,11 +99,11 @@ impl State {
             coeffs: vec![[0; 64]; n],
             ncoeffs: vec![0; n],
             coded_blocks: Vec::with_capacity(n),
-            positions: vec![0; n],
             active: Vec::with_capacity(n),
             partial: vec![0; g.superblocks],
             full: vec![0; g.superblocks],
             runs: vec![0; n.max(g.superblocks)],
+            dirty_qi: false,
         }
     }
 
@@ -120,51 +117,62 @@ impl State {
     ) -> Result<()> {
         self.coded.fill(u8::from(intra));
         self.modes.fill(u8::from(intra));
-        self.vectors.fill([0; 2]);
-        self.qi.fill(0);
+        if self.dirty_qi {
+            self.qi.fill(0);
+            self.dirty_qi = false;
+        }
         if !intra {
             runs(b, &mut self.partial, true)?;
             let n = self.partial.iter().filter(|&&v| v == 0).count();
             runs(b, &mut self.runs[..n], true)?;
             let mut cursor = 0;
-            for (p, f) in self.partial.iter().zip(&mut self.full) {
-                if *p == 0 {
+            for (&p, f) in self.partial.iter().zip(&mut self.full) {
+                if p == 0 {
                     *f = self.runs[cursor];
                     cursor += 1;
                 }
             }
-            let n = g
-                .blocks
+            let n: usize = self
+                .partial
                 .iter()
-                .filter(|block| self.partial[block.sb] != 0)
-                .count();
+                .zip(&g.sb_counts)
+                .filter(|(p, _)| **p != 0)
+                .map(|(_, &c)| usize::from(c))
+                .sum();
             runs(b, &mut self.runs[..n], false)?;
             cursor = 0;
-            for (block, coded) in g.blocks.iter().zip(&mut self.coded) {
-                *coded = if self.partial[block.sb] != 0 {
-                    let v = self.runs[cursor];
-                    cursor += 1;
-                    v
+            let mut block_offset = 0;
+            for ((&partial, &full), &count) in self.partial.iter().zip(&self.full).zip(&g.sb_counts)
+            {
+                let count = usize::from(count);
+                let slice = &mut self.coded[block_offset..block_offset + count];
+                if partial != 0 {
+                    slice.copy_from_slice(&self.runs[cursor..cursor + count]);
+                    cursor += count;
                 } else {
-                    self.full[block.sb]
-                };
+                    slice.fill(full);
+                }
+                block_offset += count;
             }
             self.decode_modes(b, g)?;
             self.decode_vectors(b, g)?;
         }
-        for q in 0..nqis - 1 {
-            let n = self
-                .coded
-                .iter()
-                .zip(&self.qi)
-                .filter(|(c, qi)| **c != 0 && **qi == q)
-                .count();
-            runs(b, &mut self.runs[..n], true)?;
-            let mut cursor = 0;
-            for (&coded, qi) in self.coded.iter().zip(&mut self.qi) {
-                if coded != 0 && *qi == q {
-                    *qi += self.runs[cursor] as usize;
-                    cursor += 1;
+        if nqis > 1 {
+            self.dirty_qi = true;
+            for q in 0..nqis - 1 {
+                let n = self
+                    .coded
+                    .iter()
+                    .zip(&self.qi)
+                    .filter(|(c, qi)| **c != 0 && **qi == q as u8)
+                    .count();
+                runs(b, &mut self.runs[..n], true)?;
+                let mut cursor = 0;
+                for (&coded, qi) in self.coded.iter().zip(&mut self.qi) {
+                    if coded != 0 && *qi == q as u8 {
+                        *qi += self.runs[cursor];
+                        cursor += 1;
+                    }
                 }
             }
         }
@@ -198,11 +206,11 @@ impl State {
             alphabet = ALPHABETS[scheme - 1];
         }
         for (mode, blocks) in self.modes.iter_mut().zip(&g.macroblocks) {
-            if blocks[..4].iter().any(|&bi| self.coded[bi] != 0) {
+            if blocks[..4].iter().any(|&bi| self.coded[bi as usize] != 0) {
                 *mode = if scheme == 7 {
                     b.read(3)? as u8
                 } else {
-                    alphabet[unary(b, 7)?]
+                    alphabet[b.read_unary(7)?]
                 };
             }
         }
@@ -217,9 +225,9 @@ impl State {
                 let mut sum = [0i16; 2];
                 let mut newest = last;
                 for &bi in &blocks[..4] {
-                    if self.coded[bi] != 0 {
+                    if self.coded[bi as usize] != 0 {
                         let mv = vector(b, fixed)?;
-                        self.vectors[bi] = mv;
+                        self.vectors[bi as usize] = mv;
                         newest = mv;
                         sum[0] += mv[0];
                         sum[1] += mv[1];
@@ -228,8 +236,8 @@ impl State {
                 prior = last;
                 last = newest;
                 let average = sum.map(|v| v.signum() * ((v.abs() + 2) / 4));
-                self.vectors[blocks[4]] = average;
-                self.vectors[blocks[5]] = average;
+                self.vectors[blocks[4] as usize] = average;
+                self.vectors[blocks[5] as usize] = average;
                 continue;
             }
             let mv = match mode {
@@ -247,82 +255,89 @@ impl State {
                 _ => [0; 2],
             };
             for &bi in blocks {
-                self.vectors[bi] = mv;
+                self.vectors[bi as usize] = mv;
             }
         }
         Ok(())
     }
 
     fn decode_coeffs(&mut self, b: &mut Bits<'_>, g: &Geometry, setup: &Setup) -> Result<()> {
-        self.positions.fill(64);
-        self.ncoeffs.fill(0);
         self.active.clear();
         self.coded_blocks.clear();
-        for (bi, &coded) in self.coded.iter().enumerate() {
+        let luma_blocks = g.luma_blocks;
+        let (luma_coded, chroma_coded) = self.coded.split_at(luma_blocks);
+        for (bi, &coded) in luma_coded.iter().enumerate() {
             if coded != 0 {
-                self.coded_blocks.push(bi);
-                self.coeffs[bi].fill(0);
-                self.positions[bi] = 0;
+                let b32 = bi as u32;
+                self.coded_blocks.push(b32);
+                self.active.push(b32);
             }
         }
-        self.active.extend_from_slice(&self.coded_blocks);
+        for (ci, &coded) in chroma_coded.iter().enumerate() {
+            if coded != 0 {
+                let bi = luma_blocks + ci;
+                let b32 = bi as u32;
+                self.coded_blocks.push(b32);
+                self.active.push(CHROMA_BIT | b32);
+            }
+        }
         let mut eobs = 0usize;
         let mut tables = [0; 2];
         for ti in 0..64 {
             if ti <= 1 {
                 tables = [b.read(4)? as usize, b.read(4)? as usize];
             }
-            let group = match ti {
+            if self.active.is_empty() {
+                break;
+            }
+            let group_base = match ti {
                 0 => 0,
-                1..=5 => 1,
-                6..=14 => 2,
-                15..=27 => 3,
-                _ => 4,
+                1..=5 => 16,
+                6..=14 => 32,
+                15..=27 => 48,
+                _ => 64,
             };
+            let ti_shifted = (ti as u32) << POS_SHIFT;
             let mut remaining = 0;
-            for cursor in 0..self.active.len() {
-                let bi = self.active[cursor];
-                if self.positions[bi] as usize == ti {
-                    self.ncoeffs[bi] = ti as u8;
-                    if eobs != 0 {
-                        eobs -= 1;
-                        self.positions[bi] = 64;
-                    } else {
-                        let table = group * 16 + tables[usize::from(bi >= g.macroblocks.len() * 4)];
-                        let (token, extra) = setup.huffman[table].token(b, &TOKEN_EXTRA_BITS)?;
-                        if token < 7 {
-                            eobs = match token {
-                                0..=2 => token as usize + 1,
-                                3..=5 => (1 << (token - 1)) + extra as usize,
-                                _ => {
-                                    let n = extra as usize;
-                                    if n == 0 {
-                                        self.positions.iter().filter(|&&p| p < 64).count()
-                                    } else {
-                                        n
-                                    }
-                                }
-                            };
-                            eobs -= 1;
-                            self.positions[bi] = 64;
-                        } else {
-                            let (run, value) = coefficient_value(token, extra);
-                            let end = ti + run + usize::from(value != 0);
-                            if end > 64 {
-                                return Err(FormatError("Theora coefficient run exceeds block"));
-                            }
-                            if value != 0 {
-                                self.coeffs[bi][ti + run] = value;
-                                self.ncoeffs[bi] = end as u8;
-                            }
-                            self.positions[bi] = end as u8;
-                        }
-                    }
+            let active_len = self.active.len();
+            for cursor in 0..active_len {
+                let entry = self.active[cursor];
+                if (entry & POS_MASK) != ti_shifted {
+                    self.active[remaining] = entry;
+                    remaining += 1;
+                    continue;
                 }
-                // Compact while decoding instead of scanning the same list a
-                // second time. Writes never overtake the unread input cursor.
-                if self.positions[bi] < 64 {
-                    self.active[remaining] = bi;
+                let bi = (entry & BLOCK_MASK) as usize;
+                if eobs != 0 {
+                    eobs -= 1;
+                    self.ncoeffs[bi] = ti as u8;
+                    continue;
+                }
+                let table = group_base + tables[((entry >> CHROMA_SHIFT) & 1) as usize];
+                let (run, value) =
+                    match setup.huffman[table].next(b, &TOKEN_EXTRA_BITS, resolve_coeff)? {
+                        CoeffToken::Eob(remaining_eobs) => {
+                            eobs = match remaining_eobs {
+                                Some(n) => n,
+                                None => remaining + (active_len - cursor) - 1,
+                            };
+                            self.ncoeffs[bi] = ti as u8;
+                            continue;
+                        }
+                        CoeffToken::Coeff(run, value) => (run, value),
+                    };
+                let end = ti + run + usize::from(value != 0);
+                if end > 64 {
+                    return Err(FormatError("Theora coefficient run exceeds block"));
+                }
+                if value != 0 {
+                    self.coeffs[bi][ti + run] = value;
+                    self.ncoeffs[bi] = end as u8;
+                } else if end == 64 {
+                    self.ncoeffs[bi] = ti as u8;
+                }
+                if end < 64 {
+                    self.active[remaining] = (entry & !POS_MASK) | ((end as u32) << POS_SHIFT);
                     remaining += 1;
                 }
             }
@@ -336,68 +351,79 @@ impl State {
 
     fn predict_dc(&mut self, g: &Geometry) {
         // Table 7.47, indexed by available left, lower-left, lower, lower-right.
+        // Element 4 is log2(divisor), matching integer division truncated toward zero.
         const WEIGHTS: [[i32; 5]; 16] = [
-            [0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 0, 1, 0, 1],
-            [1, 0, 1, 0, 2],
-            [0, 0, 1, 0, 1],
-            [29, -26, 29, 0, 32],
-            [0, 0, 0, 1, 1],
-            [75, 0, 0, 53, 128],
-            [0, 1, 0, 1, 2],
-            [75, 0, 0, 53, 128],
-            [0, 0, 1, 0, 1],
-            [75, 0, 0, 53, 128],
-            [0, 3, 10, 3, 16],
-            [29, -26, 29, 0, 32],
+            [0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0],
+            [1, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0],
+            [1, 0, 1, 0, 1],
+            [0, 0, 1, 0, 0],
+            [29, -26, 29, 0, 5],
+            [0, 0, 0, 1, 0],
+            [75, 0, 0, 53, 7],
+            [0, 1, 0, 1, 1],
+            [75, 0, 0, 53, 7],
+            [0, 0, 1, 0, 0],
+            [75, 0, 0, 53, 7],
+            [0, 3, 10, 3, 4],
+            [29, -26, 29, 0, 5],
         ];
         for plane in 0..3 {
             let bw = g.sizes[plane].0 / 8;
+            let bh = g.sizes[plane].1 / 8;
+            let raster = &g.raster[plane];
             let mut last = [0i32; 3];
-            for (ri, &bi) in g.raster[plane].iter().enumerate() {
-                if self.coded[bi] == 0 {
-                    continue;
-                }
-                let block = &g.blocks[bi];
-                let rfi = reference(self.modes[block.mb]);
-                let (x, y) = (block.x, block.y);
-                let candidates = [
-                    (x > 0).then(|| ri - 1),
-                    (x > 0 && y > 0).then(|| ri - bw - 1),
-                    (y > 0).then(|| ri - bw),
-                    (x + 1 < bw && y > 0).then(|| ri - bw + 1),
-                ];
-                let mut dc = [0i32; 4];
-                let mut mask = 0;
-                for (k, neighbor) in candidates.into_iter().enumerate() {
-                    if let Some(ri) = neighbor {
-                        let bj = g.raster[plane][ri];
-                        if self.coded[bj] != 0 && reference(self.modes[g.blocks[bj].mb]) == rfi {
-                            dc[k] = i32::from(self.coeffs[bj][0]);
-                            mask |= 1 << k;
+            for y in 0..bh {
+                let row = y * bw;
+                for x in 0..bw {
+                    let ri = row + x;
+                    let bi = raster[ri] as usize;
+                    if self.coded[bi] == 0 {
+                        continue;
+                    }
+                    let rfi = reference(self.modes[g.blocks[bi].mb as usize]);
+                    let candidates = [
+                        (x > 0).then(|| ri - 1),
+                        (x > 0 && y > 0).then(|| ri - bw - 1),
+                        (y > 0).then(|| ri - bw),
+                        (x + 1 < bw && y > 0).then(|| ri - bw + 1),
+                    ];
+                    let mut dc = [0i32; 4];
+                    let mut mask = 0;
+                    for (k, neighbor) in candidates.into_iter().enumerate() {
+                        if let Some(nri) = neighbor {
+                            let bj = raster[nri] as usize;
+                            if self.coded[bj] != 0
+                                && reference(self.modes[g.blocks[bj].mb as usize]) == rfi
+                            {
+                                dc[k] = i32::from(self.coeffs[bj][0]);
+                                mask |= 1 << k;
+                            }
                         }
                     }
-                }
-                let w = WEIGHTS[mask];
-                let mut pred = if mask == 0 {
-                    last[rfi]
-                } else {
-                    dc.iter().zip(w).map(|(d, w)| d * w).sum::<i32>() / w[4]
-                };
-                if mask & 7 == 7 {
-                    for k in [2, 0, 1] {
-                        if (pred - dc[k]).abs() > 128 {
-                            pred = dc[k];
-                            break;
+                    let w = WEIGHTS[mask];
+                    let mut pred = if mask == 0 {
+                        last[rfi]
+                    } else {
+                        let sum = dc[0] * w[0] + dc[1] * w[1] + dc[2] * w[2] + dc[3] * w[3];
+                        let shift = w[4];
+                        let bias = (sum >> 31) & ((1 << shift) - 1);
+                        (sum + bias) >> shift
+                    };
+                    if mask & 7 == 7 {
+                        for k in [2, 0, 1] {
+                            if (pred - dc[k]).abs() > 128 {
+                                pred = dc[k];
+                                break;
+                            }
                         }
                     }
+                    let value = (i32::from(self.coeffs[bi][0]) + pred) as i16;
+                    self.coeffs[bi][0] = value;
+                    last[rfi] = i32::from(value);
                 }
-                let value = (i32::from(self.coeffs[bi][0]) + pred) as i16;
-                self.coeffs[bi][0] = value;
-                last[rfi] = i32::from(value);
             }
         }
     }
@@ -496,14 +522,15 @@ static COEFFICIENT_TABLES: ([u16; 25], [Coefficient; COEFFICIENT_VALUE_COUNT]) =
 #[cfg(test)]
 fn coefficient(b: &mut Bits<'_>, token: u8) -> Result<(usize, i16)> {
     let extra = b.read(u32::from(TOKEN_EXTRA_BITS[token as usize]))?;
-    Ok(coefficient_value(token, extra))
+    let (run, value) = resolve_coeff(token, extra);
+    Ok((usize::from(run), value))
 }
 
 #[inline]
-fn coefficient_value(token: u8, extra: u32) -> (usize, i16) {
+pub(super) fn resolve_coeff(token: u8, extra: u32) -> (u8, i16) {
     let first = COEFFICIENT_TABLES.0[token as usize - 7];
     let value = COEFFICIENT_TABLES.1[usize::from(first) + extra as usize];
-    (usize::from(value.run), value.value)
+    (value.run, value.value)
 }
 
 #[cfg(test)]
@@ -526,7 +553,7 @@ mod tests {
             }
         }
         assert_eq!(
-            cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(&recorded)),
+            cmvs_core::format::digest::to_hex(&cmvs_core::format::digest::sha256(&recorded)),
             "45cdb90d11b7deeb7e7f5414b2009cc362153f5ce23ffd53cc7bcee9a520287c"
         );
     }

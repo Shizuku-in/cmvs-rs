@@ -232,11 +232,12 @@ fn legacy_sine(degrees: f32, distance: f32) -> f32 {
 
 impl SceneHost {
     fn supports_world_motion_mode(&self, mode: u32) -> bool {
-        if self.legacy_world_motion {
+        if self.config.legacy_world_motion {
             return matches!(mode as u8, 0 | 1 | 0x10);
         }
         WorldMotion::supports_mode(mode)
-            || self.allow_legacy_sine_modes && matches!(mode as u8, 0x20 | 0x21 | 0x30 | 0x40)
+            || self.config.allow_legacy_sine_modes
+                && matches!(mode as u8, 0x20 | 0x21 | 0x30 | 0x40)
     }
 
     /// 0x228a normal execution: replace +152, write key 0, and capture the execution-time
@@ -251,7 +252,7 @@ impl SceneHost {
     ) -> Result<(), DecodeError> {
         let fail = |why| error(at.0, at.1, why);
         let slot = u8::try_from(raw_slot).map_err(|_| fail("motion slot outside 0..255"))?;
-        let legacy = self.legacy_world_motion;
+        let legacy = self.config.legacy_world_motion;
         let supported = self.supports_world_motion_mode(mode);
         let Some(object) = self.object_mut(slot) else {
             return Ok(());
@@ -298,10 +299,7 @@ impl SceneHost {
         Ok(())
     }
 
-    pub(super) fn handle_world_motion(
-        &mut self,
-        call: &mut Call<'_, '_>,
-    ) -> Result<(), DecodeError> {
+    pub(super) fn handle_world_motion(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
 
         let fail = |why| error(pc, command + 0x2000, why);
@@ -325,7 +323,9 @@ impl SceneHost {
             Some(
                 u16::try_from(args[1])
                     .ok()
-                    .filter(|id| *id < self.child_slots.count() && parent.children.contains_key(id))
+                    .filter(|id| {
+                        *id < self.config.child_slots.count() && parent.children.contains_key(id)
+                    })
                     .ok_or_else(|| {
                         fail("world motion child outside this build's table or missing")
                     })?,
@@ -362,7 +362,7 @@ impl SceneHost {
         match command {
             0x1f9 => {
                 draw.world_motion = Some(Box::new(WorldMotion {
-                    legacy_20070119: self.legacy_world_motion,
+                    legacy_20070119: self.config.legacy_world_motion,
                     ..Default::default()
                 }))
             }
@@ -472,9 +472,12 @@ mod tests {
             [(false, false), (true, false), (false, true), (true, true)]
         {
             let mut scene = super::super::SceneHost {
-                child_slots: super::super::ChildSlots::Slots256,
-                allow_filter_mode_one,
-                allow_legacy_sine_modes,
+                config: super::super::SceneConfig {
+                    child_slots: super::super::ChildSlots::Slots256,
+                    allow_filter_mode_one,
+                    allow_legacy_sine_modes,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             // Both before and after restoring scene state, only the selected

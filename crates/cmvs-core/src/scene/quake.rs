@@ -225,22 +225,7 @@ impl SceneHost {
         }
     }
 
-    /// 0x2225 / 0x14007abc0: replaces the quake with SP-4 mode, SP-8 amplitude, SP-12 period,
-    /// SP-16 count (offset and time zero); returns 0x4010. 0x2226 / 0x14007ac80: system result
-    /// 0 = count − steps, or −1 for an endless or missing quake. 0x2227 / 0x14007acc0: pauses
-    /// while SP-4 is nonzero; pops 4. 0x2229 / 0x14007adf0: frees the quake. 0x2226 and
-    /// 0x2229 return 0x4000. Waveforms the scripts never use stay unmodeled errors: 0x100 and
-    /// step direction 0x20, whose rand() shares the CRT state with 0x20d4. The
-    /// inspected HAROUSE and MEMORIA builds additionally enable the 0x100 triangle waveform.
-    pub fn try_handle_quake(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x20c | 0x225..=0x227 | 0x229))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_quake(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
-
-    pub(crate) fn handle_quake(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle_quake(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         if command == 0x20c {
             // 0x14007ad00: system result 0 = a quake exists and is paused (+20,
@@ -264,7 +249,7 @@ impl SceneHost {
                 );
                 // cmvs-20070119 0x42b9d0 runs the triangle wave for every nonzero waveform
                 // nibble; other directions leave the offset. Stored as 0x100 here.
-                let mode = if self.allow_legacy_triangle_quake && mode & 0xf00 != 0 {
+                let mode = if self.config.allow_legacy_triangle_quake && mode & 0xf00 != 0 {
                     if period == 0 {
                         return Err(error(pc, op, "triangle quake needs a nonzero period"));
                     }
@@ -273,8 +258,10 @@ impl SceneHost {
                     mode
                 };
                 match mode & 0xf00 {
-                    0x100 if self.allow_legacy_triangle_quake => {}
-                    0x100 if self.allow_triangle_quake && matches!(mode & 0xf0, 0 | 0x10) => {
+                    0x100 if self.config.allow_legacy_triangle_quake => {}
+                    0x100
+                        if self.config.allow_triangle_quake && matches!(mode & 0xf0, 0 | 0x10) =>
+                    {
                         if period == 0 {
                             return Err(error(pc, op, "triangle quake needs a nonzero period"));
                         }
@@ -334,7 +321,7 @@ impl SceneHost {
     /// 0x2228 / 0x14007ad50: without a quake system result 0 = 1 and 0x4004. With one, SP-4
     /// nonzero waits (result 0, 0xa000) until the render pass frees it; SP-4 zero frees it
     /// at once (result 1, 0xc004). No input skips this wait.
-    pub fn try_wait_quake(&mut self, vm: &mut Machine<'_>) -> Result<Option<Step>, DecodeError> {
+    pub fn try_wait_quake(&mut self, vm: &mut Machine) -> Result<Option<Step>, DecodeError> {
         let Some((pc, 0x228)) = vm.pending_system() else {
             return Ok(None);
         };
@@ -342,10 +329,7 @@ impl SceneHost {
             .map(|flow| Some(flow.wait_step()))
     }
 
-    pub(crate) fn handle_wait_quake(
-        &mut self,
-        call: &mut Call<'_, '_>,
-    ) -> Result<Flow, DecodeError> {
+    pub(crate) fn handle_wait_quake(&mut self, call: &mut Call<'_>) -> Result<Flow, DecodeError> {
         let wait = call.argument(4, "wait")? != 0;
         let (flow, result) = match &self.quake {
             None => (call.finish(0x4004)?, 1),

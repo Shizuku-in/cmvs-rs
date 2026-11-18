@@ -699,14 +699,14 @@ impl MessageHost {
     /// unlike the yielding 0x2152. SP-8 is unused; SP-16 == 0 appends once.
     pub fn try_record_poll(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         flags: MessageFlags,
     ) -> Result<bool, DecodeError> {
         self.try_record_poll_with_layout(vm, flags, root_append)
     }
     pub(super) fn try_record_poll_with_layout(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         flags: MessageFlags,
         append_layout: AppendLayout,
     ) -> Result<bool, DecodeError> {
@@ -753,16 +753,12 @@ impl MessageHost {
     /// 0x210b / 0x140072aa0: SP-4 text index (signed >= 12 or a missing object only sets
     /// +12056 bit 0x1000), SP-8 string; lays it out with 0x14005b6b0 (`place`) and returns
     /// 0x4008 without a system result. Research mode only, like 0x2152's recording.
-    pub(super) fn place_text(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-    ) -> Result<(), DecodeError> {
+    pub(super) fn place_text(&mut self, vm: &mut Machine, pc: usize) -> Result<(), DecodeError> {
         self.place_text_with_layout(vm, pc, root_place)
     }
     pub(super) fn place_text_with_layout(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         pc: usize,
         place_layout: PlaceLayout,
     ) -> Result<(), DecodeError> {
@@ -795,14 +791,14 @@ impl MessageHost {
     /// global outline setting instead of the text object's own +124 field.
     pub(super) fn place_window_text(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         pc: usize,
     ) -> Result<(), DecodeError> {
         self.place_window_text_with_layout(vm, pc, root_place)
     }
     pub(super) fn place_window_text_with_layout(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         pc: usize,
         place_layout: PlaceLayout,
     ) -> Result<(), DecodeError> {
@@ -834,7 +830,7 @@ impl MessageHost {
     /// to finish revealing early; both use the script skip flag to set new glyph timing.
     pub fn try_record_output(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         input: &mut ActionInput,
         flags: MessageFlags,
     ) -> Result<Option<Step>, DecodeError> {
@@ -842,7 +838,7 @@ impl MessageHost {
     }
     pub(super) fn try_record_output_with_layout(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         input: &mut ActionInput,
         flags: MessageFlags,
         append_layout: AppendLayout,

@@ -4,7 +4,7 @@ use crate::{
     canvas::{Canvas, DIM, MARGIN, TEXT, wrap},
 };
 use ab_glyph::FontVec;
-use cmvs_core::raster::RgbaImage;
+use cmvs_core::render::raster::RgbaImage;
 use cmvs_native::PadInput;
 
 const TITLE: [u8; 3] = [255, 120, 110];

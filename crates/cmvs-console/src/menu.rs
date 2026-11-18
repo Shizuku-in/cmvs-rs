@@ -5,7 +5,7 @@ use crate::{
     library::GameEntry,
 };
 use ab_glyph::FontVec;
-use cmvs_core::raster::RgbaImage;
+use cmvs_core::render::raster::RgbaImage;
 use cmvs_native::PadInput;
 
 /// Rows shown at once.

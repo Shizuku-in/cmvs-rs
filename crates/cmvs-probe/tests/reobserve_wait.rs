@@ -1,4 +1,4 @@
-use cmvs_core::runner::load_start;
+use cmvs_core::runtime::load_start;
 use cmvs_probe::{
     observe::PageSignature,
     scenario::{Event, Scenario},

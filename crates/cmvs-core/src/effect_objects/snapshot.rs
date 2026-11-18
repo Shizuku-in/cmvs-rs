@@ -87,7 +87,7 @@ impl SceneHost {
         random: &mut CrtRandom,
         budget: &mut usize,
         x87_arithmetic: bool,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut templates = BTreeMap::new();
         for &(slot, bytes) in records {
             if slot >= 4
@@ -230,7 +230,7 @@ mod tests {
     #[derive(Default)]
     struct Images(Vec<Vec<u8>>);
     impl ImageSource for Images {
-        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             self.0.push(name.to_vec());
             Ok(Some(b"NONE".to_vec()))
         }

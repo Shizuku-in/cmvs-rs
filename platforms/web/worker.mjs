@@ -61,6 +61,7 @@ async function start(message) {
   }
   files.restore(saved);
   runtime = new WebRuntime(new Uint8Array(await message.font.arrayBuffer()), message.face, message.profile, message.skip);
+  runtime.set_random_seed(Date.now() >>> 0);
   useGpu = Boolean(message.canvas);
   if (useGpu) await runtime.enable_gpu(message.canvas);
   lastFrame = performance.now();

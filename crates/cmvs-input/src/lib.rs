@@ -1,12 +1,12 @@
 //! Host input shared by mobile platforms, without window-system dependencies.
 //! Hosts translate native touches to physical surface pixels and sample once per
 //! engine frame. Gesture recognition and action bindings remain in cmvs-core.
-use cmvs_core::input::{ActionInput, CodeInput, KeyBindings};
+use cmvs_core::{host::input::ActionInput, host::input::CodeInput, host::input::KeyBindings};
 use std::collections::BTreeSet;
 
 /// Shared fixed-point display geometry for a logical game canvas.
 #[derive(Debug, Clone, Copy)]
-pub struct Viewport(cmvs_core::viewport::Viewport);
+pub struct Viewport(cmvs_core::render::viewport::Viewport);
 impl Viewport {
     pub fn new(size: [u32; 2]) -> Option<Self> {
         Self::with_mode(size, 1)
@@ -15,7 +15,7 @@ impl Viewport {
         Self::for_canvas([1280, 720], size, mode)
     }
     pub fn for_canvas(canvas: [u32; 2], size: [u32; 2], mode: u32) -> Option<Self> {
-        cmvs_core::viewport::Viewport::new(canvas, size, mode)
+        cmvs_core::render::viewport::Viewport::new(canvas, size, mode)
             .ok()
             .map(Self)
     }

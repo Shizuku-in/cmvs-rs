@@ -50,7 +50,7 @@ pub trait GpuDevice {
     /// Starts the logical canvas pass, cleared to `clear`.
     fn begin_canvas(&mut self, size: [u32; 2], clear: [u8; 4]) -> Result<(), GpuError>;
     /// `blend` is 0 replace, 1 alpha, 2 additive; `params` uses the layout of
-    /// `cmvs_core::scene_render::shader` (24 or 280 floats); textures bind at slots
+    /// `cmvs_core::render::scene_render::shader` (24 or 280 floats); textures bind at slots
     /// 0 (source), 1 (mask) and 2 (screen mask).
     fn draw(
         &mut self,

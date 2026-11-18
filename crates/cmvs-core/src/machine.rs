@@ -1,11 +1,57 @@
-//! Bounded multi-slot stepping. Unimplemented host commands remain pending.
+//! Run scripts one instruction at a time.
+//!
+//! Create a [`Machine`] from a decoded [`Script`], then call [`Machine::step`].
+//! [`Step::System`] leaves a command pending for the caller to handle. Ordinary
+//! commands finish through [`Machine::complete_system`]; script transfers use
+//! dedicated control methods. [`Step::Yield`] returns control to the host.
+//!
+//! This layer does not identify games, load resources, or initialize a full session.
+//! Use [`crate::runtime::Runtime`] for those services. Reading an uninitialized
+//! variable or executing an unsupported instruction produces [`DecodeError`].
 use crate::{
     bytecode::{self, DecodeError, Expression, Instruction, InstructionKind, Term},
-    evaluate::{Env, Frame, Journal, State, error},
+    evaluate::{Env, EvalScratch, Frame, Journal, State, error},
     ps3::Script,
-    vm::{ParameterStack, StringRef, SystemResult, frame_offset},
+    vm::{ParameterStack, StringRef, SystemResult},
+    vm_core::frame_offset,
 };
-use std::{borrow::Cow, collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, sync::Arc};
+
+/// Conversion into a shared [`Script`] handle for [`Machine`] and [`crate::runtime::Runtime`].
+pub trait IntoSharedScript {
+    /// Convert or clone the caller's script argument into an [`Arc<Script>`].
+    fn into_shared_script(self) -> Arc<Script>;
+}
+
+impl IntoSharedScript for Script {
+    fn into_shared_script(self) -> Arc<Script> {
+        Arc::new(self)
+    }
+}
+
+impl IntoSharedScript for &Script {
+    fn into_shared_script(self) -> Arc<Script> {
+        Arc::new(self.clone())
+    }
+}
+
+impl IntoSharedScript for &mut Script {
+    fn into_shared_script(self) -> Arc<Script> {
+        Arc::new(self.clone())
+    }
+}
+
+impl IntoSharedScript for Arc<Script> {
+    fn into_shared_script(self) -> Arc<Script> {
+        self
+    }
+}
+
+impl IntoSharedScript for &Arc<Script> {
+    fn into_shared_script(self) -> Arc<Script> {
+        Arc::clone(self)
+    }
+}
 
 /// Frame table +82548 has 64 entries indexed by depth +82804; entry 0 is the base.
 const MAX_CALL_DEPTH: usize = 63;
@@ -29,7 +75,8 @@ fn append(buffer: &mut Vec<u8>, bytes: &[u8], pc: usize, tag: u16) -> Result<(),
     buffer.extend_from_slice(bytes);
     Ok(())
 }
-/// 0x140085ea0 copies only slots 0..127; other indexes leave the accumulator unchanged.
+/// 0x140085ea0 copies only slots below the bank size (128; CVNS 256, 0x469d30); other
+/// indexes leave the accumulator unchanged.
 fn append_slot(
     state: &State,
     buffer: &mut Vec<u8>,
@@ -37,7 +84,7 @@ fn append_slot(
     pc: usize,
     tag: u16,
 ) -> Result<(), DecodeError> {
-    if index > 127 {
+    if index >= state.string_slots() {
         return Ok(());
     }
     let bytes = state
@@ -46,31 +93,33 @@ fn append_slot(
     append(buffer, bytes, pc, tag)
 }
 
-struct Image<'a> {
-    script: Cow<'a, Script>,
+struct Image {
+    script: Arc<Script>,
     data: Vec<u8>,
-    /// Shared so each step clones a pointer, not an expression tree.
-    instructions: BTreeMap<usize, Rc<Instruction>>,
+    /// Contiguous decoded instruction slice indexed directly by `step()`.
+    instructions: Box<[Instruction]>,
     labels: Vec<u32>,
     name: Vec<u8>,
 }
 
-pub(crate) struct PreparedMain<'a>(Image<'a>);
+pub(crate) struct PreparedMain(Image);
 
-impl<'a> Image<'a> {
-    fn prepare(script: Cow<'a, Script>, name: Vec<u8>, entry: u32) -> Result<Self, DecodeError> {
+impl Image {
+    fn prepare(script: Arc<Script>, name: Vec<u8>, entry: u32) -> Result<Self, DecodeError> {
         let labels = script.labels();
-        let instructions = bytecode::decode_layout(script.code(), entry, &labels)?
-            .into_iter()
-            .map(|i| (i.pc, Rc::new(i)))
-            .collect();
+        let instructions =
+            bytecode::decode_layout(script.code(), entry, &labels)?.into_boxed_slice();
         Ok(Self {
-            data: script.unknown().to_vec(),
+            data: script.data().to_vec(),
             script,
             instructions,
             labels,
             name,
         })
+    }
+
+    fn instruction_index(&self, pc: usize) -> Option<usize> {
+        self.instructions.binary_search_by_key(&pc, |i| i.pc).ok()
     }
 }
 
@@ -93,8 +142,8 @@ pub struct VmImage {
     pub main_data: Vec<u8>,
 }
 
-pub(crate) struct RestoredVm<'a> {
-    main: Image<'a>,
+pub(crate) struct RestoredVm {
+    main: Image,
     slot: u8,
     pc: usize,
     repeat_count: u32,
@@ -104,67 +153,106 @@ pub(crate) struct RestoredVm<'a> {
     cross_calls: Vec<u8>,
 }
 
+/// Execution outcome of [`Machine::step`] or a completed system command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
+    /// The host may execute another instruction within its budget.
     Continue,
+    /// The script yielded to the host's frame loop.
     Yield,
-    System { pc: usize, command: u16 },
+    /// A system command needs a handler and remains pending.
+    System {
+        /// Byte offset in the active script's code segment.
+        pc: usize,
+        /// Runtime command number; add `0x2000` to obtain the system opcode.
+        command: u16,
+    },
 }
 
-pub struct Machine<'a> {
+/// A script VM with value state, a parameter stack, and script slots.
+///
+/// Owns a shared [`Script`] handle. Construction decodes its instruction layout;
+/// globals remain unknown until initialized. Engine profile setup and system-command
+/// gating are the caller's responsibility at this layer.
+pub struct Machine {
     text_encoding: crate::TextEncoding,
-    images: BTreeMap<u8, Image<'a>>,
+    images: BTreeMap<u8, Image>,
     slot: u8,
     pc: usize,
+    pc_hint: usize,
     state: State,
     stack: ParameterStack,
     frames: Vec<usize>,
     cross_calls: Vec<u8>,
     pending: Option<(usize, u16)>,
     repeat_count: u32,
+    /// CVNS profiles translate system commands to runtime numbering; CMVS has none.
+    command_map: Option<crate::cvns::CommandMap>,
+    journal: Journal,
+    eval_scratch: EvalScratch,
+    string_entries: Vec<(u16, u32, usize)>,
 }
 
-impl<'a> Machine<'a> {
-    pub fn new(script: &'a Script) -> Result<Self, DecodeError> {
-        Self::at(script, script.header.entry_pc)
+impl Machine {
+    /// Create a VM at the script's entry point using Shift-JIS text.
+    ///
+    /// Returns an error for an invalid instruction layout or entry point.
+    pub fn new(script: impl IntoSharedScript) -> Result<Self, DecodeError> {
+        let script = script.into_shared_script();
+        let entry = script.header().entry_pc;
+        Self::at(script, entry)
     }
-    /// An alternate entry is for isolated research, not an initialized game snapshot.
-    pub fn at(script: &'a Script, entry: u32) -> Result<Self, DecodeError> {
+    /// Create a VM at a byte offset in the code segment, using Shift-JIS text.
+    ///
+    /// This does not restore the state that would normally exist at that entry.
+    pub fn at(script: impl IntoSharedScript, entry: u32) -> Result<Self, DecodeError> {
         Self::at_with_encoding(script, entry, crate::TextEncoding::default())
     }
-    /// Select the engine text scanner; archive names and keys keep their resource encoding.
+    /// Create a VM at the script's entry point with the given text encoding.
+    ///
+    /// Archive names and keys keep their resource encoding.
     pub fn new_with_encoding(
-        script: &'a Script,
+        script: impl IntoSharedScript,
         encoding: crate::TextEncoding,
     ) -> Result<Self, DecodeError> {
-        Self::at_with_encoding(script, script.header.entry_pc, encoding)
+        let script = script.into_shared_script();
+        let entry = script.header().entry_pc;
+        Self::at_with_encoding(script, entry, encoding)
     }
+    /// Text encoding used by this VM.
     pub fn text_encoding(&self) -> crate::TextEncoding {
         self.text_encoding
     }
+    /// Create a VM at a byte offset in the code segment, with the given text encoding.
     pub fn at_with_encoding(
-        script: &'a Script,
+        script: impl IntoSharedScript,
         entry: u32,
         encoding: crate::TextEncoding,
     ) -> Result<Self, DecodeError> {
-        let image = Image::prepare(Cow::Borrowed(script), b"entry.ps3".to_vec(), entry)?;
+        let image = Image::prepare(script.into_shared_script(), b"entry.ps3".to_vec(), entry)?;
         Ok(Self {
             text_encoding: encoding,
             images: BTreeMap::from([(0, image)]),
             slot: 0,
             pc: entry as usize,
+            pc_hint: 0,
             state: State::default(),
             stack: ParameterStack::new(65536),
             frames: Vec::new(),
             cross_calls: Vec::new(),
             pending: None,
             repeat_count: 0,
+            command_map: None,
+            journal: Journal::default(),
+            eval_scratch: EvalScratch::default(),
+            string_entries: Vec::new(),
         })
     }
+    /// Current byte offset in the active script's code segment.
     pub fn pc(&self) -> usize {
         self.pc
     }
-    fn image(&self) -> &Image<'a> {
+    fn image(&self) -> &Image {
         &self.images[&self.slot]
     }
     pub fn current_slot(&self) -> u8 {
@@ -178,6 +266,11 @@ impl<'a> Machine<'a> {
     }
     pub fn loaded_script(&self, slot: u8) -> Option<&Script> {
         self.images.get(&slot).map(|i| i.script.as_ref())
+    }
+    pub(crate) fn instructions(&self) -> impl Iterator<Item = &Instruction> {
+        self.images
+            .values()
+            .flat_map(|image| image.instructions.iter())
     }
     pub fn loaded_names(&self) -> Vec<(u8, &[u8])> {
         self.images
@@ -250,7 +343,7 @@ impl<'a> Machine<'a> {
         &self,
         image: &VmImage,
         callback: Option<(u8, usize)>,
-    ) -> Result<RestoredVm<'a>, &'static str> {
+    ) -> Result<RestoredVm, &'static str> {
         let mut script = Script::from_memory_image(&image.main_image).map_err(|e| e.0)?;
         script
             .apply_snapshot_data(&image.main_data)
@@ -280,8 +373,8 @@ impl<'a> Machine<'a> {
             return Err("saved call frame lies above the stack pointer");
         }
         let mut stack = ParameterStack::from_saved(&image.stack, sp, 65536).map_err(|e| e.0)?;
-        let entry = script.header.entry_pc;
-        let main = Image::prepare(Cow::Owned(script), image.script_names[0].clone(), entry)
+        let entry = script.header().entry_pc;
+        let main = Image::prepare(Arc::new(script), image.script_names[0].clone(), entry)
             .map_err(|_| "saved main script layout is invalid")?;
         let mut candidate_state = self.state.clone();
         for (i, &word) in image.system_results.iter().enumerate() {
@@ -293,7 +386,7 @@ impl<'a> Machine<'a> {
         }
         let slot = image.active_slot as u8;
         let is_boundary = |slot, pc| match slot {
-            0 => main.instructions.contains_key(&pc),
+            0 => main.instruction_index(pc).is_some(),
             _ => self.is_boundary(slot, pc),
         };
         if !is_boundary(slot, image.pc as usize) {
@@ -322,10 +415,11 @@ impl<'a> Machine<'a> {
         })
     }
 
-    pub(crate) fn install_restore(&mut self, restored: RestoredVm<'a>) {
+    pub(crate) fn install_restore(&mut self, restored: RestoredVm) {
         self.images.insert(0, restored.main);
         self.slot = restored.slot;
         self.pc = restored.pc;
+        self.pc_hint = 0;
         self.repeat_count = restored.repeat_count;
         self.stack = restored.stack;
         self.frames = restored.frames;
@@ -372,6 +466,7 @@ impl<'a> Machine<'a> {
         self.cross_calls = cross_calls;
         self.slot = slot;
         self.pc = target;
+        self.pc_hint = 0;
         self.repeat_count = 0;
         self.pending = None;
         Ok(())
@@ -383,7 +478,7 @@ impl<'a> Machine<'a> {
     pub fn is_boundary(&self, slot: u8, pc: usize) -> bool {
         self.images
             .get(&slot)
-            .is_some_and(|image| image.instructions.contains_key(&pc))
+            .is_some_and(|image| image.instruction_index(pc).is_some())
     }
     pub fn state(&self) -> &State {
         &self.state
@@ -404,12 +499,34 @@ impl<'a> Machine<'a> {
     pub fn pending_system(&self) -> Option<(usize, u16)> {
         self.pending
     }
+    /// Translate later system commands; the pending one keeps the number it was issued with.
+    pub fn set_command_map(&mut self, map: Option<crate::cvns::CommandMap>) {
+        self.command_map = map;
+    }
+    pub fn command_map(&self) -> Option<&crate::cvns::CommandMap> {
+        self.command_map.as_ref()
+    }
+    /// The pending command as the script encodes it, before any command map applies.
+    pub fn pending_source(&self) -> Option<u16> {
+        let (pc, _) = self.pending?;
+        // step() pins pc_hint to the issuing instruction until pending is cleared.
+        let instruction = &self.image().instructions[self.pc_hint];
+        debug_assert_eq!(instruction.pc, pc);
+        match instruction.kind {
+            InstructionKind::System { command } => Some(command),
+            _ => None,
+        }
+    }
     pub fn resolve_string(&self, raw: u32) -> Result<Vec<u8>, DecodeError> {
         let (bytes, offset) = match StringRef::decode(raw) {
             StringRef::Text(offset) => (self.image().script.text(), offset),
             StringRef::ScriptData(offset) => (self.script_data(), offset),
             StringRef::StringBank(index) => {
-                let index = if index > 127 { 0 } else { index };
+                let index = if index >= self.state.string_slots() {
+                    0
+                } else {
+                    index
+                };
                 return self
                     .state
                     .string(index)
@@ -426,6 +543,25 @@ impl<'a> Machine<'a> {
         };
         Ok(c_string(bytes, offset, self.pc, 0x201)?.to_vec())
     }
+}
+
+struct EvalContext<'a> {
+    script: &'a Script,
+    labels: &'a [u32],
+    data: &'a mut Vec<u8>,
+    state: &'a mut State,
+    stack: &'a mut ParameterStack,
+    frames: &'a [usize],
+    journal: &'a mut Journal,
+    eval_scratch: &'a mut EvalScratch,
+    string_entries: &'a mut Vec<(u16, u32, usize)>,
+}
+
+impl EvalContext<'_> {
+    /// frame[depth]: 0x140080530 zeroes entry 0 with SP, and 0x0410 writes only depth >= 1.
+    fn frame_base(&self) -> usize {
+        self.frames.last().copied().unwrap_or(0)
+    }
 
     /// Word at the current call frame minus `distance`, as tag 0x122/0x103 operands read it.
     fn frame_word(&self, distance: u32, pc: usize, tag: u16) -> Result<u32, DecodeError> {
@@ -439,22 +575,20 @@ impl<'a> Machine<'a> {
     /// Operand reader 0x1400652e0 for string tags: appends to the accumulator.
     fn append_operand(
         &self,
-        state: &State,
         buffer: &mut Vec<u8>,
         (tag, value, pc): (u16, u32, usize),
     ) -> Result<(), DecodeError> {
-        let script = &self.image().script;
         let bytes = match tag {
             // Placeholder left by a previous operator: the original reader returns 0.
             0 => return Ok(()),
-            0x120 => c_string(script.text(), value, pc, tag)?,
-            0x125 => c_string(self.script_data(), value, pc, tag)?,
-            0x121 => return append_slot(state, buffer, value & 0x3fff_ffff, pc, tag),
+            0x120 => c_string(self.script.text(), value, pc, tag)?,
+            0x125 => c_string(self.data, value, pc, tag)?,
+            0x121 => return append_slot(self.state, buffer, value & 0x3fff_ffff, pc, tag),
             0x122 => match StringRef::decode(self.frame_word(value, pc, tag)?) {
-                StringRef::Text(offset) => c_string(script.text(), offset, pc, tag)?,
-                StringRef::ScriptData(offset) => c_string(self.script_data(), offset, pc, tag)?,
+                StringRef::Text(offset) => c_string(self.script.text(), offset, pc, tag)?,
+                StringRef::ScriptData(offset) => c_string(self.data, offset, pc, tag)?,
                 StringRef::StringBank(index) => {
-                    return append_slot(state, buffer, index, pc, tag);
+                    return append_slot(self.state, buffer, index, pc, tag);
                 }
                 StringRef::Frame(_) => {
                     return Err(error(pc, tag, "frame-local string not implemented"));
@@ -468,24 +602,24 @@ impl<'a> Machine<'a> {
     /// 0x0201 / 0x140066b00: clears the accumulator, appends operands as operators read them,
     /// and sets the result only from the tag of the bottom entry. Commits all writes or none.
     fn string_expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {
-        let mut journal = Journal::default();
-        let outcome = self.string_expression_in(expr, &mut journal);
+        self.string_entries.clear();
+        let mut buffer = self.eval_scratch.take_string_buffer();
+        let outcome = self.string_expression_in(expr, &mut buffer);
         if outcome.is_err() {
-            self.state.rollback(
-                journal,
-                Some(&mut self.stack),
-                Some(&mut self.images.get_mut(&self.slot).expect("active image").data),
-            );
+            self.eval_scratch.put_string_buffer(buffer);
+            self.state
+                .rollback(self.journal, Some(self.stack), Some(self.data));
+        } else {
+            self.journal.clear(self.eval_scratch);
         }
         outcome
     }
+
     fn string_expression_in(
         &mut self,
         expr: &Expression,
-        journal: &mut Journal,
+        buffer: &mut Vec<u8>,
     ) -> Result<(), DecodeError> {
-        let mut buffer = Vec::new();
-        let mut entries: Vec<(u16, u32, usize)> = Vec::new();
         for term in &expr.terms {
             match term {
                 Term::Nested {
@@ -495,33 +629,41 @@ impl<'a> Machine<'a> {
                 } => {
                     // The nested integer evaluator also updates result, condition and integer 4096.
                     let base = self.frame_base();
-                    let image = self.images.get_mut(&self.slot).expect("active image");
                     let mut env = Env {
-                        labels: &image.labels,
-                        data: Some(&mut image.data),
+                        labels: self.labels,
+                        data: Some(self.data),
                         frame: Some(Frame {
-                            stack: &mut self.stack,
+                            stack: self.stack,
                             base,
                         }),
                     };
-                    let index = self.state.evaluate_in(expression, &mut env, journal)?;
-                    entries.push((0x121, index as u32 | 0x8000_0000, *pc));
+                    let index = self.state.evaluate_in(
+                        expression,
+                        &mut env,
+                        self.eval_scratch,
+                        self.journal,
+                    )?;
+                    self.string_entries
+                        .push((0x121, index as u32 | 0x8000_0000, *pc));
                 }
-                Term::Scalar { pc, tag, raw } => entries.push((*tag, *raw, *pc)),
+                Term::Scalar { pc, tag, raw } => self.string_entries.push((*tag, *raw, *pc)),
                 Term::Operator { pc, opcode } if (0x160..=0x172).contains(opcode) => {
-                    let top = entries
+                    let top = self
+                        .string_entries
                         .pop()
                         .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
-                    let second = *entries
+                    let second = *self
+                        .string_entries
                         .last()
                         .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
                     if *opcode == 0x170 {
-                        self.append_operand(&self.state, &mut buffer, top)?;
+                        self.append_operand(buffer, top)?;
                         match second {
-                            (0x121, value, _) if value & 0x3fff_ffff > 127 => {}
+                            (0x121, value, _)
+                                if value & 0x3fff_ffff >= self.state.string_slots() => {}
                             (0x121, value, at) => self
                                 .state
-                                .set_string_journaled(value & 0x3fff_ffff, &buffer, journal)
+                                .set_string_journaled(value & 0x3fff_ffff, buffer, self.journal)
                                 .map_err(|why| error(at, 0x121, why))?,
                             (tag, _, at) => {
                                 return Err(error(
@@ -533,10 +675,10 @@ impl<'a> Machine<'a> {
                         }
                     } else {
                         // Binary operators only read both operands, so strings concatenate.
-                        self.append_operand(&self.state, &mut buffer, second)?;
-                        self.append_operand(&self.state, &mut buffer, top)?;
+                        self.append_operand(buffer, second)?;
+                        self.append_operand(buffer, top)?;
                     }
-                    *entries.last_mut().expect("checked above") = (0, 0, *pc);
+                    *self.string_entries.last_mut().expect("checked above") = (0, 0, *pc);
                 }
                 Term::Nested { pc, tag, .. }
                 | Term::Indexed { pc, tag, .. }
@@ -545,12 +687,13 @@ impl<'a> Machine<'a> {
                 }
             }
         }
-        let &(tag, value, pc) = entries
+        let &(tag, value, pc) = self
+            .string_entries
             .first()
             .ok_or_else(|| error(expr.pc, expr.kind, "empty string expression"))?;
         let result = match tag {
             0x120 => {
-                c_string(self.image().script.text(), value, pc, tag)?;
+                c_string(self.script.text(), value, pc, tag)?;
                 Some(value)
             }
             0x121 => Some(value),
@@ -560,42 +703,36 @@ impl<'a> Machine<'a> {
             _ => None, // The original leaves +82812 unchanged.
         };
         if result.is_some() {
-            self.state.set_result_journaled(result, journal);
+            self.state.set_result_journaled(result, self.journal);
         }
         // This evaluator does not modify integer condition flags itself.
-        self.state.set_string_buffer_journaled(buffer, journal);
+        self.state
+            .set_string_buffer_journaled(std::mem::take(buffer), self.journal);
         Ok(())
     }
 
-    /// frame[depth]: 0x140080530 zeroes entry 0 with SP, and 0x0410 writes only depth >= 1.
-    fn frame_base(&self) -> usize {
-        self.frames.last().copied().unwrap_or(0)
-    }
     /// Runs a numeric evaluation with the current labels and frame; rolls back on failure.
     fn numeric<T>(
         &mut self,
-        run: impl FnOnce(&mut State, &mut Env, &mut Journal) -> Result<T, DecodeError>,
+        run: impl FnOnce(&mut State, &mut Env, &mut EvalScratch, &mut Journal) -> Result<T, DecodeError>,
     ) -> Result<T, DecodeError> {
         let base = self.frame_base();
-        let mut journal = Journal::default();
         let outcome = {
-            let image = self.images.get_mut(&self.slot).expect("active image");
             let mut env = Env {
-                labels: &image.labels,
-                data: Some(&mut image.data),
+                labels: self.labels,
+                data: Some(self.data),
                 frame: Some(Frame {
-                    stack: &mut self.stack,
+                    stack: self.stack,
                     base,
                 }),
             };
-            run(&mut self.state, &mut env, &mut journal)
+            run(self.state, &mut env, self.eval_scratch, self.journal)
         };
         if outcome.is_err() {
-            self.state.rollback(
-                journal,
-                Some(&mut self.stack),
-                Some(&mut self.images.get_mut(&self.slot).expect("active image").data),
-            );
+            self.state
+                .rollback(self.journal, Some(self.stack), Some(self.data));
+        } else {
+            self.journal.clear(self.eval_scratch);
         }
         outcome
     }
@@ -603,11 +740,15 @@ impl<'a> Machine<'a> {
     fn expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {
         match expr.kind {
             0x200 => {
-                self.numeric(|state, env, journal| state.evaluate_in(expr, env, journal))?;
+                self.numeric(|state, env, scratch, journal| {
+                    state.evaluate_in(expr, env, scratch, journal)
+                })?;
             }
             0x201 => self.string_expression(expr)?,
             0x202 => {
-                self.numeric(|state, env, journal| state.evaluate_float_in(expr, env, journal))?;
+                self.numeric(|state, env, scratch, journal| {
+                    state.evaluate_float_in(expr, env, scratch, journal)
+                })?;
             }
             _ => {
                 return Err(error(
@@ -619,22 +760,49 @@ impl<'a> Machine<'a> {
         }
         Ok(())
     }
+}
 
+impl Machine {
+    /// Execute one instruction, or return the command already awaiting completion.
+    ///
+    /// A pending [`Step::System`] is returned unchanged until handled. This call
+    /// does not advance frame time or limit the total number of instructions;
+    /// callers must impose their own execution budget.
     pub fn step(&mut self) -> Result<Step, DecodeError> {
         if let Some((pc, command)) = self.pending {
             return Ok(Step::System { pc, command });
         }
-        let insn = self
-            .image()
+        let image = self.images.get_mut(&self.slot).expect("active image");
+        let index = image
             .instructions
-            .get(&self.pc)
-            .cloned()
+            .get(self.pc_hint)
+            .filter(|i| i.pc == self.pc)
+            .map(|_| self.pc_hint)
+            .or_else(|| {
+                image
+                    .instructions
+                    .binary_search_by_key(&self.pc, |i| i.pc)
+                    .ok()
+            })
             .ok_or_else(|| error(self.pc, 0, "PC outside decoded instruction boundaries"))?;
+        let insn = &image.instructions[index];
         let pc = insn.pc;
         let op = insn.opcode;
-        let mut next = insn.end;
+        let end = insn.end;
+        let mut next = end;
         match &insn.kind {
-            InstructionKind::Expression(expr) => self.expression(expr)?,
+            InstructionKind::Expression(expr) => EvalContext {
+                script: &image.script,
+                labels: &image.labels,
+                data: &mut image.data,
+                state: &mut self.state,
+                stack: &mut self.stack,
+                frames: &self.frames,
+                journal: &mut self.journal,
+                eval_scratch: &mut self.eval_scratch,
+                string_entries: &mut self.string_entries,
+            }
+            .expression(expr)?,
             InstructionKind::Jump { target } | InstructionKind::LongJump { target, .. } => {
                 next = *target as usize
             }
@@ -658,13 +826,13 @@ impl<'a> Machine<'a> {
                 }
             }
             InstructionKind::Label { index } => {
-                next = self.image().labels[*index as usize] as usize;
+                next = image.labels[*index as usize] as usize;
                 if op == 0x410 {
                     if self.frames.len() >= MAX_CALL_DEPTH {
                         return Err(error(pc, op, "call frame table holds 63 nested calls"));
                     }
                     self.stack
-                        .push_u32(insn.end as u32)
+                        .push_u32(end as u32)
                         .map_err(|e| error(pc, op, e.0))?;
                     self.frames.push(self.stack.len_bytes());
                 }
@@ -674,16 +842,25 @@ impl<'a> Machine<'a> {
                     .discard(*bytes as usize)
                     .map_err(|e| error(pc, op, e.0))?;
             }
-            InstructionKind::StackAdjust { bytes } if op == 0x411 => {
+            InstructionKind::StackAdjust { bytes } if matches!(op, 0x411 | 0x413) => {
                 if self.frames.is_empty() {
                     return Err(error(pc, op, "return without a caller"));
                 }
+                let discard_args = if op == 0x411 {
+                    usize::from(*bytes)
+                } else {
+                    let count = self
+                        .state
+                        .result
+                        .ok_or_else(|| error(pc, op, "result register is unknown"))?;
+                    usize::from((count as u16).wrapping_mul(4))
+                };
                 next = self.stack.peek_u32(4).map_err(|e| error(pc, op, e.0))? as usize;
-                if !self.is_boundary(self.slot, next) {
+                if image.instruction_index(next).is_none() {
                     return Err(error(pc, op, "invalid return address"));
                 }
                 self.stack
-                    .discard(4 + *bytes as usize)
+                    .discard(4 + discard_args)
                     .map_err(|e| error(pc, op, e.0))?;
                 self.frames.pop();
             }
@@ -721,16 +898,23 @@ impl<'a> Machine<'a> {
             }
             InstructionKind::System { command: 0 } => {
                 self.pc = next;
+                self.pc_hint = index + 1;
                 self.repeat_count = 0;
                 return Ok(Step::Yield);
             }
             &InstructionKind::System { command } => {
+                let command = self
+                    .command_map
+                    .as_ref()
+                    .map_or(command, |map| map.runtime(command));
+                self.pc_hint = index;
                 self.pending = Some((pc, command));
                 return Ok(Step::System { pc, command });
             }
             _ => return Err(error(pc, op, "instruction execution is not implemented")),
         }
         self.pc = next;
+        self.pc_hint = if next == end { index + 1 } else { 0 };
         Ok(Step::Continue)
     }
 
@@ -768,9 +952,20 @@ impl<'a> Machine<'a> {
         &mut self,
         slot: u32,
         name: Vec<u8>,
-        script: Script,
+        script: impl IntoSharedScript,
     ) -> Result<(), DecodeError> {
-        if !matches!(self.pending, Some((_, 0x81))) {
+        self.enter_common_with(slot, name, script, 8)
+    }
+    /// 0x2081 with `argument_bytes` of parameters; CVNS 0x2412 has only the name and
+    /// always uses common slot 0 (cvns-20090203 0x45f980 -> 0x44dfc0).
+    pub(crate) fn enter_common_with(
+        &mut self,
+        slot: u32,
+        name: Vec<u8>,
+        script: impl IntoSharedScript,
+        argument_bytes: usize,
+    ) -> Result<(), DecodeError> {
+        if !matches!(self.pending, Some((_, 0x81 | 0x412))) {
             return Err(error(self.pc, 0x2081, "no pending common-script load"));
         }
         if slot >= 3 {
@@ -784,21 +979,27 @@ impl<'a> Machine<'a> {
                 "cannot replace an active common script",
             ));
         }
-        let entry = script.header.entry_pc as usize;
-        let image = Image::prepare(Cow::Owned(script), name, entry as u32)?;
-        let stack = self.transfer_stack(8, 0x2081)?;
+        let script = script.into_shared_script();
+        let entry = script.header().entry_pc as usize;
+        let image = Image::prepare(script, name, entry as u32)?;
+        let stack = self.transfer_stack(argument_bytes, 0x2081)?;
         self.images.insert(slot, image);
         self.stack = stack;
         self.cross_calls.push(self.slot);
         self.slot = slot;
         self.pc = entry;
+        self.pc_hint = 0;
         self.repeat_count = 0;
         self.pending = None;
         Ok(())
     }
 
     /// Core 0x2080 / 0x2003 transition. The host owns snapshot/reset effects.
-    pub fn switch_main_core(&mut self, name: Vec<u8>, script: Script) -> Result<(), DecodeError> {
+    pub fn switch_main_core(
+        &mut self,
+        name: Vec<u8>,
+        script: impl IntoSharedScript,
+    ) -> Result<(), DecodeError> {
         if !matches!(self.pending, Some((_, 0x80 | 0x03))) {
             return Err(error(self.pc, 0x2080, "no pending main-script switch"));
         }
@@ -814,21 +1015,19 @@ impl<'a> Machine<'a> {
 
     pub(crate) fn prepare_main(
         name: Vec<u8>,
-        script: Script,
-    ) -> Result<PreparedMain<'a>, DecodeError> {
-        let entry = script.header.entry_pc;
-        Ok(PreparedMain(Image::prepare(
-            Cow::Owned(script),
-            name,
-            entry,
-        )?))
+        script: impl IntoSharedScript,
+    ) -> Result<PreparedMain, DecodeError> {
+        let script = script.into_shared_script();
+        let entry = script.header().entry_pc;
+        Ok(PreparedMain(Image::prepare(script, name, entry)?))
     }
 
-    pub(crate) fn replace_main(&mut self, prepared: PreparedMain<'a>) {
-        let entry = prepared.0.script.header.entry_pc as usize;
+    pub(crate) fn replace_main(&mut self, prepared: PreparedMain) {
+        let entry = prepared.0.script.header().entry_pc as usize;
         self.images.insert(0, prepared.0);
         self.slot = 0;
         self.pc = entry;
+        self.pc_hint = 0;
         self.repeat_count = 0;
         self.stack = ParameterStack::new(65536);
         self.frames.clear();
@@ -853,13 +1052,16 @@ impl<'a> Machine<'a> {
         Ok(())
     }
 
-    /// Resume an ordinary command after a host has explicitly implemented its effect.
-    /// Script transfer requires its own future API; zero flags cannot be used to skip it.
+    /// Complete a pending ordinary system command after its effect has been applied.
+    ///
+    /// Applies `flags` to stack cleanup, PC advancement, and yield state. Returns
+    /// an error if no command is pending or the flags request a retry or script
+    /// transfer that needs a dedicated control API.
     pub fn complete_system(&mut self, flags: SystemResult) -> Result<Step, DecodeError> {
         let (pc, command) = self
             .pending
             .ok_or_else(|| error(self.pc, 0, "no pending system command"))?;
-        if !flags.advances_pc() || matches!(command, 0x80 | 0x81) {
+        if !flags.advances_pc() || matches!(command, 0x80 | 0x81 | 0x412) {
             return Err(error(
                 pc,
                 command + 0x2000,
@@ -870,6 +1072,7 @@ impl<'a> Machine<'a> {
             .apply_cleanup(flags)
             .map_err(|e| error(pc, command + 0x2000, e.0))?;
         self.pc = pc + 2;
+        self.pc_hint = self.pc_hint.saturating_add(1);
         self.pending = None;
         self.repeat_count = if flags.increments_repeat_counter() {
             self.repeat_count.wrapping_add(1)

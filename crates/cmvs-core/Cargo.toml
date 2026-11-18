@@ -7,11 +7,9 @@ rust-version.workspace = true
 publish.workspace = true
 description = "Platform-independent CMVS formats, VM, scene and backend contracts"
 
+[features]
+default = ["std-fs"]
+std-fs = []
+
 [lints]
 workspace = true
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen.workspace = true
-
-[target.'cfg(target_os = "android")'.dependencies]
-rustix = { version = "=1.1.6", features = ["fs"] }

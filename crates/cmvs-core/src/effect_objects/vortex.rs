@@ -27,7 +27,7 @@ impl Vortex {
     pub fn new(
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut images = Vec::new();
         // The last two are prepared for parameter 10, as with Magic's alternate texture.
         for name in [
@@ -145,12 +145,12 @@ impl SceneHost {
     /// 0x2297 / 0x43c9e0: one slot argument, no system result, return 0x4004.
     pub(crate) fn create_vortex(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         backend: &mut dyn AudioBackend,
         camera: &mut CameraHost,
         random: &mut CrtRandom,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         if slot > 3 {
             call.complete(0x4004)?;

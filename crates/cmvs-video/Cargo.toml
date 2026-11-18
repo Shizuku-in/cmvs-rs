@@ -15,5 +15,5 @@ unsafe_op_in_unsafe_fn = "deny"
 all = "warn"
 
 [dependencies]
-cmvs-core = { path = "../cmvs-core" }
+cmvs-core = { path = "../cmvs-core", default-features = false }
 ogg = "=0.9.2"

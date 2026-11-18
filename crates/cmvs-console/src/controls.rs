@@ -7,10 +7,8 @@
 //! loop iteration and `frame` once at each engine input boundary. A press that
 //! begins and ends between two frames is latched into one down frame.
 use crate::ButtonMap;
-use cmvs_core::{
-    input::{ActionInput, CodeInput, KeyBindings},
-    viewport::Viewport,
-};
+use cmvs_core::{host::input::ActionInput, host::input::KeyBindings, render::viewport::Viewport};
+use cmvs_host::InputState;
 use cmvs_native::PadInput;
 
 pub const MOUSE_LEFT: usize = 1;
@@ -50,9 +48,7 @@ enum TouchState {
 pub struct Controls {
     map: ButtonMap,
     size: [u32; 2],
-    history: CodeInput,
-    held: [bool; 128],
-    latched: [bool; 128],
+    input: InputState,
     cursor: [f64; 2],
     cursor_visible: bool,
     touch: TouchState,
@@ -70,9 +66,7 @@ impl Controls {
         Self {
             map,
             size,
-            history: CodeInput::default(),
-            held: [false; 128],
-            latched: [false; 128],
+            input: InputState::new(),
             cursor: [f64::from(size[0] / 2), f64::from(size[1] / 2)],
             cursor_visible: true,
             touch: TouchState::Idle,
@@ -97,9 +91,7 @@ impl Controls {
     /// After a modal system applet: cancels held input without release clicks and
     /// ignores whatever is still held (such as the button that closed it) until released.
     pub fn suppress_held(&mut self, input: &mut ActionInput) {
-        self.history.clear(input);
-        self.held.fill(false);
-        self.latched.fill(false);
+        self.input.clear(input);
         self.touch = TouchState::Blocked;
         self.wheel = None;
         self.quit_ms = 0;
@@ -115,14 +107,14 @@ impl Controls {
         let dt_ms = dt_ms.min(MAX_STEP_MS);
         self.blocked &= sample.buttons;
         let buttons = sample.buttons & !self.blocked;
-        self.held.fill(false);
         for &(mask, code) in &self.map.codes {
-            self.held[code] |= buttons & mask != 0;
+            if buttons & mask != 0 {
+                let _ = self.input.pulse(code);
+            }
         }
         self.track_touch(sample, viewport);
-        self.held[MOUSE_LEFT] |= matches!(self.touch, TouchState::Primary(_));
-        for (latched, held) in self.latched.iter_mut().zip(self.held) {
-            *latched |= held;
+        if matches!(self.touch, TouchState::Primary(_)) {
+            let _ = self.input.pulse(MOUSE_LEFT);
         }
         self.move_cursor(sample.sticks[0], dt_ms);
         self.scroll(buttons, sample.sticks[1][1], dt_ms);
@@ -199,13 +191,13 @@ impl Controls {
             (Some(code), Some((previous, held))) if previous == code => {
                 let held = held.saturating_add(dt_ms);
                 if held >= self.wheel_next {
-                    self.latched[code] = true;
+                    let _ = self.input.pulse(code);
                     self.wheel_next = held + WHEEL_REPEAT_MS;
                 }
                 Some((code, held))
             }
             (Some(code), _) => {
-                self.latched[code] = true;
+                let _ = self.input.pulse(code);
                 self.wheel_next = WHEEL_DELAY_MS;
                 Some((code, 0))
             }
@@ -219,10 +211,9 @@ impl Controls {
         if !self.focused {
             return;
         }
-        let codes = std::mem::replace(&mut self.latched, [false; 128]);
-        self.history.update(bindings, &codes, input);
         let [x, y] = self.pointer();
-        input.set_pointer(x, y);
+        self.input.set_pointer(x, y);
+        self.input.sample(bindings, input);
     }
 
     /// Engine navigation moved the system cursor.

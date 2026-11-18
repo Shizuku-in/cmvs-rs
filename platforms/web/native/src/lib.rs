@@ -1,26 +1,20 @@
 //! Browser game host. JavaScript owns files, scheduling and presentation.
 mod audio;
 mod backend;
+mod fs;
 #[cfg(target_arch = "wasm32")]
 mod gpu;
 use backend::BrowserBackend;
 use cmvs_core::{
-    input::{CodeInput, KeyBindings},
-    profile::Registry,
-    ps3::Script,
-    runner::{Startup, StartupEvent, load_start},
+    host::filesystem::HostFs, profile::Registry, runtime::FrameBudget, runtime::FrameOutcome,
+    runtime::RuntimeEvent, runtime::SaveStorage,
 };
 use cmvs_font::font::FontRenderer;
-use std::{error::Error, path::Path};
+use cmvs_host::{EncodingPolicy, GameBootstrap, HostSession, KeyBindingPolicy, SessionConfig};
+use fs::WebFs;
+use std::{error::Error, path::Path, sync::Arc};
 use wasm_bindgen::prelude::*;
 
-self_cell::self_cell! {
-    struct Session {
-        owner: Script,
-        #[covariant]
-        dependent: Startup,
-    }
-}
 fn js_error(error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&error.to_string())
 }
@@ -28,13 +22,8 @@ fn js_error(error: impl std::fmt::Display) -> JsValue {
 /// One runtime per worker; dropping it releases scripts, archives and render caches.
 #[wasm_bindgen]
 pub struct WebRuntime {
-    session: Session,
+    session: HostSession,
     backend: BrowserBackend,
-    font: FontRenderer,
-    bindings: KeyBindings,
-    codes: CodeInput,
-    input_due: bool,
-    functions: u16,
 }
 #[wasm_bindgen]
 impl WebRuntime {
@@ -61,12 +50,31 @@ impl WebRuntime {
         y: i32,
         focused: bool,
     ) -> Result<u8, JsValue> {
+        let mut budget = FrameBudget::steps(4000);
         loop {
-            let result = self.tick(delta_ms, &keys, x, y, focused)?;
+            let result = self.tick_slice(delta_ms, &keys, [x, y], focused, &mut budget)?;
             if result != 4 {
+                if result == 1 && self.session.runtime.capture_due() {
+                    let image = {
+                        let gpu = self
+                            .backend
+                            .gpu
+                            .as_mut()
+                            .ok_or_else(|| js_error("no completed GPU frame"))?;
+                        let capture = gpu.capture.take();
+                        let frame = capture
+                            .as_ref()
+                            .or(gpu.frame.as_ref())
+                            .ok_or_else(|| js_error("no completed GPU frame"))?;
+                        frame.read_async().await.map_err(js_error)?
+                    };
+                    self.session
+                        .runtime
+                        .supply_capture(image)
+                        .map_err(js_error)?;
+                }
                 return Ok(result);
             }
-            self.backend.read_requested = false;
             let frame = self
                 .backend
                 .gpu
@@ -91,19 +99,22 @@ impl WebRuntime {
     pub fn save_preferences(&mut self) -> Result<bool, JsValue> {
         let display = self.backend.preferences();
         self.session
-            .with_dependent_mut(|_, startup| startup.save_preferences(display))
+            .runtime
+            .save_preferences(display)
             .map_err(js_error)
+    }
+    pub fn set_random_seed(&mut self, seed: u32) {
+        self.session.runtime.set_random_seed(seed);
     }
     pub fn set_clock(&mut self, time: &[u16]) -> Result<(), JsValue> {
         let time: [u16; 6] = time
             .try_into()
             .map_err(|_| js_error("expected six save clock fields"))?;
-        self.session
-            .with_dependent_mut(|_, startup| startup.set_save_clock(Box::new(move || time)));
+        self.session.runtime.set_save_clock(Box::new(move || time));
         Ok(())
     }
     pub fn needs_input(&self) -> bool {
-        self.input_due
+        self.session.driver.needs_input()
     }
     pub fn width(&self) -> u32 {
         self.backend.size[0]
@@ -121,80 +132,13 @@ impl WebRuntime {
         y: i32,
         focused: bool,
     ) -> Result<u8, JsValue> {
-        let backend = &mut self.backend;
-        let font = &mut self.font;
-        let codes = &mut self.codes;
-        let bindings = &self.bindings;
-        let input_due = &mut self.input_due;
-        let functions = &mut self.functions;
-        self.session
-            .with_dependent_mut(|_, startup| -> Result<u8, Box<dyn Error>> {
-                startup.set_focused(focused);
-                startup.poll_audio_output()?;
-                if !focused {
-                    codes.clear(startup.input_mut());
-                    *functions = 0;
-                }
-                if *input_due {
-                    let mut now = [false; 128];
-                    for &key in keys {
-                        if let Some(value) = now.get_mut(usize::from(key)) {
-                            *value = true;
-                        }
-                    }
-                    let held = (0..12).fold(0u16, |mask, i| mask | (u16::from(now[52 + i]) << i));
-                    startup.input_mut().press_function_keys(held & !*functions);
-                    *functions = held;
-                    codes.update(bindings, &now, startup.input_mut());
-                    startup.input_mut().set_pointer(x, y);
-                    *input_due = false;
-                }
-                for _ in 0..4000 {
-                    let event = match startup.tick(backend) {
-                        Ok(event) => event,
-                        Err(error) => {
-                            #[cfg(target_arch = "wasm32")]
-                            if backend.read_requested {
-                                return Ok(4);
-                            }
-                            return Err(error);
-                        }
-                    };
-                    match event {
-                        StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
-                        StartupEvent::Yield => {
-                            startup.advance_decoded_frame(delta_ms.min(250))?;
-                            #[cfg(target_arch = "wasm32")]
-                            {
-                                let display = backend.preferences();
-                                if let Some(gpu) = &mut backend.gpu {
-                                    if gpu.draw(startup, font, display)? {
-                                        backend.frame = None;
-                                    }
-                                    *input_due = true;
-                                    return Ok(1);
-                                }
-                            }
-                            let frame = if let Some(image) = startup.movie_frame() {
-                                backend.movie_canvas(image)?
-                            } else {
-                                font.render(startup.scene(), startup.camera(), startup.messages())?
-                            };
-                            backend.frame = Some(frame);
-                            *input_due = true;
-                            return Ok(1);
-                        }
-                        StartupEvent::Quit => return Ok(2),
-                        StartupEvent::Inactive => {
-                            *input_due = true;
-                            return Ok(3);
-                        }
-                        event => return Err(format!("browser runtime stopped: {event:?}").into()),
-                    }
-                }
-                Ok(0)
-            })
-            .map_err(js_error)
+        self.tick_slice(
+            delta_ms,
+            keys,
+            [x, y],
+            focused,
+            &mut FrameBudget::steps(4000),
+        )
     }
     pub fn pixels(&self) -> Result<Vec<u8>, JsValue> {
         self.backend
@@ -221,49 +165,104 @@ impl WebRuntime {
     }
 }
 impl WebRuntime {
-    fn create(font: Vec<u8>, face: u32, profile: &str, skip: bool) -> Result<Self, Box<dyn Error>> {
+    fn tick_slice(
+        &mut self,
+        delta_ms: u32,
+        keys: &[u8],
+        [x, y]: [i32; 2],
+        focused: bool,
+        budget: &mut FrameBudget,
+    ) -> Result<u8, JsValue> {
+        let session = &mut self.session;
+        let backend = &mut self.backend;
+        (|| -> Result<u8, Box<dyn Error + Send + Sync>> {
+            session.runtime.set_focused(focused);
+            session.runtime.poll_audio_output()?;
+            if !focused {
+                session.input.clear(session.runtime.input_mut());
+            }
+            let bindings = &session.bindings;
+            let input_state = &mut session.input;
+            session
+                .driver
+                .sample_input(session.runtime.input_mut(), |input| {
+                    input_state.set_held_codes(keys);
+                    input_state.set_pointer(x, y);
+                    input_state.sample(bindings, input);
+                });
+            let outcome = session
+                .driver
+                .run_slice(&mut session.runtime, budget, |runtime| {
+                    runtime.tick(backend)
+                })?;
+            match outcome {
+                FrameOutcome::Yield => {
+                    session
+                        .driver
+                        .finish_frame(&mut session.runtime, delta_ms.min(250))?;
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        let display = backend.preferences();
+                        if let Some(gpu) = &mut backend.gpu {
+                            if gpu.draw(&session.runtime, &mut session.font, display)? {
+                                backend.frame = None;
+                            }
+                            return Ok(1);
+                        }
+                    }
+                    let frame =
+                        session.compose_cpu_frame(backend.preferences().render_mode == 1, true)?;
+                    backend.frame = Some(frame);
+                    Ok(1)
+                }
+                FrameOutcome::Stopped(RuntimeEvent::DeviceFramePending) => Ok(4),
+                FrameOutcome::Stopped(RuntimeEvent::Quit) => Ok(2),
+                FrameOutcome::Inactive => Ok(3),
+                FrameOutcome::Stopped(event) => {
+                    Err(format!("browser runtime stopped: {event:?}").into())
+                }
+                FrameOutcome::BudgetExhausted => Ok(0),
+            }
+        })()
+        .map_err(js_error)
+    }
+    fn create(
+        font: Vec<u8>,
+        face: u32,
+        profile: &str,
+        skip: bool,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let root = Path::new("/game");
-        let game = Registry::builtin().identify_game(
+        let fs: Arc<dyn HostFs> = Arc::new(WebFs);
+        let bootstrap = GameBootstrap::load(
+            fs,
             root,
-            if profile.is_empty() {
-                None
-            } else {
-                Some(profile)
+            (!profile.is_empty()).then_some(profile),
+            EncodingPolicy::AutoDefaultShiftJis,
+        )?;
+        if bootstrap.game.selection.profile.is_cvns() {
+            return Err(
+                "CVNS games require audio support that is unavailable in the browser player".into(),
+            );
+        }
+        let font = FontRenderer::from_bytes(font, face)?.with_text_encoding(bootstrap.encoding);
+        let mut session = bootstrap.into_session(
+            font,
+            SessionConfig {
+                saves: SaveStorage::UserDirectory("/user".into()),
+                skip_auto_resume: skip,
+                key_bindings: KeyBindingPolicy::Optional,
+                ..SessionConfig::single_threaded()
             },
         )?;
-        let font = FontRenderer::from_bytes(font, face)?;
-        let script = load_start(root, &game.files)?;
-        let session = Session::try_new(script, |script| -> Result<Startup<'_>, Box<dyn Error>> {
-            let mut startup = Startup::new(script, root, &game, 0)?;
-            startup.set_user_data_directory(Path::new("/user"))?;
-            startup.set_skip_auto_resume(skip)?;
-            startup.set_record_text(true);
-            startup.set_glyph_metrics(font.metrics());
-            startup.set_audio_backend(Box::new(audio::BrowserAudio::new(root)?))?;
-            startup.set_decode_movie_frames(true);
-            Ok(startup)
-        })?;
-        let size = session.borrow_dependent().screen_size();
-        let key_path = root.join("key.cfg");
-        let bindings = if cmvs_core::filesystem::is_file(&key_path) {
-            use std::io::Read;
-            let mut text = String::new();
-            cmvs_core::filesystem::File::open(key_path)?
-                .take(65537)
-                .read_to_string(&mut text)?;
-            KeyBindings::parse(&text)?
-        } else {
-            KeyBindings::default()
-        };
-        Ok(Self {
-            session,
-            backend: BrowserBackend::new(size),
-            font,
-            bindings,
-            codes: CodeInput::default(),
-            input_due: true,
-            functions: 0,
-        })
+        session
+            .runtime
+            .set_audio_backend(Box::new(audio::BrowserAudio::new(root)?))?;
+        let backend = BrowserBackend::with_preferences(
+            session.runtime.screen_size(),
+            session.runtime.display_preferences(),
+        )?;
+        Ok(Self { session, backend })
     }
 }
 
@@ -271,7 +270,8 @@ impl WebRuntime {
 #[wasm_bindgen]
 pub fn identify(profile: &str) -> Result<String, JsValue> {
     let game = Registry::builtin()
-        .identify_game(
+        .identify_game_with_fs(
+            &WebFs,
             Path::new("/game"),
             if profile.is_empty() {
                 None
@@ -284,6 +284,6 @@ pub fn identify(profile: &str) -> Result<String, JsValue> {
     Ok(format!(
         "{}-{}",
         game.selection.profile.id,
-        cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(evidence.as_bytes()))
+        cmvs_core::format::digest::to_hex(&cmvs_core::format::digest::sha256(evidence.as_bytes()))
     ))
 }

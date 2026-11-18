@@ -2,9 +2,12 @@
 import hashlib
 from pathlib import Path
 import struct
+import sys
 import tempfile
 import unittest
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import convert_asukimi_patch as patch
 
 
@@ -100,6 +103,10 @@ class ConverterTests(unittest.TestCase):
             with self.assertRaises((ValueError, OSError)):
                 patch.convert(root / "missing-game", root / "patch.zip", out)
             self.assertFalse(out.exists())
+
+    def test_patch_command_selects_asukimi(self):
+        cmd = patch.patch_command("g", "i", "o")
+        self.assertEqual(cmd[-4:], ["asukimi", "g", "i", "o"])
 
 
 if __name__ == "__main__":

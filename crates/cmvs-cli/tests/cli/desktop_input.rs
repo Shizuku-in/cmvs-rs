@@ -1,0 +1,79 @@
+use cmvs_core::{host::input::ActionInput, host::input::KeyBindings};
+use cmvs_desktop::game_input::{GameInput, Viewport};
+
+#[test]
+fn four_by_three_canvas_maps_bottom_buttons_and_cursor_warps() {
+    let canvas = [1024, 768];
+    let viewport = Viewport::for_canvas(canvas, [1280, 720], 1).unwrap();
+    assert_eq!(viewport.to_script([100.0, 360.0]), None);
+    let mut game = GameInput::default();
+    game.set_screen_size(cmvs_core::render::viewport::ScreenSize::new(canvas).unwrap());
+    for mode in 0..=3 {
+        game.set_aspect_mode(mode);
+        let target = game.warp([1280, 960], [1000, 755]).unwrap();
+        assert_eq!(
+            Viewport::for_canvas(canvas, [1280, 960], mode)
+                .unwrap()
+                .to_script(target),
+            Some([1000, 755])
+        );
+        assert_eq!(game.cursor_position([1280, 960]), Some([1000, 755]));
+    }
+}
+
+#[test]
+fn cover_and_stretch_mapping_and_navigation_use_the_selected_mode() {
+    let cover = Viewport::with_mode([1000, 1000], 2).unwrap();
+    assert!(cover.to_script([0.0, 500.0]).unwrap()[0] > 0);
+    let stretch = Viewport::with_mode([1000, 1000], 3).unwrap();
+    assert_eq!(stretch.to_script([0.0, 0.0]), Some([0, 0]));
+    for mode in 0..=3 {
+        let mut game = GameInput::default();
+        let mut input = ActionInput::default();
+        game.focus(true, &mut input);
+        game.set_aspect_mode(mode);
+        let point = game.warp([1000, 1000], [640, 360]).unwrap();
+        assert_eq!(
+            Viewport::with_mode([1000, 1000], mode)
+                .unwrap()
+                .to_script(point),
+            Some([640, 360])
+        );
+        game.frame(&KeyBindings::default(), [1000, 1000], &mut input);
+        assert_eq!(input.pointer(), [640, 360]);
+    }
+}
+
+#[test]
+fn aspect_fit_maps_pixels_and_rejects_bars_and_zero_surface() {
+    let v = Viewport::new([1000, 1000]).unwrap();
+    assert_eq!(v.to_script([0.0, 219.0]), Some([0, 0]));
+    assert_eq!(v.to_script([500.0, 500.0]), Some([640, 360]));
+    assert_eq!(v.to_script([500.0, 218.0]), None);
+    assert_eq!(v.to_script([500.0, 781.0]), None);
+    assert_eq!(v.to_script([f64::NAN, 0.0]), None);
+    assert!(Viewport::new([0, 100]).is_none());
+    let p = v.to_window([640, 360]);
+    assert_eq!(v.to_script(p), Some([640, 360]));
+}
+
+#[test]
+fn focus_loss_cancels_click_and_wheel_is_a_single_frame_pulse() {
+    let bindings = KeyBindings::parse("[KEY_FUNCTION_01]\nKEY_DATA_01=4").unwrap();
+    let mut native = GameInput::default();
+    let mut input = ActionInput::default();
+    native.focus(true, &mut input);
+    native.pointer(480.0, 270.0);
+    native.wheel(1.0);
+    native.frame(&bindings, [960, 540], &mut input);
+    assert!(input.pressed(0) && input.held(0));
+    assert_eq!(input.pointer(), [640, 360]);
+    native.frame(&bindings, [960, 540], &mut input);
+    assert!(input.released(0) && !input.held(0));
+    native.wheel(1.0);
+    native.frame(&bindings, [960, 540], &mut input);
+    native.focus(false, &mut input);
+    native.frame(&bindings, [960, 540], &mut input);
+    assert!(!input.released(0) && !input.held(0));
+    assert_eq!(input.pointer(), [-1, -1]);
+}

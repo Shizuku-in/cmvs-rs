@@ -15,8 +15,12 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from fan_patch.launcher import cmvs_patch_command
 
 LIMIT = 64 * 1024 * 1024
 ROOT = "[天之圣杯汉化组]青鸟汉化补丁/"
@@ -96,6 +100,10 @@ def extract_patch(archive: zipfile.ZipFile, stage: Path) -> tuple[dict[str, str]
     return pictures, []
 
 
+def patch_command(*args: str) -> list[str]:
+    return cmvs_patch_command("aoitori", *args)
+
+
 def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
         raise ValueError("encoding must be utf-8, utf8 or gbk")
@@ -111,17 +119,11 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
         raise ValueError("2024 Steam patch requires a matching Steam game; use the 2018 patch with this original")
     if patch_digest != PATCH_SHA256:
         raise ValueError("Unsupported patch ZIP (SHA-256 mismatch)")
-    tool = Path(__file__).resolve().parent
-    repository = tool.parents[2]
     with tempfile.TemporaryDirectory(prefix="cmvs-aoitori-") as temp:
         stage = Path(temp)
         with zipfile.ZipFile(patch) as archive:
             aliases, ignored = extract_patch(archive, stage)
-        subprocess.run([
-            "cargo", "run", "--offline", "--locked", "--release", "--manifest-path",
-            str(tool / "Cargo.toml"), "--target-dir", str(repository / "target/fan-patch-aoitori"),
-            "--", str(game), str(stage), encoding,
-        ], check=True)
+        subprocess.run(patch_command(str(game), str(stage), encoding), check=True)
         reports = {}
         for name in ("scripts", "images"):
             with (stage / f"{name}.tsv").open() as stream:

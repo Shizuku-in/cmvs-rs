@@ -1,6 +1,10 @@
-//! Engine +4320 history list: append 0x2136, clear 0x212f and the queries 0x2130..0x2135.
-//! Addresses are bound to the binary hash in research.md.
-use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine};
+//! Message history entries and script-visible history queries.
+//!
+//! [`HistoryHost`] stores recorded text and supports append, clear, and lookup
+//! operations. It does not display a history window or rasterize text.
+
+// Engine +4320: append 0x2136, clear 0x212f, and queries 0x2130..0x2135.
+use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error};
 use std::collections::VecDeque;
 
 /// 0x14005e7e0 constructs a list with capacity 128.
@@ -27,15 +31,8 @@ impl HistoryHost {
         &self.entries
     }
 
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ 0x12f..=0x136)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
-
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
+        use crate::cvns::cmd;
         let pc = call.pc;
         let command = call.command;
         // 0x140083240 -> 0x14005e800 frees the nodes and their dynamic strings,
@@ -45,40 +42,58 @@ impl HistoryHost {
             self.entries.clear();
             return Ok(());
         }
-        if (0x130..=0x135).contains(&command) {
+        if matches!(
+            command,
+            0x130..=0x135 | cmd::HISTORY_QUERY_2 | cmd::HISTORY_QUERY
+        ) {
             return self.query(call);
         }
+        let is_cvns = matches!(command, cmd::HISTORY_APPEND | cmd::HISTORY_APPEND_2);
+        let op = command + 0x2000;
+        let str_count = if is_cvns { 3 } else { 4 };
+        let word_count = match command {
+            cmd::HISTORY_APPEND_2 => 2,
+            cmd::HISTORY_APPEND => 4,
+            _ => 6,
+        };
         let mut strings: [Vec<u8>; 4] = Default::default();
-        for (i, bytes) in strings.iter_mut().enumerate() {
-            let name = ["string 0", "string 1", "string 2", "string 3"][i];
+        // `sub_465d40 -> sub_442120` (and cvns-20050216 `sub_4320A0 -> sub_4239F0`): CVNS
+        // arg1 (`SP-8`) is the dynamic dialogue text (`strings[2]`), while arg2 (`SP-12`)
+        // goes into the 32-byte field at +36 (`strings[1]`).
+        let dest_for = |i: usize| if is_cvns { [0, 2, 1][i] } else { i };
+        for i in 0..str_count {
+            let dest = dest_for(i);
+            let name = ["string 0", "string 1", "string 2", "string 3"][dest];
             let reference = call.argument(4 + 4 * i, name)?;
-            *bytes = call.vm.resolve_string(reference)?;
-            if let Some(end) = bytes.iter().position(|b| *b == 0) {
-                bytes.truncate(end);
+            let mut value = call.vm.resolve_string(reference)?;
+            if let Some(end) = value.iter().position(|b| *b == 0) {
+                value.truncate(end);
             }
-            if i != 2 && bytes.len() >= 32 {
+            if dest != 2 && value.len() >= 32 {
+                return Err(error(pc, op, "history string overflows its 32-byte field"));
+            }
+            if dest == 2 && value.len() > MAX_HISTORY_TEXT {
                 return Err(error(
                     pc,
-                    0x2136,
-                    "history string overflows its 32-byte field",
-                ));
-            }
-            if i == 2 && bytes.len() > MAX_HISTORY_TEXT {
-                return Err(error(
-                    pc,
-                    0x2136,
+                    op,
                     "history text exceeds research allocation limit",
                 ));
             }
+            strings[dest] = value;
         }
         let mut words = [0; 6];
-        for (i, value) in words.iter_mut().enumerate() {
+        let words_base = 4 + 4 * str_count;
+        for (i, value) in words.iter_mut().take(word_count).enumerate() {
             *value = call.argument(
-                20 + 4 * i,
+                words_base + 4 * i,
                 ["word 0", "word 1", "word 2", "word 3", "word 4", "word 5"][i],
             )?;
         }
-        call.complete(0x4028)?;
+        call.complete(match command {
+            cmd::HISTORY_APPEND_2 => 0x4014,
+            cmd::HISTORY_APPEND => 0x401c,
+            _ => 0x4028,
+        })?;
         // 0x14005ee00 removes the tail before adding the new head.
         while self.entries.len() >= HISTORY_CAPACITY {
             self.entries.pop_back();
@@ -94,7 +109,8 @@ impl HistoryHost {
     /// for a missing entry; 0x2135 (0x14005e9e0) sets system result 0 to word SP-8 % 6
     /// (unsigned), or -1 for a missing entry. All return 0x4008. Destinations other than
     /// the string bank are not modeled.
-    fn query(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn query(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
+        use crate::cvns::cmd;
         let pc = call.pc;
         let command = call.command;
         let op = command + 0x2000;
@@ -108,16 +124,15 @@ impl HistoryHost {
         }
         let index = call.argument(4, "entry index")? as i32;
         let entry = self.entries.get(index.max(0) as usize);
-        let argument = call.argument(
-            8,
-            if command == 0x135 {
-                "word index"
-            } else {
-                "destination"
-            },
-        )?;
-        if command == 0x135 {
-            let value = entry.map_or(u32::MAX, |e| e.words[(argument % 6) as usize]);
+        let is_word = matches!(command, 0x135 | cmd::HISTORY_QUERY_2 | cmd::HISTORY_QUERY);
+        let argument = call.argument(4 + 4, if is_word { "word index" } else { "destination" })?;
+        if is_word {
+            let modulus = match command {
+                cmd::HISTORY_QUERY_2 => 2,
+                cmd::HISTORY_QUERY => 4,
+                _ => 6,
+            };
+            let value = entry.map_or(u32::MAX, |e| e.words[(argument % modulus) as usize]);
             call.complete(0x4008)?;
             call.vm
                 .state_mut()
@@ -125,7 +140,7 @@ impl HistoryHost {
                 .expect("slot 0 exists");
             return Ok(());
         }
-        let slot = crate::text::bank_slot(argument)
+        let slot = crate::text::bank_slot_for(call.vm.state(), argument)
             .ok_or_else(|| error(pc, op, "history string destination outside the string bank"))?;
         let field = match command {
             0x131 => 1,
@@ -215,5 +230,212 @@ impl HistoryHost {
         }
         self.entries = entries;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Call, HistoryHost};
+    use crate::{
+        machine::{Machine, Step},
+        ps3::Script,
+    };
+
+    enum Arg<'a> {
+        Int(u32),
+        Str(&'a [u8]),
+    }
+
+    fn build_script(calls: &[(u16, &[Arg<'_>])]) -> Script {
+        let mut code = Vec::new();
+        let mut text = Vec::new();
+        for &(op, args_sp_first) in calls {
+            for arg in args_sp_first.iter().rev() {
+                let val = match *arg {
+                    Arg::Int(v) => v,
+                    Arg::Str(bytes) => {
+                        let off = text.len() as u32;
+                        text.extend_from_slice(bytes);
+                        text.push(0);
+                        off
+                    }
+                };
+                code.extend(0x440u16.to_le_bytes());
+                code.extend(4u16.to_le_bytes());
+                code.extend(val.to_le_bytes());
+            }
+            code.extend(op.to_le_bytes());
+        }
+        code.extend(0x2000u16.to_le_bytes());
+        let mut payload = 0u32.to_le_bytes().to_vec();
+        payload.extend(&code);
+        payload.extend(&text);
+        let mut raw = b"PSS0".to_vec();
+        for n in [
+            48,
+            0,
+            0,
+            1,
+            code.len() as u32,
+            0,
+            text.len() as u32,
+            0,
+            0,
+            payload.len() as u32,
+            0,
+        ] {
+            raw.extend(n.to_le_bytes());
+        }
+        raw.extend(&payload);
+        Script::decode(&raw).unwrap()
+    }
+
+    #[test]
+    fn cvns_append_maps_arg1_to_dynamic_text_and_arg2_to_speaker() {
+        let long_dialogue = b"Dialogue text well over 32 bytes for CVNS dynamic slot 2.";
+        assert!(long_dialogue.len() > 32);
+        let script = build_script(&[
+            (
+                0x2537,
+                &[
+                    Arg::Str(b"voice_001"),
+                    Arg::Str(long_dialogue),
+                    Arg::Str(b"Miharu"),
+                    Arg::Int(11),
+                    Arg::Int(22),
+                    Arg::Int(33),
+                    Arg::Int(44),
+                ],
+            ),
+            (0x2133, &[Arg::Int(0), Arg::Int(0x8000_0000)]),
+            (0x2132, &[Arg::Int(0), Arg::Int(0x8000_0001)]),
+            (0x2131, &[Arg::Int(0), Arg::Int(0x8000_0002)]),
+            (0x2536, &[Arg::Int(0), Arg::Int(5)]),
+        ]);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut history = HistoryHost::default();
+        loop {
+            match vm.step().unwrap() {
+                Step::Continue => {}
+                Step::System { pc, command } => {
+                    history
+                        .handle(&mut Call::new(&mut vm, pc, command))
+                        .unwrap();
+                }
+                Step::Yield => break,
+            }
+        }
+
+        assert_eq!(history.entries().len(), 1);
+        let entry = &history.entries()[0];
+        assert_eq!(entry.strings[0], b"voice_001");
+        assert_eq!(entry.strings[1], b"Miharu");
+        assert_eq!(entry.strings[2], long_dialogue);
+        assert_eq!(entry.words[..4], [11, 22, 33, 44]);
+
+        assert_eq!(vm.state().string(0).unwrap(), b"voice_001");
+        assert_eq!(vm.state().string(1).unwrap(), long_dialogue);
+        assert_eq!(vm.state().string(2).unwrap(), b"Miharu");
+        assert_eq!(vm.state().system_integer(0), Some(22));
+
+        // arg2 (`strings[1]`) must still enforce the 32-byte fixed field bound.
+        let overflow_speaker = build_script(&[(
+            0x2537,
+            &[
+                Arg::Str(b"v"),
+                Arg::Str(b"dialogue"),
+                Arg::Str(&[b'S'; 32]),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+            ],
+        )]);
+        let mut vm_err = Machine::new(&overflow_speaker).unwrap();
+        while !matches!(vm_err.step().unwrap(), Step::System { .. }) {}
+        let (pc, command) = vm_err.pending_system().unwrap();
+        assert_eq!(
+            history
+                .handle(&mut Call::new(&mut vm_err, pc, command))
+                .unwrap_err()
+                .reason,
+            "history string overflows its 32-byte field"
+        );
+    }
+
+    #[test]
+    fn cvns_profiles_query_the_matching_history_word_count() {
+        use crate::{
+            dispatch::{self, Flow, Hosts},
+            profile::Registry,
+        };
+
+        for (id, word_count, append) in [
+            ("cvns-20040515", 2, 0x212c),
+            ("cvns-20040730", 2, 0x212c),
+            ("cvns-20050216", 2, 0x212c),
+            ("cvns-20050727", 4, 0x2137),
+            ("cvns-20090203", 4, 0x2137),
+        ] {
+            let profile = Registry::builtin().profile(id).unwrap();
+            let words = [77, 88, 99, 111];
+            let mut args = vec![
+                Arg::Str(b"voice"),
+                Arg::Str(b"Short line"),
+                Arg::Str(b"Speaker"),
+            ];
+            args.extend(words[..word_count].iter().copied().map(Arg::Int));
+            let script = build_script(&[
+                (append, &args),
+                (0x2136, &[Arg::Int(0), Arg::Int(0)]),
+                (0x2136, &[Arg::Int(0), Arg::Int(1)]),
+                (0x2136, &[Arg::Int(0), Arg::Int(2)]),
+                (0x2136, &[Arg::Int(0), Arg::Int(3)]),
+                (0x2136, &[Arg::Int(0), Arg::Int(u32::MAX)]),
+                (0x2136, &[Arg::Int(1), Arg::Int(0)]),
+            ]);
+            let mut vm = Machine::new(&script).unwrap();
+            let query_command = profile.command_map().unwrap().runtime(0x136);
+            vm.set_command_map(profile.command_map());
+            let mut history = HistoryHost::default();
+            let mut results = Vec::new();
+            loop {
+                match vm.step().unwrap() {
+                    Step::Continue => {}
+                    Step::System { command, .. } => {
+                        assert_eq!(
+                            dispatch::run(
+                                profile.semantics(command),
+                                &mut vm,
+                                &mut Hosts {
+                                    history: Some(&mut history),
+                                    ..Default::default()
+                                },
+                            )
+                            .unwrap(),
+                            Some(Flow::Done),
+                        );
+                        assert_eq!(vm.stack().len_bytes(), 0);
+                        if command == query_command {
+                            results.push(vm.state().system_integer(0).unwrap());
+                        }
+                    }
+                    Step::Yield => break,
+                }
+            }
+            let expected = if word_count == 2 {
+                [77, 88, 77, 88, 88, u32::MAX]
+            } else {
+                [77, 88, 99, 111, 111, u32::MAX]
+            };
+            assert_eq!(results, expected, "{id}");
+            assert_eq!(history.entries().len(), 1);
+            let entry = &history.entries()[0];
+            assert_eq!(entry.strings[0], b"voice");
+            assert_eq!(entry.strings[1], b"Speaker");
+            assert_eq!(entry.strings[2], b"Short line");
+            assert_eq!(entry.words[..word_count], words[..word_count]);
+            assert!(entry.words[word_count..].iter().all(|&w| w == 0));
+        }
     }
 }

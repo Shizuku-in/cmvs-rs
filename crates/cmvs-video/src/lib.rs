@@ -3,10 +3,10 @@
 //! [`PrefetchTheoraFactory`] for bounded worker-thread lookahead during playback.
 mod prefetch;
 mod theora;
+mod yuv;
 use cmvs_core::{
-    FormatError, MAX_PAYLOAD,
-    mgv::{self, MgvIndex, ReadSeek},
-    raster::RgbaImage,
+    FormatError, MAX_PAYLOAD, format::mgv, format::mgv::MgvIndex, format::mgv::ReadSeek,
+    render::raster::RgbaImage,
 };
 use ogg::PacketReader;
 pub use prefetch::PrefetchTheoraFactory;
@@ -28,7 +28,7 @@ impl mgv::DecoderFactory for TheoraFactory {
         &self,
         reader: Box<dyn ReadSeek>,
         index: &MgvIndex,
-    ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error>> {
+    ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error + Send + Sync>> {
         Ok(Box::new(TheoraStream::open(reader, index)?))
     }
 }
@@ -105,11 +105,14 @@ impl fmt::Debug for TheoraStream {
             .finish_non_exhaustive()
     }
 }
-fn codec<T>(result: Result<T, FormatError>) -> Result<T, Box<dyn Error>> {
-    result.map_err(|e| format!("Theora decode: {e:?}").into())
+fn codec<T>(result: Result<T, FormatError>) -> Result<T, Box<dyn Error + Send + Sync>> {
+    result.map_err(|e| format!("Theora decode: {e}").into())
 }
 impl TheoraStream {
-    pub fn open(mut reader: Box<dyn ReadSeek>, index: &MgvIndex) -> Result<Self, Box<dyn Error>> {
+    pub fn open(
+        mut reader: Box<dyn ReadSeek>,
+        index: &MgvIndex,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         if index.frames.is_empty() {
             return Err(FormatError("MGV frame map is empty").into());
         }
@@ -140,7 +143,7 @@ impl TheoraStream {
         packets: &mut PacketReader<VideoSection>,
         budget: &Budget,
         index: &MgvIndex,
-    ) -> Result<(TheoraIdentHeader, FrameDecoder, u32), Box<dyn Error>> {
+    ) -> Result<(TheoraIdentHeader, FrameDecoder, u32), Box<dyn Error + Send + Sync>> {
         budget.set(MAX_PAYLOAD);
         let packet = packets.read_packet_expected()?;
         let serial = packet.stream_serial();
@@ -165,7 +168,7 @@ impl TheoraStream {
         let decoder = codec(FrameDecoder::new(&ident, &setup.data))?;
         Ok((ident, decoder, serial))
     }
-    fn reset(&mut self) -> Result<(), Box<dyn Error>> {
+    fn reset(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.budget.set(MAX_PAYLOAD);
         self.packets.seek_bytes(SeekFrom::Start(0))?;
         let (ident, decoder, serial) = Self::headers(&mut self.packets, &self.budget, &self.index)?;
@@ -192,7 +195,7 @@ impl TheoraStream {
         }
     }
     /// Decode through an Ogg packet, including all inter-frame dependencies.
-    fn decode_through(&mut self, target: u32) -> Result<(), Box<dyn Error>> {
+    fn decode_through(&mut self, target: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !self.failed && self.recent(target).is_some() {
             return Ok(());
         }
@@ -210,7 +213,7 @@ impl TheoraStream {
         }
         Ok(())
     }
-    fn decode_packet(&mut self) -> Result<(), Box<dyn Error>> {
+    fn decode_packet(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.failed = true;
         self.budget.set(MAX_PAYLOAD);
         let packet = self.packets.read_packet_expected()?;
@@ -222,14 +225,14 @@ impl TheoraStream {
         self.failed = false;
         Ok(())
     }
-    fn prefetch_yuv(&mut self) -> Result<theora::Frame, Box<dyn Error>> {
+    fn prefetch_yuv(&mut self) -> Result<theora::Frame, Box<dyn Error + Send + Sync>> {
         self.decode_packet()?;
         self.recent = [None, None];
         Ok(self.decoder.current_frame().clone())
     }
 }
 impl mgv::Decoder for TheoraStream {
-    fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error>> {
+    fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
         let target = self
             .index
             .frames
@@ -242,7 +245,7 @@ impl mgv::Decoder for TheoraStream {
             .ok_or(FormatError("MGV decoded frame unavailable"))?
             .clone())
     }
-    fn finish(&mut self) -> Result<(), Box<dyn Error>> {
+    fn finish(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.failed || self.next_packet < self.index.packet_count() {
             self.decode_through(self.index.packet_count() - 1)?;
         }
@@ -275,55 +278,81 @@ fn to_rgba(
     let cw = ident.width / 2;
     const BOUNDS: &str = "Theora planes smaller than the MGV picture";
     let mut rgba = vec![0; width * height * 4];
-    for (row, out) in rgba.chunks_exact_mut(width * 4).enumerate() {
+    let row_stride = width * 4;
+    let odd_left = left % 2 == 1;
+    let chroma_left = left / 2;
+    let chroma_right = (left + width).div_ceil(2);
+    let mut row = 0usize;
+    while row < height {
         // Theora rows run bottom-up.
         let y = bottom + height - 1 - row;
-        let luma = frame.planes[0]
-            .get(y * yw + left..y * yw + left + width)
-            .ok_or(FormatError(BOUNDS))?;
-        let chroma = (y / 2) * cw + left / 2..(y / 2) * cw + (left + width).div_ceil(2);
+        let chroma = (y / 2) * cw + chroma_left..(y / 2) * cw + chroma_right;
         let cb = frame.planes[1]
             .get(chroma.clone())
             .ok_or(FormatError(BOUNDS))?;
         let cr = frame.planes[2].get(chroma).ok_or(FormatError(BOUNDS))?;
-        // An odd left edge starts mid-pair: its first pixel takes the first chroma sample.
-        let (head, luma, out) = if left % 2 == 1 {
-            let (first, out) = out.split_at_mut(4);
-            first.copy_from_slice(&ycbcr(luma[0], cb[0], cr[0]));
-            (1, &luma[1..], out)
+        if row + 1 < height && (y & 1) == 1 {
+            let luma0 = frame.planes[0]
+                .get(y * yw + left..y * yw + left + width)
+                .ok_or(FormatError(BOUNDS))?;
+            let y1 = y - 1;
+            let luma1 = frame.planes[0]
+                .get(y1 * yw + left..y1 * yw + left + width)
+                .ok_or(FormatError(BOUNDS))?;
+            let (out0, out1) =
+                rgba[row * row_stride..(row + 2) * row_stride].split_at_mut(row_stride);
+            yuv::convert_row_pair(luma0, luma1, cb, cr, out0, out1, odd_left);
+            row += 2;
         } else {
-            (0, luma, out)
-        };
-        let (cb, cr) = (&cb[head..], &cr[head..]);
-        let pairs = luma.len() / 2;
-        for (((y2, out), &u), &v) in luma
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .zip(out.as_chunks_mut::<8>().0)
-            .zip(cb)
-            .zip(cr)
-        {
-            out[..4].copy_from_slice(&ycbcr(y2[0], u, v));
-            out[4..].copy_from_slice(&ycbcr(y2[1], u, v));
-        }
-        if let Some(&last) = luma.get(pairs * 2) {
-            out[pairs * 8..].copy_from_slice(&ycbcr(last, cb[pairs], cr[pairs]));
+            let luma = frame.planes[0]
+                .get(y * yw + left..y * yw + left + width)
+                .ok_or(FormatError(BOUNDS))?;
+            let out = &mut rgba[row * row_stride..(row + 1) * row_stride];
+            yuv::convert_row(luma, cb, cr, out, odd_left);
+            row += 1;
         }
     }
     RgbaImage::new(u32::from(index.width), u32::from(index.height), rgba)
 }
 
-/// BT.601 limited-range conversion; the decoded Y/Cb/Cr samples are retained exactly.
-#[inline(always)]
-fn ycbcr(y: u8, cb: u8, cr: u8) -> [u8; 4] {
-    let luma = 298 * (i32::from(y) - 16);
-    let (cb, cr) = (i32::from(cb) - 128, i32::from(cr) - 128);
-    let clip = |v: i32| ((v + 128) >> 8).clamp(0, 255) as u8;
-    [
-        clip(luma + 409 * cr),
-        clip(luma - 100 * cb - 208 * cr),
-        clip(luma + 516 * cb),
-        255,
-    ]
+/// Converts planar YUV 4:2:0 buffers (top-down row order, BT.601 limited range) into RGBA.
+///
+/// Dimensions must be even, positive, and fit within [`cmvs_core::MAX_PAYLOAD`].
+pub fn convert_yuv420_planar(
+    width: u32,
+    height: u32,
+    y: &[u8],
+    u: &[u8],
+    v: &[u8],
+) -> Result<RgbaImage, FormatError> {
+    let w = usize::try_from(width).map_err(|_| FormatError("YUV420 width overflow"))?;
+    let h = usize::try_from(height).map_err(|_| FormatError("YUV420 height overflow"))?;
+    if w == 0 || h == 0 || !w.is_multiple_of(2) || !h.is_multiple_of(2) {
+        return Err(FormatError(
+            "YUV420 dimensions must be positive even integers",
+        ));
+    }
+    let rgba_len = w
+        .checked_mul(h)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .filter(|&len| len <= MAX_PAYLOAD)
+        .ok_or(FormatError("YUV420 frame exceeds payload limit"))?;
+    let cw = w / 2;
+    let ch = h / 2;
+    if y.len() != w * h || u.len() != cw * ch || v.len() != cw * ch {
+        return Err(FormatError("YUV420 plane length does not match dimensions"));
+    }
+    let mut rgba = vec![0; rgba_len];
+    let row_stride = w * 4;
+    for pair in 0..ch {
+        let y_row = pair * 2;
+        let luma0 = &y[y_row * w..(y_row + 1) * w];
+        let luma1 = &y[(y_row + 1) * w..(y_row + 2) * w];
+        let cb = &u[pair * cw..(pair + 1) * cw];
+        let cr = &v[pair * cw..(pair + 1) * cw];
+        let (out0, out1) =
+            rgba[y_row * row_stride..(y_row + 2) * row_stride].split_at_mut(row_stride);
+        yuv::convert_row_pair(luma0, luma1, cb, cr, out0, out1, false);
+    }
+    RgbaImage::new(width, height, rgba)
 }

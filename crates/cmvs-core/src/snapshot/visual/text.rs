@@ -15,6 +15,13 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
     decode_with_layout(bytes, SnapshotLayout::TextV3)
 }
 
+fn valid_glyph_capacity(layout: SnapshotLayout, glyph_capacity: u32) -> bool {
+    match layout {
+        SnapshotLayout::CvnsCsp1 => matches!(glyph_capacity, 0 | 196 | 4096),
+        _ => matches!(glyph_capacity, 0 | 196),
+    }
+}
+
 pub(crate) fn decode_with_layout(
     bytes: &[u8],
     layout: SnapshotLayout,
@@ -24,7 +31,7 @@ pub(crate) fn decode_with_layout(
         return Err(FormatError("unsupported snapshot text version"));
     }
     let glyph_capacity = r.u32()?;
-    if !matches!(glyph_capacity, 0 | 196) {
+    if !valid_glyph_capacity(layout, glyph_capacity) {
         return Err(FormatError("unsupported snapshot text atlas capacity"));
     }
     let font_face = r.string(64)?.to_vec();
@@ -49,7 +56,9 @@ pub(crate) fn decode_with_layout(
         | SnapshotLayout::TextV1SceneV2
         | SnapshotLayout::TextV2WindowV2
         | SnapshotLayout::TextV2 => &[0; 208],
-        SnapshotLayout::TextV3 | SnapshotLayout::TextV3SceneV4 => r.take(208)?,
+        SnapshotLayout::TextV3 | SnapshotLayout::TextV3SceneV4 | SnapshotLayout::CvnsCsp1 => {
+            r.take(208)?
+        }
     };
     let word = |block: &[u8], at: usize| u32::from_le_bytes(block[at..at + 4].try_into().unwrap());
     // A begins at native +8, B at +176, C at +328.
@@ -179,6 +188,9 @@ pub(crate) fn encode_with_layout(
         return Err(FormatError(
             "snapshot text v1/v2 cannot store line-break rules",
         ));
+    }
+    if !valid_glyph_capacity(layout, text.glyph_capacity) {
+        return Err(FormatError("unsupported snapshot text atlas capacity"));
     }
     if text.font_face.len() > 31 || text.font_face.contains(&0) {
         return Err(FormatError("snapshot font face exceeds native capacity"));
@@ -396,5 +408,31 @@ mod tests {
         let at = 6 + face.len() + 1 + 8 + 36;
         bytes[at] = 0;
         assert!(decode(&bytes).is_err());
+    }
+
+    #[test]
+    fn cvns_layout_allows_4096_glyph_capacity_while_cmvs_rejects_it() {
+        let mut bytes = 3u16.to_le_bytes().to_vec();
+        bytes.extend(4096u32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend(800u32.to_le_bytes());
+        bytes.extend(600u32.to_le_bytes());
+        let mut a = [0u8; 156];
+        a[104..108].copy_from_slice(&1u32.to_le_bytes());
+        let mut b = [0u8; 148];
+        b[4..8].copy_from_slice(&148u32.to_le_bytes());
+        bytes.extend(a);
+        bytes.extend(b);
+        bytes.extend([0u8; 208]);
+        bytes.extend(0u16.to_le_bytes());
+
+        assert!(super::decode(&bytes).is_err());
+        let text = super::decode_with_layout(&bytes, super::SnapshotLayout::CvnsCsp1).unwrap();
+        assert_eq!(text.glyph_capacity, 4096);
+        assert!(super::encode_with_layout(&text, super::SnapshotLayout::TextV3).is_err());
+        assert_eq!(
+            super::encode_with_layout(&text, super::SnapshotLayout::CvnsCsp1).unwrap(),
+            bytes
+        );
     }
 }

@@ -1,12 +1,12 @@
 //! Mode-1 CSS1 output from fully known state (0x1400179e0). Original game stays read-only.
 use super::{Css1Save, KEY, PAYLOAD_OFFSET, pack};
-use crate::filesystem as fs;
-use crate::filesystem::OpenOptions;
+use crate::filesystem::{HostFs, OpenOptions};
 use crate::{FormatError, dispatch::Call, evaluate::State, machine::Machine, random::CrtRandom};
 use std::{
     error::Error,
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 /// Original writer's four CRT draws, including the wrapping 16-bit product.
@@ -29,7 +29,11 @@ impl Css1Parameters {
     }
 }
 
-fn add_string(payload: &mut Vec<u8>, value: &[u8], bounded: bool) -> Result<(), FormatError> {
+pub(super) fn add_string(
+    payload: &mut Vec<u8>,
+    value: &[u8],
+    bounded: bool,
+) -> Result<(), FormatError> {
     if value.contains(&0) || (bounded && value.len() >= 1024) {
         return Err(FormatError(
             "CSS1 output string contains NUL or exceeds capacity",
@@ -161,10 +165,11 @@ pub trait SystemSaveSink {
 /// An explicitly selected new file, outside the canonical read-only game root.
 /// This export policy never replaces an existing file or creates a game backup.
 pub struct NewSystemSave {
+    fs: Arc<dyn HostFs>,
     path: PathBuf,
 }
 impl NewSystemSave {
-    pub fn new(path: &Path, game_root: &Path) -> io::Result<Self> {
+    pub fn with_fs(path: &Path, game_root: &Path, fs: Arc<dyn HostFs>) -> io::Result<Self> {
         let name = path
             .file_name()
             .ok_or_else(|| io::Error::other("CSS1 output needs a filename"))?;
@@ -172,23 +177,30 @@ impl NewSystemSave {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        let parent = fs::canonicalize(parent)?;
-        if parent.starts_with(fs::canonicalize(game_root)?) {
+        let parent = fs.canonicalize(parent)?;
+        if parent.starts_with(fs.canonicalize(game_root)?) {
             return Err(io::Error::other(
                 "CSS1 output must be outside the read-only game root",
             ));
         }
         let path = parent.join(name);
-        if fs::try_exists(&path)? {
+        if fs.try_exists(&path)? {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "CSS1 output already exists",
             ));
         }
-        Ok(Self { path })
+        Ok(Self { fs, path })
+    }
+    #[cfg(feature = "std-fs")]
+    pub fn new(path: &Path, game_root: &Path) -> io::Result<Self> {
+        Self::with_fs(path, game_root, crate::filesystem::default_fs())
     }
     pub fn path(&self) -> &Path {
         &self.path
+    }
+    pub fn fs(&self) -> &Arc<dyn HostFs> {
+        &self.fs
     }
 }
 impl SystemSaveSink for NewSystemSave {
@@ -196,7 +208,7 @@ impl SystemSaveSink for NewSystemSave {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&self.path)?;
+            .open_with(&*self.fs, &self.path)?;
         // A failed write retains its partial file; retries cannot silently overwrite it.
         file.write_all(raw)?;
         file.sync_all()
@@ -204,34 +216,37 @@ impl SystemSaveSink for NewSystemSave {
 }
 
 impl super::SystemSaveHost {
-    /// 0x2129: runtime flags 0x212a/b/c remain unsupported, so both name lists and
-    /// extra metadata stay disabled. Fully known persistent state is required.
+    /// 0x2129 (CSS1) and CVNS 0x21c1 (CSS0): runtime CSS1 flags remain unsupported,
+    /// while CSS0 re-emits any lists restored from `save000.dat`.
     pub fn try_write(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         sink: &mut dyn SystemSaveSink,
         random: &mut CrtRandom,
         game_id: Option<u32>,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, 0x129)) = vm.pending_system() else {
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
+        let Some((pc, command @ (0x129 | 0x5c1))) = vm.pending_system() else {
             return Ok(false);
         };
-        self.handle_write(&mut Call::new(vm, pc, 0x129), sink, random, game_id)?;
+        self.handle_write(&mut Call::new(vm, pc, command), sink, random, game_id)?;
         Ok(true)
     }
     pub(crate) fn handle_write(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         sink: &mut dyn SystemSaveSink,
         random: &mut CrtRandom,
         game_id: Option<u32>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        if call.command == 0x5c1 && self.css0_starts.is_none() {
+            self.css0_starts = Some(super::PersistentStarts::default());
+        }
         self.write_now(call.vm.state(), sink, random, game_id)?;
         call.complete(0x4000)?;
         Ok(())
     }
 
-    /// The CSS1 writer 0x1400179e0 itself, which the slot writer 0x140080b20 also calls.
+    /// The CSS1 writer 0x1400179e0 (or CSS0 0x420460), which the slot writer also calls.
     /// Random draws are committed only after the sink accepted the file.
     pub fn write_now(
         &mut self,
@@ -239,7 +254,19 @@ impl super::SystemSaveHost {
         sink: &mut dyn SystemSaveSink,
         random: &mut CrtRandom,
         game_id: Option<u32>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        if let Some(starts) = self.css0_starts {
+            let mut candidate = random.clone();
+            let parameters = super::Css0Parameters::draw(&mut candidate);
+            let lists = [
+                self.lists[0].as_deref().unwrap_or(&[]),
+                self.lists[1].as_deref().unwrap_or(&[]),
+            ];
+            let raw = super::Css0Save::encode_state(state, starts, b"", parameters, lists)?;
+            sink.write(&raw)?;
+            *random = candidate;
+            return Ok(());
+        }
         let game_id = game_id.ok_or("CSS1 write requires a known game identifier")?;
         if self.loaded.as_ref().is_some_and(|template| {
             template.layout.game_id != 0 && template.layout.game_id != game_id

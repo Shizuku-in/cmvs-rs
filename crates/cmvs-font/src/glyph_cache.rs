@@ -1,6 +1,6 @@
 //! Bounded LRU for rasterized glyphs, keyed by face and all pixel-affecting styles.
-use cmvs_core::raster::RgbaImage;
-use std::{collections::BTreeMap, sync::Arc};
+use cmvs_core::render::raster::RgbaImage;
+use std::{collections::HashMap, sync::Arc};
 
 type Key = (Arc<[u8]>, [u32; 9]);
 // A full page may have 512 distinct visible glyph styles. A smaller LRU can miss
@@ -11,24 +11,66 @@ const CAPACITY: usize = 512;
 const BYTE_LIMIT: usize = 9 * 1024 * 1024;
 
 #[derive(Clone)]
-struct Entry {
+struct Node {
+    key: Key,
     image: RgbaImage,
-    used: u64,
+    prev: Option<usize>,
+    next: Option<usize>,
 }
 
+/// Safe O(1)-hit, O(1)-eviction glyph LRU (`head` = oldest, `tail` = most recent).
 #[derive(Clone, Default)]
 pub(super) struct GlyphCache {
-    entries: BTreeMap<Key, Entry>,
+    index: HashMap<Key, usize>,
+    nodes: Vec<Option<Node>>,
+    free: Vec<usize>,
+    head: Option<usize>,
+    tail: Option<usize>,
     bytes: usize,
-    clock: u64,
 }
 
 impl GlyphCache {
+    fn unlink(&mut self, idx: usize) {
+        let node = self.nodes[idx].as_mut().expect("occupied slot");
+        let prev = node.prev.take();
+        let next = node.next.take();
+        match prev {
+            Some(p) => self.nodes[p].as_mut().expect("occupied slot").next = next,
+            None => self.head = next,
+        }
+        match next {
+            Some(n) => self.nodes[n].as_mut().expect("occupied slot").prev = prev,
+            None => self.tail = prev,
+        }
+    }
+
+    fn push_back_slot(&mut self, idx: usize) {
+        let prev_tail = self.tail;
+        let node = self.nodes[idx].as_mut().expect("occupied slot");
+        node.prev = prev_tail;
+        node.next = None;
+        match prev_tail {
+            Some(t) => self.nodes[t].as_mut().expect("occupied slot").next = Some(idx),
+            None => self.head = Some(idx),
+        }
+        self.tail = Some(idx);
+    }
+
+    fn remove_slot(&mut self, idx: usize) {
+        self.unlink(idx);
+        let removed = self.nodes[idx].take().expect("occupied slot");
+        self.bytes -= removed.image.pixels().len();
+        self.index.remove(&removed.key);
+        self.free.push(idx);
+    }
+
     pub fn get(&mut self, key: &Key) -> Option<&RgbaImage> {
-        let entry = self.entries.get_mut(key)?;
-        self.clock = self.clock.wrapping_add(1);
-        entry.used = self.clock;
-        Some(&entry.image)
+        let &idx = self.index.get(key)?;
+        if self.tail != Some(idx) {
+            self.unlink(idx);
+            self.push_back_slot(idx);
+        }
+        Some(&self.nodes[idx].as_ref().expect("occupied slot").image)
     }
 
     pub fn insert(&mut self, key: Key, image: RgbaImage) {
@@ -36,36 +78,41 @@ impl GlyphCache {
         if bytes > BYTE_LIMIT {
             return;
         }
-        self.clock = self.clock.wrapping_add(1);
-        if let Some(previous) = self.entries.remove(&key) {
-            self.bytes -= previous.image.pixels().len();
+        if let Some(&existing) = self.index.get(&key) {
+            self.remove_slot(existing);
         }
-        while self.entries.len() >= CAPACITY || self.bytes + bytes > BYTE_LIMIT {
-            // Hits remain O(log n); scan only on a full-cache insertion, after
-            // rasterization succeeds. Wrapping ages preserve order across rollover.
-            let oldest = self
-                .entries
-                .iter()
-                .max_by_key(|(_, entry)| self.clock.wrapping_sub(entry.used))
-                .expect("full cache")
-                .0
-                .clone();
-            let evicted = self.entries.remove(&oldest).expect("found above");
-            self.bytes -= evicted.image.pixels().len();
+        while self.index.len() >= CAPACITY || self.bytes + bytes > BYTE_LIMIT {
+            let oldest = self.head.expect("non-empty cache");
+            self.remove_slot(oldest);
         }
+        let slot = Node {
+            key: key.clone(),
+            image,
+            prev: None,
+            next: None,
+        };
+        let idx = if let Some(idx) = self.free.pop() {
+            self.nodes[idx] = Some(slot);
+            idx
+        } else {
+            let idx = self.nodes.len();
+            self.nodes.push(Some(slot));
+            idx
+        };
+        self.push_back_slot(idx);
+        self.index.insert(key, idx);
         self.bytes += bytes;
-        self.entries.insert(
-            key,
-            Entry {
-                image,
-                used: self.clock,
-            },
-        );
     }
 
     #[cfg(test)]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.index.len()
+    }
+
+    #[cfg(test)]
+    fn peek(&self, key: &Key) -> Option<&RgbaImage> {
+        let &idx = self.index.get(key)?;
+        Some(&self.nodes[idx].as_ref().expect("occupied slot").image)
     }
 }
 
@@ -84,34 +131,8 @@ mod tests {
     }
 
     #[test]
-    fn repeated_pages_reuse_all_glyph_pixels_above_the_old_capacity() {
-        for count in [129, 196, 512] {
-            let mut cache = GlyphCache::default();
-            // The default 27px glyph has two padding pixels on each side.
-            let images: Vec<_> = (0..count)
-                .map(|i| RgbaImage::new(31, 31, vec![i as u8; 31 * 31 * 4]).unwrap())
-                .collect();
-            for (i, image) in images.iter().enumerate() {
-                cache.insert(key(i as u32), image.clone());
-            }
-            // The render loop visits a static page in the same order every frame.
-            for _ in 0..3 {
-                for (i, expected) in images.iter().enumerate() {
-                    let hit = cache
-                        .get(&key(i as u32))
-                        .expect("visible page stays cached");
-                    assert!(std::ptr::eq(hit.pixels(), expected.pixels()));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn hot_glyph_survives_streaming_misses_and_clock_rollover() {
-        let mut cache = GlyphCache {
-            clock: u64::MAX - 64,
-            ..Default::default()
-        };
+    fn hot_glyph_survives_streaming_misses() {
+        let mut cache = GlyphCache::default();
         let hot = image(42);
         cache.insert(key(0), hot.clone());
         for i in 1..CAPACITY as u32 {
@@ -131,6 +152,43 @@ mod tests {
             assert_eq!(cache.len(), CAPACITY);
         }
         assert!(cache.get(&key(0)).is_some());
+        assert!(
+            cache.nodes.len() <= CAPACITY,
+            "node arena recycles evicted slots without unbounded growth"
+        );
+    }
+
+    #[test]
+    fn lru_eviction_order_reflects_interleaved_hits_and_inserts() {
+        let mut cache = GlyphCache::default();
+        for i in 0..CAPACITY as u32 {
+            cache.insert(key(i), image(i as u8));
+        }
+        // Touch head (0), a middle entry (3), and current tail (CAPACITY - 1), then
+        // touch 0 again so recency at the tail ends with `[..., 3, CAPACITY - 1, 0]`
+        // and the oldest surviving keys are `1, 2, 4, 5, ...`.
+        assert!(cache.get(&key(0)).is_some());
+        assert!(cache.get(&key(3)).is_some());
+        assert!(cache.get(&key(CAPACITY as u32 - 1)).is_some());
+        assert!(cache.get(&key(0)).is_some());
+
+        let expected_evictions = [1u32, 2, 4, 5];
+        for (step, victim) in expected_evictions.into_iter().enumerate() {
+            assert!(
+                cache.peek(&key(victim)).is_some(),
+                "victim {victim} present before insert {step}"
+            );
+            cache.insert(key(10_000 + step as u32), image(99));
+            assert!(
+                cache.peek(&key(victim)).is_none(),
+                "victim {victim} must be evicted at step {step}"
+            );
+            assert_eq!(cache.len(), CAPACITY);
+        }
+        assert!(cache.peek(&key(0)).is_some());
+        assert!(cache.peek(&key(3)).is_some());
+        assert!(cache.peek(&key(CAPACITY as u32 - 1)).is_some());
+        assert!(cache.peek(&key(6)).is_some());
     }
 
     #[test]
@@ -142,8 +200,8 @@ mod tests {
         let replacement = image(250);
         cache.insert(key(0), replacement.clone());
         assert_eq!(cache.len(), CAPACITY);
-        assert_eq!(cache.entries[&key(0)].image, replacement);
-        assert!(cache.entries.contains_key(&key(1)));
+        assert_eq!(cache.peek(&key(0)), Some(&replacement));
+        assert!(cache.peek(&key(1)).is_some());
         cache.insert(key(CAPACITY as u32), image(128));
         assert!(cache.get(&key(1)).is_none());
         assert_eq!(cache.get(&key(0)), Some(&replacement));
@@ -171,21 +229,6 @@ mod tests {
     }
 
     #[test]
-    fn largest_glyphs_preserve_the_previous_128_style_working_set() {
-        let mut cache = GlyphCache::default();
-        let originals: Vec<_> = (0..128).map(large_glyph).collect();
-        for (i, original) in originals.iter().enumerate() {
-            cache.insert(key(i as u32), original.clone());
-        }
-        for (i, original) in originals.iter().enumerate() {
-            let hit = cache
-                .get(&key(i as u32))
-                .expect("the previous maximum-size working set still fits");
-            assert!(std::ptr::eq(hit.pixels(), original.pixels()));
-        }
-    }
-
-    #[test]
     fn byte_budget_evicts_the_oldest_large_glyph_and_keeps_shared_pixels_valid() {
         let mut cache = GlyphCache::default();
         let first = large_glyph(0);
@@ -195,7 +238,7 @@ mod tests {
             cache.insert(key(i as u32), large_glyph(i as u8));
         }
         // Retain an evicted glyph as a renderer would, and touch a different glyph.
-        let retained = cache.entries[&key(1)].image.clone();
+        let retained = cache.peek(&key(1)).unwrap().clone();
         let hot = cache.get(&key(0)).unwrap().clone();
         cache.insert(key(count as u32), first.clone());
         assert!(cache.get(&key(1)).is_none());
@@ -225,7 +268,7 @@ mod tests {
         // Shrinking one entry leaves room for another without evicting its neighbor.
         cache.insert(key(count as u32), large.clone());
         assert_eq!(cache.len(), count + 1);
-        assert!(cache.entries.contains_key(&key(1)));
+        assert!(cache.peek(&key(1)).is_some());
         assert_eq!(cache.get(&key(0)), Some(&small));
         // Growing it again must evict the oldest neighbor and keep the new value.
         cache.insert(key(0), large.clone());

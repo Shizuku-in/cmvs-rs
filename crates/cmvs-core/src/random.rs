@@ -1,11 +1,24 @@
-//! MSVC CRT rand() (statically linked at 0x1400c77b4): LCG 214013/2531011 with 15-bit output.
-//! The original seeds it from timeGetTime and also draws once per main-loop frame, so values are
-//! reproducible only through an explicit research seed; the generator and command semantics match.
-use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
+//! Deterministic MSVC-compatible pseudo-random values and VM commands.
+//!
+//! Choose an explicit seed for repeatable runs. The runtime also advances the
+//! generator per frame, so instruction order alone does not determine the sequence.
+
+// MSVC CRT rand() at 0x1400c77b4: LCG 214013/2531011 with 15-bit output.
+// The original seeds from timeGetTime and draws once per main-loop frame.
+use crate::{bytecode::DecodeError, dispatch::Call};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrtRandom {
     state: u32,
+}
+
+/// Wall-clock milliseconds truncated to `u32`, matching the original `timeGetTime()`
+/// startup seed for interactive hosts.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn host_time_seed() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u32)
 }
 
 impl CrtRandom {
@@ -16,17 +29,8 @@ impl CrtRandom {
         self.state = self.state.wrapping_mul(214013).wrapping_add(2531011);
         (self.state >> 16) & 0x7fff
     }
-    /// 0x20d4 / 0x140074b10: system result 0 = rand() % SP-4, returning 0x4004.
-    /// The generator advances only when the command completes.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, 0xd4)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, 0xd4))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let divisor = call.argument(4, "divisor")? as i32;
         if divisor == 0 {
             return Err(call.error("rand() % 0 faults in the original"));

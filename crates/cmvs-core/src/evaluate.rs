@@ -1,9 +1,10 @@
 //! Stateful integer and float evaluation with explicit unknown values and transactional errors.
 use crate::{
     bytecode::{DecodeError, Expression, Term},
-    vm::{ParameterStack, StackWord, frame_offset},
+    vm::{ParameterStack, StackWord},
+    vm_core::frame_offset,
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 /// Float variables flt_14012df00..0x14012ff00 hold 2048 entries.
 const FLOAT_LIMIT: u32 = 2048;
@@ -35,6 +36,305 @@ enum Undo {
 /// without cloning the whole State.
 #[derive(Debug, Default)]
 pub(crate) struct Journal(Vec<Undo>);
+
+impl Journal {
+    pub(crate) fn clear(&mut self, scratch: &mut EvalScratch) {
+        for undo in self.0.drain(..) {
+            if let Undo::Buffer(buf) = undo {
+                scratch.put_string_buffer(buf);
+            }
+        }
+    }
+}
+
+/// Reusable operand stacks and string accumulator kept across VM evaluations.
+#[derive(Debug, Default)]
+pub(crate) struct EvalScratch {
+    int_stack: Vec<Cell>,
+    float_stack: Vec<FloatCell>,
+    string_buffer: Vec<u8>,
+}
+
+impl EvalScratch {
+    pub(crate) fn take_string_buffer(&mut self) -> Vec<u8> {
+        let mut buf = std::mem::take(&mut self.string_buffer);
+        buf.clear();
+        buf
+    }
+
+    pub(crate) fn put_string_buffer(&mut self, mut buf: Vec<u8>) {
+        buf.clear();
+        if buf.capacity() >= self.string_buffer.capacity() {
+            self.string_buffer = buf;
+        }
+    }
+}
+
+struct StackFrame<'a, T> {
+    stack: &'a mut Vec<T>,
+    base: usize,
+}
+
+impl<'a, T> StackFrame<'a, T> {
+    fn new(stack: &'a mut Vec<T>) -> Self {
+        let base = stack.len();
+        Self { stack, base }
+    }
+
+    fn push(&mut self, value: T) {
+        self.stack.push(value);
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        (self.stack.len() > self.base)
+            .then(|| self.stack.pop())
+            .flatten()
+    }
+
+    fn single(&self) -> Option<T>
+    where
+        T: Copy,
+    {
+        (self.stack.len() - self.base == 1).then(|| self.stack[self.base])
+    }
+}
+
+impl<T> Drop for StackFrame<'_, T> {
+    fn drop(&mut self) {
+        self.stack.truncate(self.base);
+    }
+}
+
+/// Iterates `(word_index, bit_mask)` covering bit indices `start..end`.
+fn bit_words(start: usize, end: usize) -> impl Iterator<Item = (usize, u64)> {
+    let first_word = start >> 6;
+    let last_word = (end - 1) >> 6;
+    let start_bit = start & 63;
+    let end_bit = end & 63;
+    (first_word..=last_word).map(move |word| {
+        let low = if word == first_word {
+            u64::MAX << start_bit
+        } else {
+            u64::MAX
+        };
+        let high = if word == last_word && end_bit != 0 {
+            (1u64 << end_bit) - 1
+        } else {
+            u64::MAX
+        };
+        (word, low & high)
+    })
+}
+
+fn known_indices(words: &[u64]) -> impl Iterator<Item = u32> + Clone {
+    words.iter().enumerate().flat_map(|(word, &known)| {
+        let mut remaining = known;
+        std::iter::from_fn(move || {
+            if remaining == 0 {
+                return None;
+            }
+            let bit = remaining.trailing_zeros();
+            remaining &= remaining - 1;
+            Some(((word as u32) << 6) + bit)
+        })
+    })
+}
+
+#[derive(Debug, Clone, Default)]
+struct BitBank {
+    values: Vec<u64>,
+    known: Vec<u64>,
+    known_count: usize,
+}
+
+impl BitBank {
+    fn get(&self, index: u32) -> Option<bool> {
+        let idx = index as usize;
+        let word = idx >> 6;
+        let mask = 1u64 << (idx & 63);
+        if self.known.get(word).copied().unwrap_or(0) & mask != 0 {
+            Some(self.values[word] & mask != 0)
+        } else {
+            None
+        }
+    }
+
+    fn set(&mut self, index: u32, value: bool) -> Option<bool> {
+        let idx = index as usize;
+        let word = idx >> 6;
+        let mask = 1u64 << (idx & 63);
+        if word >= self.known.len() {
+            self.known.resize(word + 1, 0);
+            self.values.resize(word + 1, 0);
+        }
+        let old = if self.known[word] & mask != 0 {
+            Some(self.values[word] & mask != 0)
+        } else {
+            self.known[word] |= mask;
+            self.known_count += 1;
+            None
+        };
+        if value {
+            self.values[word] |= mask;
+        } else {
+            self.values[word] &= !mask;
+        }
+        old
+    }
+
+    fn restore(&mut self, index: u32, old: Option<bool>) {
+        match old {
+            Some(value) => {
+                self.set(index, value);
+            }
+            None => {
+                let idx = index as usize;
+                let word = idx >> 6;
+                let mask = 1u64 << (idx & 63);
+                if let Some(known) = self.known.get_mut(word)
+                    && *known & mask != 0
+                {
+                    *known &= !mask;
+                    self.values[word] &= !mask;
+                    self.known_count -= 1;
+                }
+            }
+        }
+    }
+
+    fn fill(&mut self, start: u32, count: u32, value: bool) {
+        if count == 0 {
+            return;
+        }
+        let start = start as usize;
+        let end = start + count as usize;
+        let words = end.div_ceil(64);
+        if words > self.known.len() {
+            self.known.resize(words, 0);
+            self.values.resize(words, 0);
+        }
+        for (word, mask) in bit_words(start, end) {
+            self.known_count += (mask & !self.known[word]).count_ones() as usize;
+            self.known[word] |= mask;
+            if value {
+                self.values[word] |= mask;
+            } else {
+                self.values[word] &= !mask;
+            }
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (u32, bool)> + Clone {
+        known_indices(&self.known).map(|index| {
+            (
+                index,
+                self.values[index as usize >> 6] & (1 << (index & 63)) != 0,
+            )
+        })
+    }
+
+    fn to_btree_map(&self) -> BTreeMap<u32, bool> {
+        self.iter().collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WordBank<T> {
+    values: Vec<T>,
+    known: Vec<u64>,
+    known_count: usize,
+}
+
+impl<T> Default for WordBank<T> {
+    fn default() -> Self {
+        Self {
+            values: Vec::new(),
+            known: Vec::new(),
+            known_count: 0,
+        }
+    }
+}
+
+impl<T: Copy + Default> WordBank<T> {
+    fn get(&self, index: u32) -> Option<T> {
+        let idx = index as usize;
+        let word = idx >> 6;
+        let mask = 1u64 << (idx & 63);
+        if self.known.get(word).copied().unwrap_or(0) & mask != 0 {
+            Some(self.values[idx])
+        } else {
+            None
+        }
+    }
+
+    fn set(&mut self, index: u32, value: T) -> Option<T> {
+        let idx = index as usize;
+        let word = idx >> 6;
+        let mask = 1u64 << (idx & 63);
+        if word >= self.known.len() {
+            self.known.resize(word + 1, 0);
+        }
+        if idx >= self.values.len() {
+            self.values.resize(idx + 1, T::default());
+        }
+        let old = if self.known[word] & mask != 0 {
+            Some(self.values[idx])
+        } else {
+            self.known[word] |= mask;
+            self.known_count += 1;
+            None
+        };
+        self.values[idx] = value;
+        old
+    }
+
+    fn restore(&mut self, index: u32, old: Option<T>) {
+        match old {
+            Some(value) => {
+                self.set(index, value);
+            }
+            None => {
+                let idx = index as usize;
+                let word = idx >> 6;
+                let mask = 1u64 << (idx & 63);
+                if let Some(known) = self.known.get_mut(word)
+                    && *known & mask != 0
+                {
+                    *known &= !mask;
+                    self.known_count -= 1;
+                }
+            }
+        }
+    }
+
+    fn fill(&mut self, start: u32, count: u32, value: T) {
+        if count == 0 {
+            return;
+        }
+        let start = start as usize;
+        let end = start + count as usize;
+        let words = end.div_ceil(64);
+        if words > self.known.len() {
+            self.known.resize(words, 0);
+        }
+        if end > self.values.len() {
+            self.values.resize(end, T::default());
+        }
+        self.values[start..end].fill(value);
+        for (word, mask) in bit_words(start, end) {
+            self.known_count += (mask & !self.known[word]).count_ones() as usize;
+            self.known[word] |= mask;
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (u32, T)> + Clone {
+        known_indices(&self.known).map(|index| (index, self.values[index as usize]))
+    }
+
+    fn to_btree_map(&self) -> BTreeMap<u32, T> {
+        self.iter().collect()
+    }
+}
 
 /// Stack bytes addressed by frame operands; `base` is frame[depth], zero at depth 0.
 pub(crate) struct Frame<'s> {
@@ -119,20 +419,55 @@ pub(crate) fn truncate(value: f32) -> i32 {
 }
 
 /// Bounded research state. Missing variables are unknown, not implicitly zero.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct State {
-    integers: BTreeMap<u32, i32>,
-    bits: BTreeMap<u32, bool>,
-    floats: BTreeMap<u32, u32>,
-    strings: BTreeMap<u32, Vec<u8>>,
+    integers: WordBank<i32>,
+    bits: BitBank,
+    floats: WordBank<u32>,
+    strings: Vec<Option<Vec<u8>>>,
     system_integers: [Option<u32>; 7],
     /// Float system result slots 7..10 (+82844..+82856) as raw f32 bits.
     system_float_bits: [Option<u32>; 4],
     integer_limit: u32,
     bit_limit: u32,
+    /// String variable slots: 128 in CMVS, 256 in CVNS (cvns-20090203 0x469cd0/0x469d00).
+    string_slots: u32,
     string_buffer: Vec<u8>,
     pub result: Option<u32>,
     pub condition: Option<bool>,
+}
+
+struct DebugMap<I>(I);
+
+impl<K: fmt::Debug, V: fmt::Debug, I: Iterator<Item = (K, V)> + Clone> fmt::Debug for DebugMap<I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map().entries(self.0.clone()).finish()
+    }
+}
+
+// Probe hashes this representation: omit unknown slots and retained scratch storage.
+impl fmt::Debug for State {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let strings = self
+            .strings
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| value.as_ref().map(|value| (index, value)));
+        f.debug_struct("State")
+            .field("integers", &DebugMap(self.integers.iter()))
+            .field("bits", &DebugMap(self.bits.iter()))
+            .field("floats", &DebugMap(self.floats.iter()))
+            .field("strings", &DebugMap(strings))
+            .field("system_integers", &self.system_integers)
+            .field("system_float_bits", &self.system_float_bits)
+            .field("integer_limit", &self.integer_limit)
+            .field("bit_limit", &self.bit_limit)
+            .field("string_slots", &self.string_slots)
+            .field("string_buffer", &self.string_buffer)
+            .field("result", &self.result)
+            .field("condition", &self.condition)
+            .finish()
+    }
 }
 
 impl Default for State {
@@ -145,21 +480,22 @@ impl State {
     /// Limits are research policy, not assertions about all CMVS versions.
     pub fn new(integer_limit: u32, bit_limit: u32) -> Self {
         Self {
-            integers: BTreeMap::new(),
-            bits: BTreeMap::new(),
-            floats: BTreeMap::new(),
-            strings: BTreeMap::new(),
+            integers: WordBank::default(),
+            bits: BitBank::default(),
+            floats: WordBank::default(),
+            strings: Vec::new(),
             system_integers: [None; 7],
             system_float_bits: [None; 4],
             integer_limit,
             bit_limit,
+            string_slots: 128,
             string_buffer: Vec::new(),
             result: None,
             condition: None,
         }
     }
     pub fn integer(&self, index: u32) -> Option<i32> {
-        self.integers.get(&index).copied()
+        self.integers.get(index)
     }
     /// Integer system result slots +82816..+82840, distinct from expression result +82812.
     pub fn system_integer(&self, index: u32) -> Option<u32> {
@@ -199,19 +535,32 @@ impl State {
         Ok(())
     }
     pub fn bit(&self, index: u32) -> Option<bool> {
-        self.bits.get(&index).copied()
+        self.bits.get(index)
     }
-    pub fn integers(&self) -> &BTreeMap<u32, i32> {
-        &self.integers
+    pub fn known_integer_count(&self) -> usize {
+        self.integers.known_count
     }
-    pub fn bits(&self) -> &BTreeMap<u32, bool> {
-        &self.bits
+    pub fn known_bit_count(&self) -> usize {
+        self.bits.known_count
+    }
+    pub fn integers(&self) -> BTreeMap<u32, i32> {
+        self.integers.to_btree_map()
+    }
+    pub fn bits(&self) -> BTreeMap<u32, bool> {
+        self.bits.to_btree_map()
     }
     pub fn float_bits(&self, index: u32) -> Option<u32> {
-        self.floats.get(&index).copied()
+        self.floats.get(index)
+    }
+    pub fn string_slots(&self) -> u32 {
+        self.string_slots
+    }
+    /// The engine's string bank size; slots at or past it are never written.
+    pub fn set_string_slots(&mut self, slots: u32) {
+        self.string_slots = slots;
     }
     pub fn string(&self, index: u32) -> Option<&[u8]> {
-        self.strings.get(&index).map(Vec::as_slice)
+        self.strings.get(index as usize).and_then(Option::as_deref)
     }
     /// The 1024-byte accumulator at +82864, cleared by every 0x0201 evaluation.
     pub fn string_buffer(&self) -> &[u8] {
@@ -231,11 +580,15 @@ impl State {
         bytes: &[u8],
         journal: &mut Journal,
     ) -> Result<(), &'static str> {
-        Self::range(index, 1, 128)?;
+        Self::range(index, 1, self.string_slots)?;
         if bytes.len() >= 1024 || bytes.contains(&0) {
             return Err("invalid bounded string slot value");
         }
-        let old = self.strings.insert(index, bytes.to_vec());
+        let idx = index as usize;
+        if idx >= self.strings.len() {
+            self.strings.resize_with(idx + 1, || None);
+        }
+        let old = self.strings[idx].replace(bytes.to_vec());
         journal.0.push(Undo::String(index, old));
         Ok(())
     }
@@ -248,7 +601,7 @@ impl State {
         if index >= self.integer_limit {
             return Err("integer variable outside research limit");
         }
-        let old = self.integers.insert(index, value);
+        let old = self.integers.set(index, value);
         journal.0.push(Undo::Integer(index, old));
         Ok(())
     }
@@ -261,7 +614,7 @@ impl State {
         if index >= self.bit_limit {
             return Err("bit variable outside research limit");
         }
-        let old = self.bits.insert(index, value);
+        let old = self.bits.set(index, value);
         journal.0.push(Undo::Bit(index, old));
         Ok(())
     }
@@ -274,29 +627,27 @@ impl State {
         if index >= FLOAT_LIMIT {
             return Err("float variable outside research limit");
         }
-        let old = self.floats.insert(index, bits);
+        let old = self.floats.set(index, bits);
         journal.0.push(Undo::Float(index, old));
         Ok(())
     }
     /// Restores every journaled write in reverse order; stack words need the same stack.
     pub(crate) fn rollback(
         &mut self,
-        journal: Journal,
+        journal: &mut Journal,
         mut stack: Option<&mut ParameterStack>,
         mut data: Option<&mut [u8]>,
     ) {
-        fn restore<V>(map: &mut BTreeMap<u32, V>, index: u32, old: Option<V>) {
-            match old {
-                Some(value) => map.insert(index, value),
-                None => map.remove(&index),
-            };
-        }
-        for undo in journal.0.into_iter().rev() {
+        for undo in journal.0.drain(..).rev() {
             match undo {
-                Undo::Integer(index, old) => restore(&mut self.integers, index, old),
-                Undo::Bit(index, old) => restore(&mut self.bits, index, old),
-                Undo::String(index, old) => restore(&mut self.strings, index, old),
-                Undo::Float(index, old) => restore(&mut self.floats, index, old),
+                Undo::Integer(index, old) => self.integers.restore(index, old),
+                Undo::Bit(index, old) => self.bits.restore(index, old),
+                Undo::String(index, old) => {
+                    if (index as usize) < self.strings.len() {
+                        self.strings[index as usize] = old;
+                    }
+                }
+                Undo::Float(index, old) => self.floats.restore(index, old),
                 Undo::SystemInteger(index, old) => self.system_integers[index] = old,
                 Undo::SystemFloat(index, old) => self.system_float_bits[index] = old,
                 Undo::Stack(offset, old) => {
@@ -329,22 +680,19 @@ impl State {
         count: u32,
         value: i32,
     ) -> Result<(), &'static str> {
-        for index in Self::range(start, count, self.integer_limit)? {
-            self.integers.insert(index, value);
-        }
+        Self::range(start, count, self.integer_limit)?;
+        self.integers.fill(start, count, value);
         Ok(())
     }
     pub fn fill_bits(&mut self, start: u32, count: u32, value: bool) -> Result<(), &'static str> {
-        for index in Self::range(start, count, self.bit_limit)? {
-            self.bits.insert(index, value);
-        }
+        Self::range(start, count, self.bit_limit)?;
+        self.bits.fill(start, count, value);
         Ok(())
     }
     pub fn fill_floats(&mut self, start: u32, count: u32, bits: u32) -> Result<(), &'static str> {
         // Research capacity; the model preserves raw f32 bits, including NaN payloads.
-        for index in Self::range(start, count, 2048)? {
-            self.floats.insert(index, bits);
-        }
+        Self::range(start, count, FLOAT_LIMIT)?;
+        self.floats.fill(start, count, bits);
         Ok(())
     }
     pub fn fill_strings(
@@ -356,8 +704,18 @@ impl State {
         if bytes.len() >= 1024 || bytes.contains(&0) {
             return Err("invalid bounded string slot value");
         }
-        for index in Self::range(start, count, 128)? {
-            self.strings.insert(index, bytes.to_vec());
+        let range = Self::range(start, count, self.string_slots)?;
+        if !range.is_empty() && range.end as usize > self.strings.len() {
+            self.strings.resize_with(range.end as usize, || None);
+        }
+        for index in range {
+            match &mut self.strings[index as usize] {
+                Some(existing) => {
+                    existing.clear();
+                    existing.extend_from_slice(bytes);
+                }
+                slot @ None => *slot = Some(bytes.to_vec()),
+            }
         }
         Ok(())
     }
@@ -365,14 +723,14 @@ impl State {
         if index >= self.integer_limit {
             return Err("integer variable outside research limit");
         }
-        self.integers.insert(index, value);
+        self.integers.set(index, value);
         Ok(())
     }
     pub fn set_bit(&mut self, index: u32, value: bool) -> Result<(), &'static str> {
         if index >= self.bit_limit {
             return Err("bit variable outside research limit");
         }
-        self.bits.insert(index, value);
+        self.bits.set(index, value);
         Ok(())
     }
     /// Commit all nested expression writes only if the complete expression succeeds.
@@ -385,14 +743,15 @@ impl State {
         labels: &[u32],
     ) -> Result<i32, DecodeError> {
         let mut journal = Journal::default();
+        let mut scratch = EvalScratch::default();
         let mut env = Env {
             labels,
             frame: None,
             data: None,
         };
-        let outcome = self.evaluate(expr, 0, &mut env, &mut journal);
+        let outcome = self.evaluate_in(expr, &mut env, &mut scratch, &mut journal);
         if outcome.is_err() {
-            self.rollback(journal, None, None);
+            self.rollback(&mut journal, None, None);
         }
         outcome
     }
@@ -401,9 +760,10 @@ impl State {
         &mut self,
         expr: &Expression,
         env: &mut Env,
+        scratch: &mut EvalScratch,
         journal: &mut Journal,
     ) -> Result<i32, DecodeError> {
-        self.evaluate(expr, 0, env, journal)
+        self.evaluate(expr, 0, env, &mut scratch.int_stack, journal)
     }
     fn read(&self, cell: Cell, env: &Env, pc: usize, op: u16) -> Result<i32, DecodeError> {
         match cell {
@@ -443,11 +803,27 @@ impl State {
         }
         .map_err(|why| error(pc, op, why))
     }
+    fn finish_integer_eval(
+        &mut self,
+        expr: &Expression,
+        value: i32,
+        journal: &mut Journal,
+    ) -> Result<i32, DecodeError> {
+        // The original integer evaluator writes its result to global integer 4096.
+        self.set_integer_journaled(4096, value, journal)
+            .map_err(|why| error(expr.pc, expr.kind, why))?;
+        self.set_result_journaled(Some(value as u32), journal);
+        journal.0.push(Undo::Condition(self.condition));
+        self.condition = Some(value != 0);
+        Ok(value)
+    }
+
     fn evaluate(
         &mut self,
         expr: &Expression,
         depth: usize,
         env: &mut Env,
+        int_stack: &mut Vec<Cell>,
         journal: &mut Journal,
     ) -> Result<i32, DecodeError> {
         if depth >= 64 {
@@ -460,7 +836,11 @@ impl State {
         if expr.kind != 0x200 {
             return Err(error(expr.pc, expr.kind, "not an integer expression"));
         }
-        let mut stack = Vec::new();
+        if expr.terms.is_empty() {
+            // CVNS sub_425810 skips the term loop and computes default result 0 for empty 0x200 0x20f.
+            return self.finish_integer_eval(expr, 0, journal);
+        }
+        let mut stack = StackFrame::new(int_stack);
         for term in &expr.terms {
             match term {
                 Term::Scalar {
@@ -499,7 +879,7 @@ impl State {
                 }
                 Term::Scalar {
                     pc,
-                    tag: tag @ (0x103 | 0x108),
+                    tag: tag @ (0x103 | 0x108 | 0x10a),
                     raw,
                 } => stack.push(Cell::Frame(env.offset(*tag, *raw, *pc)?)),
                 Term::Scalar {
@@ -511,23 +891,52 @@ impl State {
                 }
                 Term::Indexed {
                     pc,
-                    tag: tag @ (0x105 | 0x109 | 0x110),
+                    tag: tag @ (0x105 | 0x107 | 0x109 | 0x10b | 0x110 | 0x111 | 0x112 | 0x113),
                     base,
+                    stride,
                     indices,
-                    ..
                 } => {
-                    // 0x140066200 evaluates the index when pushing and rewrites the item with
-                    // raw = base + 4 * index in u32 arithmetic: 0x109 becomes the frame word
-                    // 0x108, 0x105 the script data word 0x104 and 0x110 the data word 0x106.
-                    let [index] = indices.as_slice() else {
-                        return Err(error(*pc, *tag, "array operand needs one index"));
+                    // 0x140066200 / CVNS 0x447420 rewrite array operands with base + stride * idx0
+                    // (+ 4 * idx1 for 2D tags 0x111/0x113). Data tags yield 0x104/0x106/0x107; frame
+                    // tags yield 0x108/0x10a/0x10b.
+                    let two_d = matches!(tag, 0x111 | 0x113);
+                    let raw = match indices.as_slice() {
+                        [first] if !two_d => {
+                            let idx = self.evaluate(first, depth + 1, env, stack.stack, journal)?;
+                            base.wrapping_add((idx as u32).wrapping_mul(u32::from(*stride)))
+                        }
+                        [first, second] if two_d => {
+                            let idx0 =
+                                self.evaluate(first, depth + 1, env, stack.stack, journal)?;
+                            let idx1 =
+                                self.evaluate(second, depth + 1, env, stack.stack, journal)?;
+                            base.wrapping_add((idx0 as u32).wrapping_mul(u32::from(*stride)))
+                                .wrapping_add((idx1 as u32).wrapping_mul(4))
+                        }
+                        _ => {
+                            return Err(error(
+                                *pc,
+                                *tag,
+                                if two_d {
+                                    "2D array operand needs two indices"
+                                } else {
+                                    "array operand needs one index"
+                                },
+                            ));
+                        }
                     };
-                    let index = self.evaluate(index, depth + 1, env, journal)?;
-                    let raw = base.wrapping_add((index as u32).wrapping_mul(4));
-                    stack.push(if *tag == 0x109 {
-                        Cell::Frame(env.offset(0x108, raw, *pc)?)
+                    let (is_frame, resolved_tag) = match tag {
+                        0x105 => (false, 0x104),
+                        0x110 => (false, 0x106),
+                        0x107 | 0x111 => (false, 0x107),
+                        0x109 => (true, 0x108),
+                        0x112 => (true, 0x10a),
+                        _ => (true, 0x10b),
+                    };
+                    stack.push(if is_frame {
+                        Cell::Frame(env.offset(resolved_tag, raw, *pc)?)
                     } else {
-                        Cell::Data(env.data_offset(raw, *pc, *tag)?)
+                        Cell::Data(env.data_offset(raw, *pc, resolved_tag)?)
                     });
                 }
                 Term::Nested {
@@ -535,7 +944,7 @@ impl State {
                     tag,
                     expression,
                 } if matches!(tag, 0x200 | 0x101 | 0x102) => {
-                    let value = self.evaluate(expression, depth + 1, env, journal)?;
+                    let value = self.evaluate(expression, depth + 1, env, stack.stack, journal)?;
                     let cell = match tag {
                         0x200 => Cell::Value(value),
                         0x101 if value >= 0 && (value as u32) < self.integer_limit => {
@@ -607,21 +1016,15 @@ impl State {
                 }
             }
         }
-        if stack.len() != 1 {
+        let Some(top) = stack.single() else {
             return Err(error(
                 expr.pc,
                 expr.kind,
                 "expression does not produce exactly one value",
             ));
-        }
-        let value = self.read(stack[0], env, expr.pc, expr.kind)?;
-        // The original integer evaluator writes its result to global integer 4096.
-        self.set_integer_journaled(4096, value, journal)
-            .map_err(|why| error(expr.pc, expr.kind, why))?;
-        self.set_result_journaled(Some(value as u32), journal);
-        journal.0.push(Undo::Condition(self.condition));
-        self.condition = Some(value != 0);
-        Ok(value)
+        };
+        let value = self.read(top, env, expr.pc, expr.kind)?;
+        self.finish_integer_eval(expr, value, journal)
     }
 
     pub fn evaluate_float_with_labels(
@@ -630,14 +1033,15 @@ impl State {
         labels: &[u32],
     ) -> Result<f32, DecodeError> {
         let mut journal = Journal::default();
+        let mut scratch = EvalScratch::default();
         let mut env = Env {
             labels,
             frame: None,
             data: None,
         };
-        let outcome = self.evaluate_float_in(expr, &mut env, &mut journal);
+        let outcome = self.evaluate_float_in(expr, &mut env, &mut scratch, &mut journal);
         if outcome.is_err() {
-            self.rollback(journal, None, None);
+            self.rollback(&mut journal, None, None);
         }
         outcome
     }
@@ -727,12 +1131,13 @@ impl State {
         &mut self,
         expr: &Expression,
         env: &mut Env,
+        scratch: &mut EvalScratch,
         journal: &mut Journal,
     ) -> Result<f32, DecodeError> {
         if expr.kind != 0x202 {
             return Err(error(expr.pc, expr.kind, "not a float expression"));
         }
-        let mut stack = Vec::new();
+        let mut stack = StackFrame::new(&mut scratch.float_stack);
         for term in &expr.terms {
             match term {
                 Term::Scalar {
@@ -761,7 +1166,8 @@ impl State {
                     tag,
                     expression,
                 } if matches!(tag, 0x200 | 0x101 | 0x102 | 0x12b) => {
-                    let value = self.evaluate(expression, 1, env, journal)?;
+                    let value =
+                        self.evaluate(expression, 1, env, &mut scratch.int_stack, journal)?;
                     let index = value as u32;
                     stack.push(match tag {
                         0x200 => FloatCell::Value(value as f32),
@@ -833,14 +1239,14 @@ impl State {
                 }
             }
         }
-        if stack.len() != 1 {
+        let Some(top) = stack.single() else {
             return Err(error(
                 expr.pc,
                 expr.kind,
                 "expression does not produce exactly one value",
             ));
-        }
-        let value = self.read_float(stack[0], env, expr.pc, expr.kind)?;
+        };
+        let value = self.read_float(top, env, expr.pc, expr.kind)?;
         self.set_result_journaled(Some(value.to_bits()), journal);
         journal.0.push(Undo::Condition(self.condition));
         self.condition = Some(value != 0.0);
@@ -848,7 +1254,7 @@ impl State {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum FloatCell {
     Value(f32),
     Integer(u32),
@@ -883,7 +1289,7 @@ fn float_binary(pc: usize, opcode: u16, left: f32, right: f32) -> Result<f32, De
     })
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum Cell {
     Value(i32),
     Literal(i32),
@@ -925,4 +1331,352 @@ pub(crate) fn binary_value(
         0x172 => i32::from(left != right),
         _ => return Err(error(pc, opcode, "unsupported integer operator")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bit_bank_fill_set_and_restore_preserve_values_and_counts() {
+        let mut bank = BitBank::default();
+        assert_eq!(bank.known_count, 0);
+        assert_eq!(bank.set(63, true), None);
+        assert_eq!(bank.set(64, false), None);
+        assert_eq!(bank.known_count, 2);
+
+        // Overlaps existing bit 63..=64 across two u64 word boundaries.
+        bank.fill(60, 70, true);
+        assert_eq!(bank.known_count, 70);
+        assert_eq!(bank.get(59), None);
+        assert_eq!(bank.get(60), Some(true));
+        assert_eq!(bank.get(64), Some(true));
+        assert_eq!(bank.get(129), Some(true));
+        assert_eq!(bank.get(130), None);
+
+        // Clearing inside an already-filled span leaves known count unchanged.
+        bank.fill(64, 10, false);
+        assert_eq!(bank.known_count, 70);
+        assert_eq!(bank.get(64), Some(false));
+        assert_eq!(bank.get(73), Some(false));
+        assert_eq!(bank.get(74), Some(true));
+
+        bank.restore(60, None);
+        bank.restore(64, Some(true));
+        assert_eq!(bank.known_count, 69);
+        assert_eq!(bank.get(60), None);
+        assert_eq!(bank.get(64), Some(true));
+        assert_eq!(bank.to_btree_map().len(), 69);
+    }
+
+    #[test]
+    fn word_bank_fill_and_rollback_preserve_counts_and_unknowns() {
+        let mut bank = WordBank::default();
+        assert_eq!(bank.set(5, 10), None);
+        bank.fill(3, 6, -7);
+        assert_eq!(bank.known_count, 6);
+        assert_eq!(bank.get(2), None);
+        assert_eq!(bank.get(5), Some(-7));
+        assert_eq!(bank.get(8), Some(-7));
+
+        bank.restore(3, None);
+        bank.restore(5, Some(10));
+        assert_eq!(bank.known_count, 5);
+        assert_eq!(bank.get(3), None);
+        assert_eq!(bank.get(5), Some(10));
+        assert_eq!(bank.to_btree_map().len(), 5);
+    }
+
+    #[test]
+    fn debug_preserves_logical_state_after_rollback() {
+        for initialized in [false, true] {
+            let mut state = State::default();
+            if initialized {
+                state.set_integer(0, -7).unwrap();
+                state.set_bit(0, false).unwrap();
+                state.fill_floats(0, 1, 0x7fc0_1234).unwrap();
+                state.set_string(0, b"").unwrap();
+            }
+            let before = format!("{state:?}");
+            let mut journal = Journal::default();
+            for value in [42, 99] {
+                for (integer, bit, float, string) in [(0, 0, 0, 0), (8191, 262143, 2047, 127)] {
+                    state
+                        .set_integer_journaled(integer, value, &mut journal)
+                        .unwrap();
+                    state.set_bit_journaled(bit, true, &mut journal).unwrap();
+                    state
+                        .set_float_journaled(float, value as u32, &mut journal)
+                        .unwrap();
+                    state
+                        .set_string_journaled(string, b"temporary", &mut journal)
+                        .unwrap();
+                }
+                assert_ne!(format!("{state:?}"), before);
+                state.rollback(&mut journal, None, None);
+                assert_eq!(format!("{state:?}"), before);
+            }
+        }
+    }
+
+    #[test]
+    fn scratch_stack_truncates_on_early_return_and_reuses_capacity() {
+        let scalar = |raw| Term::Scalar {
+            pc: 0,
+            tag: 0x100,
+            raw,
+        };
+        let operator = |opcode| Term::Operator { pc: 0, opcode };
+        let expression = |terms| Expression {
+            pc: 0,
+            kind: 0x200,
+            end: 0,
+            terms,
+        };
+        let nested = |expression| Term::Nested {
+            pc: 0,
+            tag: 0x200,
+            expression: Box::new(expression),
+        };
+        for kind in [0x200, 0x202] {
+            let mut state = State::default();
+            let mut scratch = EvalScratch::default();
+            let mut journal = Journal::default();
+            let mut env = Env {
+                labels: &[],
+                frame: None,
+                data: None,
+            };
+            let mut evaluate = |expr: &Expression, scratch: &mut EvalScratch| {
+                if kind == 0x200 {
+                    state.evaluate_in(expr, &mut env, scratch, &mut journal)
+                } else {
+                    state
+                        .evaluate_float_in(expr, &mut env, scratch, &mut journal)
+                        .map(|v| v as i32)
+                }
+            };
+            // Both the outer frame and nested integer frame retain an operand at failure.
+            let bad = Expression {
+                kind,
+                ..expression(vec![
+                    scalar(7),
+                    nested(expression(vec![
+                        scalar(9),
+                        scalar(1),
+                        scalar(0),
+                        operator(0x161),
+                    ])),
+                ])
+            };
+            assert_eq!(
+                evaluate(&bad, &mut scratch).unwrap_err().reason,
+                "invalid signed division"
+            );
+            assert!(scratch.int_stack.is_empty());
+            assert!(scratch.float_stack.is_empty());
+            let capacities = (scratch.int_stack.capacity(), scratch.float_stack.capacity());
+
+            let good = Expression {
+                kind,
+                ..expression(vec![
+                    scalar(3),
+                    nested(expression(vec![scalar(4)])),
+                    operator(0x163),
+                ])
+            };
+            assert_eq!(evaluate(&good, &mut scratch).unwrap(), 7);
+            assert!(scratch.int_stack.is_empty());
+            assert!(scratch.float_stack.is_empty());
+            assert_eq!(
+                (scratch.int_stack.capacity(), scratch.float_stack.capacity()),
+                capacities
+            );
+        }
+    }
+
+    #[test]
+    fn cvns_strided_arrays_and_frame_scalar_read_write() {
+        let scalar = |tag, raw| Term::Scalar { pc: 0, tag, raw };
+        let indexed = |tag, base, stride, indices| Term::Indexed {
+            pc: 0,
+            tag,
+            base,
+            stride,
+            indices,
+        };
+        let operator = |opcode| Term::Operator { pc: 0, opcode };
+        let expr = |terms| Expression {
+            pc: 0,
+            kind: 0x200,
+            end: 0,
+            terms,
+        };
+
+        let mut state = State::default();
+        let mut scratch = EvalScratch::default();
+        let mut journal = Journal::default();
+        let mut stack = ParameterStack::new(256);
+        stack.reserve(0, 128).unwrap();
+        let mut data = vec![0u8; 128];
+
+        let mut eval = |stack: &mut ParameterStack, data: &mut [u8], terms: Vec<Term>| {
+            let mut env = Env {
+                labels: &[],
+                frame: Some(Frame { stack, base: 16 }),
+                data: Some(data),
+            };
+            state
+                .evaluate_in(&expr(terms), &mut env, &mut scratch, &mut journal)
+                .unwrap()
+        };
+
+        // 0x10a frame scalar at base(16) + 8 = 24.
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![scalar(0x10a, 8), scalar(0x100, 111), operator(0x170)],
+            ),
+            111
+        );
+        assert_eq!(eval(&mut stack, &mut data, vec![scalar(0x10a, 8)]), 111);
+        assert_eq!(stack.read_u32_at(24).unwrap(), 111);
+
+        // 0x112 frame 1D array (stride 4) at base(16) + 12 + 4 * 2 = 36 (= 0x10a raw 20).
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![
+                    indexed(0x112, 12, 4, vec![expr(vec![scalar(0x100, 2)])]),
+                    scalar(0x100, 222),
+                    operator(0x170),
+                ],
+            ),
+            222
+        );
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![indexed(0x112, 12, 4, vec![expr(vec![scalar(0x100, 2)])])],
+            ),
+            222
+        );
+        assert_eq!(eval(&mut stack, &mut data, vec![scalar(0x10a, 20)]), 222);
+        assert_eq!(stack.read_u32_at(36).unwrap(), 222);
+
+        // 0x10b frame 1D array with non-4 stride: base(16) + 24 + 12 * 3 = 76.
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![
+                    indexed(0x10b, 24, 12, vec![expr(vec![scalar(0x100, 3)])]),
+                    scalar(0x100, (-333i32) as u32),
+                    operator(0x170),
+                ],
+            ),
+            -333
+        );
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![indexed(0x10b, 24, 12, vec![expr(vec![scalar(0x100, 3)])])],
+            ),
+            -333
+        );
+        assert_eq!(stack.read_u32_at(76).unwrap(), (-333i32) as u32);
+
+        // 0x113 frame 2D array with non-4 stride: base(16) + 24 + 12 * 2 + 4 * 1 = 68.
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![
+                    indexed(
+                        0x113,
+                        24,
+                        12,
+                        vec![expr(vec![scalar(0x100, 2)]), expr(vec![scalar(0x100, 1)])],
+                    ),
+                    scalar(0x100, 444),
+                    operator(0x170),
+                ],
+            ),
+            444
+        );
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![indexed(
+                    0x113,
+                    24,
+                    12,
+                    vec![expr(vec![scalar(0x100, 2)]), expr(vec![scalar(0x100, 1)])],
+                )],
+            ),
+            444
+        );
+        assert_eq!(stack.read_u32_at(68).unwrap(), 444);
+
+        // 0x107 data 1D array with non-4 stride: 8 + 20 * 2 = 48.
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![
+                    indexed(0x107, 8, 20, vec![expr(vec![scalar(0x100, 2)])]),
+                    scalar(0x100, (-555i32) as u32),
+                    operator(0x170),
+                ],
+            ),
+            -555
+        );
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![indexed(0x107, 8, 20, vec![expr(vec![scalar(0x100, 2)])])],
+            ),
+            -555
+        );
+        assert_eq!(i32::from_le_bytes(data[48..52].try_into().unwrap()), -555);
+
+        // 0x111 data 2D array with non-4 stride: 8 + 20 * 1 + 4 * 3 = 40.
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![
+                    indexed(
+                        0x111,
+                        8,
+                        20,
+                        vec![expr(vec![scalar(0x100, 1)]), expr(vec![scalar(0x100, 3)])],
+                    ),
+                    scalar(0x100, 666),
+                    operator(0x170),
+                ],
+            ),
+            666
+        );
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![indexed(
+                    0x111,
+                    8,
+                    20,
+                    vec![expr(vec![scalar(0x100, 1)]), expr(vec![scalar(0x100, 3)])],
+                )],
+            ),
+            666
+        );
+        assert_eq!(i32::from_le_bytes(data[40..44].try_into().unwrap()), 666);
+    }
 }

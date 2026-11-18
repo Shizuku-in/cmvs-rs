@@ -8,13 +8,10 @@ use crate::{
     target::{Target, cap},
 };
 use cmvs_core::{
-    audio::RecordingAudio,
-    digest::Sha256,
-    input::{CodeInput, KeyBindings},
-    platform::RecordingBackend,
-    profile::{GateError, GateErrorKind},
-    ps3::Script,
-    runner::{SnapshotPolicy, Startup, StartupEvent},
+    format::digest::Sha256, host::audio::RecordingAudio, host::input::CodeInput,
+    host::input::KeyBindings, host::platform::RecordingBackend, profile::GateErrorKind,
+    runtime::Runtime, runtime::RuntimeEvent, runtime::RuntimeOptions, runtime::SaveStorage,
+    runtime::SnapshotPolicy,
 };
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -119,19 +116,21 @@ fn gate_kind(kind: GateErrorKind) -> &'static str {
         GateErrorKind::Absent => "absent",
         GateErrorKind::NoOp => "noop",
         GateErrorKind::Unreviewed => "unreviewed",
+        GateErrorKind::Unmapped => "unmapped",
         GateErrorKind::Presumed => "presumed",
         GateErrorKind::GameIdMismatch { .. } => "game-id-mismatch",
     }
 }
 
 pub struct Session<'a> {
-    run: Startup<'a>,
+    run: Runtime,
     backend: RecordingBackend,
     render_frames: bool,
-    font: Option<cmvs_desktop::font::FontRenderer>,
+    font: Option<cmvs_font::font::FontRenderer>,
     codes: CodeInput,
     bindings: KeyBindings,
     device: Device,
+    is_cvns: bool,
     frame_ms: u32,
     max_steps: u64,
     route_skip: bool,
@@ -185,41 +184,48 @@ impl<'a> Session<'a> {
     /// `user` must be a new, empty directory; the engine writes system and slot saves there.
     pub fn start(
         target: &'a Target,
-        script: &'a Script,
+        script: impl cmvs_core::vm::machine::IntoSharedScript,
         user: &Path,
         options: &Options,
-        font: Option<&cmvs_desktop::font::FontRenderer>,
+        font: Option<&cmvs_font::font::FontRenderer>,
     ) -> Result<Self, String> {
         if options.render_frames && font.is_none() {
             return Err("software frame rendering requires a font".into());
         }
         let game = target.game.as_ref().ok_or("no engine profile selected")?;
-        let mut run = Startup::new(script, &target.root, game, 0).map_err(|e| e.to_string())?;
-        run.set_mgv_factory(Box::new(cmvs_desktop::video::TheoraFactory));
-        run.set_block_presumed(options.block_presumed);
-        run.set_block_unreviewed(options.block_unreviewed);
-        run.set_user_data_directory(user)
-            .map_err(|e| e.to_string())?;
-        // Data-driven: only records that verify the policy enable it.
-        if target.has(cap::AUTO_RESUME_POLICY) {
-            run.set_skip_auto_resume(true)?;
-        }
-        if !options.capture_snapshots || !target.has(cap::SNAPSHOT_LAYOUT) {
-            // Capability, not a game branch: the live-state effect still applies.
-            run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
-        }
+        let snapshot_policy = if options.capture_snapshots && target.has(cap::SNAPSHOT_LAYOUT) {
+            SnapshotPolicy::Capture
+        } else {
+            SnapshotPolicy::ContinueWithoutImage
+        };
+        let mut run = Runtime::with_options(
+            script,
+            &target.root,
+            game,
+            RuntimeOptions {
+                saves: SaveStorage::UserDirectory(user.to_owned()),
+                snapshot_policy,
+                block_presumed: options.block_presumed,
+                block_unreviewed: options.block_unreviewed,
+                skip_auto_resume: target.has(cap::AUTO_RESUME_POLICY),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        run.set_mgv_factory(Box::new(cmvs_video::TheoraFactory));
         run.set_record_text(true);
         if let Some(font) = font {
             run.set_glyph_metrics(font.metrics());
             if !font.has_face(run.settings().font_face()) {
-                run.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)
+                run.set_font_face(cmvs_core::host::settings::DEFAULT_FONT_FACE)
                     .map_err(|e| e.to_string())?;
             }
         }
         run.set_random_seed(options.seed);
         let mut backend = RecordingBackend::default();
         backend.set_screen_size(
-            cmvs_core::viewport::ScreenSize::new(run.screen_size()).map_err(|e| e.to_string())?,
+            cmvs_core::render::viewport::ScreenSize::new(run.screen_size())
+                .map_err(|e| e.to_string())?,
         );
         Ok(Self {
             run,
@@ -233,6 +239,7 @@ impl<'a> Session<'a> {
             codes: CodeInput::default(),
             bindings: target.key_bindings.clone().unwrap_or_default(),
             device: options.device,
+            is_cvns: target.is_cvns(),
             frame_ms: options.frame_ms,
             max_steps: options.max_steps,
             route_skip: options.route_skip,
@@ -258,10 +265,11 @@ impl<'a> Session<'a> {
         })
         .map(|mut session: Self| {
             session.backend.answer_font_dialog(None);
+            session.backend.set_default_message_answer(Some(false));
             session
         })
     }
-    pub fn startup(&self) -> &Startup<'a> {
+    pub fn startup(&self) -> &Runtime {
         &self.run
     }
     /// Starts recording executed addresses; costs one set insertion per VM step.
@@ -308,6 +316,16 @@ impl<'a> Session<'a> {
     pub fn device(&self) -> Device {
         self.device
     }
+    pub fn is_cvns(&self) -> bool {
+        self.is_cvns
+    }
+    pub fn system_save_name(&self) -> &'static str {
+        if self.is_cvns {
+            "save000.dat"
+        } else {
+            "system.dat"
+        }
+    }
     /// Writes a gameplay save to `slot` as the script command would; false when the engine
     /// has not built a snapshot yet.
     pub fn save_slot(&mut self, slot: u16) -> Result<bool, String> {
@@ -340,17 +358,20 @@ impl<'a> Session<'a> {
     /// Live resource counts that a long run should not grow without bound.
     pub fn resource_counts(&self) -> [usize; 5] {
         let run = &self.run;
-        let objects = run.scene().objects().len();
-        let channels = (0..32)
+        let objects = run.scene().cvns().map_or_else(
+            || run.scene().objects().len(),
+            |cvns| cvns.sprites.iter().flatten().count(),
+        );
+        let channels = (0..run.audio().se_channel_count())
             .filter(|&i| run.audio().channel(i).is_some())
             .count();
-        let groups = (0..cmvs_core::buttons::BUTTON_GROUPS)
+        let groups = (0..cmvs_core::runtime::BUTTON_GROUPS)
             .filter(|&g| run.buttons().group(g).is_some())
             .count()
-            + (cmvs_core::buttons::BUTTON_GROUPS..crate::controls::GROUPS)
+            + (cmvs_core::runtime::BUTTON_GROUPS..crate::controls::GROUPS)
                 .filter(|&g| {
                     run.buttons()
-                        .list_group(g - cmvs_core::buttons::BUTTON_GROUPS)
+                        .list_group(g - cmvs_core::runtime::BUTTON_GROUPS)
                         .is_some()
                 })
                 .count();
@@ -362,12 +383,12 @@ impl<'a> Session<'a> {
     pub fn act(&mut self, action: Action) -> Result<(), String> {
         if let (Device::Keyboard, Action::Press { group, button }) = (self.device, action) {
             let present =
-                crate::controls::group(&self.run, group).is_some_and(|g| button < g.buttons.len());
+                crate::controls::group(&self.run, group).is_some_and(|g| button < g.len());
             if !present {
                 return Err(format!("button {group}:{button} is not present"));
             }
             if group
-                .checked_sub(cmvs_core::buttons::BUTTON_GROUPS)
+                .checked_sub(cmvs_core::runtime::BUTTON_GROUPS)
                 .and_then(|slot| self.run.buttons().list_group(slot))
                 .is_some_and(|list| list.disable_navigation)
             {
@@ -380,9 +401,11 @@ impl<'a> Session<'a> {
             self.navigation = Some((group, button, 0));
             return Ok(());
         }
-        let frames = self.device.frames(action, &self.bindings, |g, b| {
-            crate::controls::group(&self.run, g)?.point(b)
-        })?;
+        let frames =
+            self.device
+                .frames_with_cvns(action, &self.bindings, self.is_cvns, |g, b| {
+                    crate::controls::group(&self.run, g)?.point(b)
+                })?;
         self.event(
             "action",
             Json::obj([("action", Json::from(format!("{action:?}")))]),
@@ -404,7 +427,7 @@ impl<'a> Session<'a> {
             let event = match self.run.tick(&mut self.backend) {
                 Ok(event) => event,
                 Err(error) => {
-                    let stop = match error.downcast_ref::<GateError>() {
+                    let stop = match error.as_gate() {
                         Some(g) => Stop::Blocked(Blocked {
                             command: 0x2000 + g.command,
                             script: g.script.clone(),
@@ -428,8 +451,8 @@ impl<'a> Session<'a> {
                         ("command", Json::hex(0x2000 + u64::from(command))),
                         (
                             "semantics",
-                            cmvs_core::dispatch::semantics_name(
-                                self.run.gate().selection().profile,
+                            cmvs_core::vm::dispatch::semantics_name(
+                                self.run.gate().profile(),
                                 command,
                             )
                             .into(),
@@ -438,14 +461,14 @@ impl<'a> Session<'a> {
                 );
             }
             match event {
-                StartupEvent::Yield => break,
-                StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
-                StartupEvent::MainEnteredWithoutSnapshot => {
+                RuntimeEvent::Yield => break,
+                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
+                RuntimeEvent::MainEnteredWithoutSnapshot => {
                     self.event("main-without-snapshot", Json::Null);
                 }
-                StartupEvent::Quit => return Err(self.stop(Stop::Quit)),
+                RuntimeEvent::Quit => return Err(self.stop(Stop::Quit)),
                 // The event already carries the full 0x2000-based opcode.
-                StartupEvent::Unhandled { pc, command } => {
+                RuntimeEvent::Unhandled { pc, command } => {
                     let blocked = Blocked {
                         command,
                         script: self.run.machine().current_name().escape_ascii().to_string(),
@@ -466,7 +489,7 @@ impl<'a> Session<'a> {
                 .map_err(|e| Stop::Error(e.to_string()))?;
         }
         let advanced = if self.render_frames {
-            self.run.advance_decoded_frame(self.frame_ms)
+            self.run.advance_playback(self.frame_ms)
         } else {
             self.run.advance_frame(self.frame_ms)
         };
@@ -508,10 +531,10 @@ impl<'a> Session<'a> {
         Ok(observation)
     }
 
-    fn completed_frame(&mut self) -> Result<cmvs_core::raster::RgbaImage, String> {
+    fn completed_frame(&mut self) -> Result<cmvs_core::render::raster::RgbaImage, String> {
         if let Some(movie) = self.run.movie_frame() {
-            use cmvs_core::platform::PlatformBackend;
-            return cmvs_desktop::movie_canvas(
+            use cmvs_core::host::platform::PlatformBackend;
+            return cmvs_core::render::raster::movie_canvas(
                 movie,
                 self.run.screen_size(),
                 self.backend.render_mode().map_err(|e| e.to_string())? == 1,
@@ -538,7 +561,7 @@ impl<'a> Session<'a> {
                 "keyboard navigation lost button group {group}"
             ))));
         };
-        let (current, count) = (buttons.current, buttons.buttons.len());
+        let (current, count) = (buttons.current, buttons.len());
         let action = if current == Some(button) {
             self.navigation = None;
             crate::device::engine_action::DECIDE
@@ -604,12 +627,12 @@ impl<'a> Session<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::{platform::PlatformBackend, runner::load_start};
+    use cmvs_core::{host::platform::PlatformBackend, runtime::load_start};
 
     #[test]
     #[ignore = "requires CMVS_TEST_FONT; uses only synthetic scripts and archives"]
     fn yielded_frames_enable_device_capture_on_the_next_vm_slice() {
-        let font = cmvs_desktop::font::FontRenderer::read(
+        let font = cmvs_font::font::FontRenderer::read(
             Path::new(&std::env::var("CMVS_TEST_FONT").expect("set CMVS_TEST_FONT")),
             0,
         )

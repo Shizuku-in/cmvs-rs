@@ -1,4 +1,4 @@
-//! Identity-bound type-2 falling billboards; see games/aoitori/vm-semantics.md and, for the
+//! Identity-bound type-2 falling billboards; see games/aoitori/README.md and, for the
 //! x87 arithmetic, games/memoria/README.md.
 use crate::{
     audio::AudioBackend,
@@ -174,12 +174,12 @@ impl SceneHost {
 
     pub(crate) fn create_falling_effect(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
         x87_arithmetic: bool,
         backend: Option<&mut dyn AudioBackend>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         let name_id = call.argument(8, "effect image")?;
         let parameters = [
@@ -299,7 +299,7 @@ mod tests {
         };
         struct Images;
         impl ImageSource for Images {
-            fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+            fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
                 Ok(Some(b"NONE".to_vec()))
             }
         }

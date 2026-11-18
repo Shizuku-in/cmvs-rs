@@ -339,10 +339,7 @@ impl SceneHost {
         Ok(vertices.as_chunks::<3>().0.to_vec())
     }
 
-    pub(crate) fn handle_collision_mesh(
-        &mut self,
-        call: &mut Call<'_, '_>,
-    ) -> Result<(), DecodeError> {
+    pub(crate) fn handle_collision_mesh(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let raw = call.argument(4, "object slot")?;
         let point = if call.command == 0x332 {
             Some([
@@ -379,11 +376,11 @@ impl SceneHost {
 
     pub(crate) fn create_collision_effect(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
         backend: Option<&mut dyn AudioBackend>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         let name_id = call.argument(8, "particle image")?;
         let mode = call.argument(12, "particle mode")?;
@@ -436,7 +433,7 @@ impl SceneHost {
             count,
             pool,
             &mut candidate_random,
-            self.collision_x87_arithmetic,
+            self.config.collision_x87_arithmetic,
         );
         effect.template = template;
         if fading {

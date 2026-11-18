@@ -1,18 +1,19 @@
-//! Movie sources, shared host and scene-player persistence.
+//! Full-screen and scene-bound movie playback.
 //!
-//! Full-screen CMV and MGV player commands/timing live in `cmv_player` and `mgv_player`.
-//! Scene segment playback lives in `playback`.
-//!
-//! Engine +4480 holds three scene players. 0x2308 creates a stopped CMV6/CMV9 player and
-//! initializes its bound scene object; 0x230a destroys the player, retaining that image.
-//! 0x2309 starts default-mode segment playback and 0x231a queries whether a player is
-//! active; 0x230b/0x230c resume/pause while retaining the frame. Inspected legacy
-//! variants additionally query segments/frames, seek, apply queued segments, and
-//! select mode 0/10 or a stop frame. NATSUUTA alone adds clock-driven mode 15.
-use crate::filesystem::File;
+//! [`MovieHost`] combines container access, frame timing, and scene-player state.
+//! [`MovieSource`] supplies files and decoded CMV frames; MGV playback requires a
+//! [`DecoderFactory`](crate::mgv::DecoderFactory). Audio output is provided separately
+//! through [`crate::audio::AudioBackend`].
+
+// Full-screen players use `cmv_player`/`mgv_player`; scene segments use `playback`.
+// Engine +4480 holds three scene players. 0x2308 creates a stopped CMV6/CMV9 player
+// and initializes its scene image; 0x230a destroys the player but retains the image.
+// 0x2309 starts default-mode segments; 0x231a queries activity; 0x230b/0x230c resume/pause.
+// Reviewed legacy variants add segment/frame queries, seek, queued segments, modes 0/10,
+// and a stop frame. NATSUUTA additionally supports clock-driven mode 15.
+use crate::filesystem::{File, HostFs, resolve_under_with_fs};
 use crate::{
     audio::MovieAudioClock, bytecode::DecodeError, cmv::CmvIndex, dispatch::Call, evaluate::error,
-    machine::Machine, platform::resolve_under,
 };
 use std::{error::Error, io, path::Path, sync::Arc};
 
@@ -28,22 +29,41 @@ pub use playback::{MOVIE_SEGMENTS, MoviePlayback, MovieSegment};
 
 /// The game-relative path the soundtrack request names and the parsed container.
 pub type OpenedMovie = (Vec<u8>, CmvIndex);
+pub type OpenedMovieStream = (OpenedMovie, Option<Box<dyn crate::mgv::ReadSeek>>);
 pub type OpenedMgv = (Vec<u8>, crate::mgv::MgvIndex, Box<dyn crate::mgv::ReadSeek>);
 type OpenedMovieFile = (Vec<u8>, File);
 
+struct CmvReader(Box<dyn crate::mgv::ReadSeek>);
+impl std::fmt::Debug for CmvReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CmvReader(..)")
+    }
+}
+
 /// Opens movies by the name scripts pass to 0x20c0.
 pub trait MovieSource {
-    fn open_mgv(&mut self, _name: &[u8]) -> Result<Option<OpenedMgv>, Box<dyn Error>> {
+    fn open_mgv(
+        &mut self,
+        _name: &[u8],
+    ) -> Result<Option<OpenedMgv>, Box<dyn Error + Send + Sync>> {
         Err("MGV source unavailable".into())
     }
     /// Ok(None) when the file does not exist (0x1400379f0 then fails quietly).
-    fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error>>;
+    fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error + Send + Sync>>;
+    /// Opens a CMV container and optionally retains its reader handle across frames so
+    /// filesystem-backed sources do not re-resolve and re-open the file per video tick.
+    fn open_stream(
+        &mut self,
+        name: &[u8],
+    ) -> Result<Option<OpenedMovieStream>, Box<dyn Error + Send + Sync>> {
+        Ok(self.open(name)?.map(|opened| (opened, None)))
+    }
     fn frame(
         &mut self,
         _path: &[u8],
         _index: &CmvIndex,
         _frame: u32,
-    ) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
+    ) -> Result<crate::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
         Err("movie frame source unavailable".into())
     }
 }
@@ -52,14 +72,32 @@ pub trait MovieSource {
 pub struct DirectoryMovies<'a> {
     pub root: &'a Path,
     pub directory: Option<&'a [u8]>,
+    fs: &'a dyn HostFs,
+}
+
+impl<'a> DirectoryMovies<'a> {
+    /// Bind a movie directory using `fs`.
+    pub fn with_fs(root: &'a Path, directory: Option<&'a [u8]>, fs: &'a dyn HostFs) -> Self {
+        Self {
+            root,
+            directory,
+            fs,
+        }
+    }
+
+    /// Bind a movie directory using [`StdFs`](crate::filesystem::StdFs).
+    #[cfg(feature = "std-fs")]
+    pub fn new(root: &'a Path, directory: Option<&'a [u8]>) -> Self {
+        Self::with_fs(root, directory, &crate::filesystem::StdFs)
+    }
 }
 
 impl MovieSource for DirectoryMovies<'_> {
-    fn open_mgv(&mut self, name: &[u8]) -> Result<Option<OpenedMgv>, Box<dyn Error>> {
+    fn open_mgv(&mut self, name: &[u8]) -> Result<Option<OpenedMgv>, Box<dyn Error + Send + Sync>> {
         let Some((path, mut file)) = self.open_file(name)? else {
             return Ok(None);
         };
-        let index = crate::mgv::MgvIndex::read(&mut file)?;
+        let index = crate::mgv::MgvIndex::read_io(&mut file)?;
         Ok(Some((path, index, Box::new(file))))
     }
     fn frame(
@@ -67,34 +105,43 @@ impl MovieSource for DirectoryMovies<'_> {
         path: &[u8],
         index: &CmvIndex,
         frame: u32,
-    ) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
-        index.decode_frame(&mut File::open(resolve_under(self.root, path)?)?, frame)
+    ) -> Result<crate::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
+        let resolved = resolve_under_with_fs(self.fs, self.root, path)?;
+        index.decode_frame(&mut self.fs.open_read(&resolved)?, frame)
     }
-    fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error>> {
+    fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error + Send + Sync>> {
         let Some((path, mut file)) = self.open_file(name)? else {
             return Ok(None);
         };
-        Ok(Some((path, CmvIndex::read(&mut file)?)))
+        Ok(Some((path, CmvIndex::read_io(&mut file)?)))
+    }
+    fn open_stream(
+        &mut self,
+        name: &[u8],
+    ) -> Result<Option<OpenedMovieStream>, Box<dyn Error + Send + Sync>> {
+        let Some((path, mut file)) = self.open_file(name)? else {
+            return Ok(None);
+        };
+        let index = CmvIndex::read_io(&mut file)?;
+        Ok(Some(((path, index), Some(Box::new(file)))))
     }
 }
 impl DirectoryMovies<'_> {
-    fn open_file(&self, name: &[u8]) -> Result<Option<OpenedMovieFile>, Box<dyn Error>> {
+    fn open_file(
+        &self,
+        name: &[u8],
+    ) -> Result<Option<OpenedMovieFile>, Box<dyn Error + Send + Sync>> {
         let directory = self
             .directory
             .ok_or("movie directory 0x2015 was not registered")?;
         let mut relative = directory.to_vec();
         relative.extend_from_slice(name);
-        let path = match resolve_under(self.root, &relative) {
+        let path = match resolve_under_with_fs(self.fs, self.root, &relative) {
             Ok(path) => path,
-            Err(e)
-                if e.downcast_ref::<io::Error>()
-                    .is_some_and(|e| e.kind() == io::ErrorKind::NotFound) =>
-            {
-                return Ok(None);
-            }
-            Err(e) => return Err(e),
+            Err(e) if e.is_not_found() => return Ok(None),
+            Err(e) => return Err(e.into()),
         };
-        let file = match File::open(path) {
+        let file = match self.fs.open_read(&path) {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
@@ -151,7 +198,7 @@ impl SceneMovieIndex {
         data: &[u8],
         frame: u32,
         base: Option<&crate::raster::RgbaImage>,
-    ) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
+    ) -> Result<crate::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
         match self {
             Self::Cmv6(index) | Self::Cmv8(index) => {
                 index.decode_frame(&mut io::Cursor::new(data), frame)
@@ -213,7 +260,7 @@ impl SceneMovie {
         &self,
         prefetch: Option<&mut prefetch::ScenePrefetch>,
         frame: u32,
-    ) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
+    ) -> Result<crate::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
         if let Some(result) = prefetch.and_then(|p| p.take(self.id, frame)) {
             return result;
         }
@@ -221,12 +268,16 @@ impl SceneMovie {
     }
     /// Asks the worker for the frame playback most likely shows next.
     fn prefetch_next(&self, prefetch: Option<&mut prefetch::ScenePrefetch>) {
-        if let Some(prefetch) = prefetch
-            && let Some(next) = self
-                .playback
-                .predicted_next(self.frame, self.index.max_sequence())
+        let Some(prefetch) = prefetch else {
+            return;
+        };
+        if let Some(next) = self
+            .playback
+            .predicted_next(self.frame, self.index.max_sequence())
         {
             prefetch.request(self.id, next, &self.index, &self.data, &self.base);
+        } else {
+            prefetch.cancel(self.id);
         }
     }
 }
@@ -234,7 +285,7 @@ impl SceneMovie {
 /// 0x1400390b0's container setup, shared by 0x2308 and the loader.
 fn open_scene(
     data: &[u8],
-) -> Result<(SceneMovieIndex, Option<crate::raster::RgbaImage>), Box<dyn Error>> {
+) -> Result<(SceneMovieIndex, Option<crate::raster::RgbaImage>), Box<dyn Error + Send + Sync>> {
     if matches!(data.get(..4), Some(b"CMV6" | b"CMV8")) {
         let index = CmvIndex::read_scene(&mut io::Cursor::new(data))?;
         // 0x140039c90 loads a nonempty final audio entry when +40 != 0;
@@ -272,6 +323,8 @@ pub struct MovieHost {
     /// The constructor (0x140014fc2..0x140014fd0) stores null in all three pointers.
     slots: [Option<SceneMovie>; MOVIE_SLOTS],
     player: Option<Movie>,
+    cmv_reader: Option<CmvReader>,
+    player_modal: bool,
     mgv_player: Option<MgvMovie>,
     mgv_factory: Option<Box<dyn crate::mgv::DecoderFactory>>,
     decode_frames: bool,
@@ -286,7 +339,8 @@ impl MovieHost {
     /// A host for the selected build: only NATSUUTA's clock-driven mode 15 is inspected.
     pub(crate) fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
-            clock_mode: profile.is_inspected_20100314(),
+            clock_mode: profile.inspected_build()
+                == Some(crate::profile::InspectedBuild::Cmvs20100314),
             ..Self::default()
         }
     }
@@ -311,7 +365,7 @@ impl MovieHost {
         objects: &mut std::collections::BTreeMap<u8, crate::scene::SceneObject>,
         source: &mut dyn crate::resources::ResourceSource,
         layout: crate::snapshot::SnapshotLayout,
-    ) -> Result<[Option<SceneMovie>; MOVIE_SLOTS], Box<dyn Error>> {
+    ) -> Result<[Option<SceneMovie>; MOVIE_SLOTS], Box<dyn Error + Send + Sync>> {
         if layout != crate::snapshot::SnapshotLayout::TextV1SceneV1 {
             return self.load_scene_players(records, objects, source);
         }
@@ -343,6 +397,10 @@ impl MovieHost {
     pub fn has_player(&self) -> bool {
         self.player.is_some() || self.mgv_player.is_some()
     }
+    /// Whether CVNS modal `0x20c0` movie playback is currently holding the VM.
+    pub fn has_cvns_modal_player(&self) -> bool {
+        self.player.is_some() && self.player_modal
+    }
     pub fn player_image(&self) -> Option<&crate::raster::RgbaImage> {
         self.mgv_player
             .as_ref()
@@ -359,17 +417,17 @@ impl MovieHost {
         &mut self,
         delta_ms: u32,
         source: &mut dyn MovieSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.advance_with_clock(delta_ms, None, source)
     }
-    /// Real audio time is absolute and never supplemented by wall time. Ended releases
-    /// the player, including when audio duration differs from the container's frame limit.
+    /// An available soundtrack clock supplies absolute time and signals the end of playback.
+    /// Silent CVNS movies use the elapsed frame time.
     pub fn advance_with_clock(
         &mut self,
         delta_ms: u32,
         clock: Option<MovieAudioClock>,
         source: &mut dyn MovieSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.advance_mgv(delta_ms, clock)?;
         self.advance_cmv_with_clock(delta_ms, clock, source)
     }
@@ -388,25 +446,12 @@ impl MovieHost {
     /// committing so an I/O/format error retains the pending command and old objects.
     /// 0x230e additionally consumes SP-24 as the load mode and returns 0x4018.
     /// Archive modes 2/3 are supported; loose-file modes 0/1 stay explicit barriers.
-    pub fn try_create_scene(
-        &mut self,
-        vm: &mut Machine<'_>,
-        scene: &mut crate::scene::SceneHost,
-        source: &mut dyn crate::resources::ResourceSource,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command @ (0x308 | 0x30e))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_create_scene(&mut Call::new(vm, pc, command), scene, source)?;
-        Ok(true)
-    }
-
     pub(crate) fn handle_create_scene(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut crate::scene::SceneHost,
         source: &mut dyn crate::resources::ResourceSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
         let op = call.command + 0x2000;
         let fail = |why| error(pc, op, why);
@@ -466,6 +511,11 @@ impl MovieHost {
             0x4014
         })?;
         scene.replace_movie_object(object_slot, object);
+        if let Some(old) = &self.slots[slot as usize]
+            && let Some(prefetch) = &mut self.prefetch
+        {
+            prefetch.cancel(old.id);
+        }
         self.slots[slot as usize] = Some(SceneMovie::new(
             object_slot,
             name,
@@ -478,24 +528,7 @@ impl MovieHost {
         Ok(())
     }
 
-    /// 0x230a / 0x14007f390: SP-4 slot compared unsigned against 2; destroys and clears the
-    /// slot's player if present and returns 0x4004. 0x231a / 0x14007f610 checks the same
-    /// slot and sets system result 0 to whether 0x140038590 reads a nonzero +68 active flag,
-    /// or 0 for an empty slot; returns 0x4004. A completed segment clears active while
-    /// setting paused, so it reports 0. Out-of-range slots only set +12056 bit 0x1000000 in
-    /// the original, which is not modeled.
-    /// 0x230b / 0x14007f420 resumes (0x140038500), resetting the clock and fractional
-    /// time only when active. 0x230c / 0x14007f470 pauses (0x1400384f0). Both preserve
-    /// active/frame/segments and system results; empty slots are no-ops.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x30a..=0x30c | 0x31a | 0x31e))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
-
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let slot = call.argument(4, "player slot")? as usize;
@@ -508,7 +541,11 @@ impl MovieHost {
         }
         call.complete(0x4004)?;
         if command == 0x30a {
-            self.slots[slot] = None;
+            if let Some(old) = self.slots[slot].take()
+                && let Some(prefetch) = &mut self.prefetch
+            {
+                prefetch.cancel(old.id);
+            }
         } else if matches!(command, 0x30b | 0x30c) {
             if let Some(movie) = &mut self.slots[slot] {
                 if command == 0x30b {
@@ -519,6 +556,9 @@ impl MovieHost {
                     movie.playback.paused = false;
                 } else {
                     movie.playback.paused = true;
+                    if let Some(prefetch) = &mut self.prefetch {
+                        prefetch.cancel(movie.id);
+                    }
                 }
             }
         } else if command == 0x31e {
@@ -666,7 +706,7 @@ impl MovieHost {
         records: &[(u16, &[u8])],
         objects: &mut std::collections::BTreeMap<u8, crate::scene::SceneObject>,
         source: &mut dyn crate::resources::ResourceSource,
-    ) -> Result<[Option<SceneMovie>; MOVIE_SLOTS], Box<dyn Error>> {
+    ) -> Result<[Option<SceneMovie>; MOVIE_SLOTS], Box<dyn Error + Send + Sync>> {
         let mut players: [Option<SceneMovie>; MOVIE_SLOTS] = Default::default();
         for &(slot, body) in records {
             let record = SceneRecord::decode(slot, body, self.scene_clock, self.clock_mode)?;
@@ -716,6 +756,8 @@ impl MovieHost {
     pub(crate) fn restore(&mut self, players: [Option<SceneMovie>; MOVIE_SLOTS]) -> bool {
         let had_player = self.has_player();
         self.player = None;
+        self.cmv_reader = None;
+        self.player_modal = false;
         self.mgv_player = None;
         self.slots = players;
         had_player

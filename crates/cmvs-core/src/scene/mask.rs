@@ -79,7 +79,7 @@ impl MaskTransition {
         record: &[u8],
         objects: &std::collections::BTreeMap<u8, crate::scene::SceneObject>,
         images: &mut dyn ImageSource,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let word = |at: usize| -> Result<u32, &'static str> {
             Ok(u32::from_le_bytes(
                 record
@@ -209,35 +209,11 @@ impl SceneHost {
         }
     }
 
-    /// 0x222a / 0x14007ae40 and 0x2234 / 0x14007b370: SP-4 mask name, SP-8 object slot,
-    /// SP-12 duration, SP-16 edge, SP-20 mode. 0x222a detaches the previous transition's
-    /// shader (0x140051140) and frees it without finishing (a Cut object survives); 0x2234
-    /// only frees it, so an old target other than the new one would stay shaded, which is
-    /// rejected here, as is a second transition on an object the other channel shades. The
-    /// shader path always succeeds: system result 0 = 1, returns 0x4014. 0x222d / 0x14007b270
-    /// and 0x2237 / 0x14007b500 finish the transition and return 0x4000. The slot is not
-    /// bounds-checked and the shader setup dereferences the object, so missing objects are
-    /// errors, as are mask images the 0x2030 lookup cannot decode.
-    pub fn try_handle_mask(
-        &mut self,
-        vm: &mut Machine<'_>,
-        images: &mut dyn ImageSource,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(channel(command), Some((_, 0 | 3))) {
-            return Ok(false);
-        }
-        self.handle_mask(&mut Call::new(vm, pc, command), images)?;
-        Ok(true)
-    }
-
     pub(crate) fn handle_mask(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         images: &mut dyn ImageSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (pc, command) = (call.pc, call.command);
         let (channel, offset) = channel(command).expect("registered mask command");
         if offset == 3 {
@@ -245,7 +221,7 @@ impl SceneHost {
             self.finish_mask(channel);
             return Ok(());
         }
-        let op = command + 0x2000;
+        let op = call.opcode();
         let fail = |why| error(pc, op, why);
         let name = call.argument(4, "mask name")?;
         let slot = call.argument(8, "object slot")?;
@@ -297,7 +273,7 @@ impl SceneHost {
     /// SP-4 zero).
     pub fn try_wait_mask(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Option<Step>, DecodeError> {
@@ -313,7 +289,7 @@ impl SceneHost {
 
     pub(crate) fn handle_wait_mask(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Flow, DecodeError> {
@@ -361,7 +337,7 @@ mod tests {
 
     struct Missing;
     impl ImageSource for Missing {
-        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             Ok(None)
         }
     }

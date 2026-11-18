@@ -2,11 +2,9 @@
 //! here names a game; differences between builds are capabilities.
 use crate::json::Json;
 use cmvs_core::{
-    cpz::{ArchiveIndex, ArchiveVersion},
-    digest::{sha256_reader, to_hex},
-    input::KeyBindings,
-    profile::{Evidence, Game, GameFiles, Registry},
-    runner::snapshot_layout_supported,
+    format::cpz::ArchiveIndex, format::cpz::ArchiveVersion, format::digest::sha256_reader,
+    format::digest::to_hex, host::input::KeyBindings, profile::Evidence, profile::Game,
+    profile::GameFiles, profile::Registry, runtime::snapshot_layout_supported,
 };
 use std::{
     collections::BTreeSet,
@@ -125,6 +123,28 @@ impl Target {
     pub fn has(&self, capability: &str) -> bool {
         self.capabilities.contains(capability)
     }
+    pub fn is_cvns(&self) -> bool {
+        self.game
+            .as_ref()
+            .is_some_and(|g| g.selection.profile.is_cvns())
+    }
+    pub fn save_family(&self) -> cmvs_core::runtime::save_menu::SaveFamily {
+        self.game
+            .as_ref()
+            .map_or(cmvs_core::runtime::save_menu::SaveFamily::Cmvs, |g| {
+                g.selection.profile.save_family()
+            })
+    }
+    pub fn system_save_name(&self) -> &'static str {
+        self.game.as_ref().map_or("system.dat", |g| {
+            g.selection.profile.system_save_file_name()
+        })
+    }
+    pub fn config_file_name(&self) -> &'static str {
+        self.game
+            .as_ref()
+            .map_or("cmvs.cfg", |g| g.selection.profile.config_file_name())
+    }
     /// The first capability of `needed` that is missing, for `skipped` results.
     pub fn missing(&self, needed: &[&'static str]) -> Option<&'static str> {
         needed.iter().copied().find(|c| !self.has(c))
@@ -197,13 +217,16 @@ pub fn open_archive(
     File::open(root.join(&files.start_script))?
         .take(cmvs_core::MAX_PAYLOAD as u64 + 49)
         .read_to_end(&mut raw)?;
-    let script = cmvs_core::ps3::Script::decode(&raw).map_err(std::io::Error::other)?;
+    let script = cmvs_core::format::ps3::Script::decode(&raw).map_err(std::io::Error::other)?;
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| std::io::Error::other("archive basename is not UTF-8"))?;
-    let index =
-        cmvs_core::script_control::archive_index_from_start(&mut file, &script, name.as_bytes())
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let index = cmvs_core::runtime::script_control::archive_index_from_start(
+        &mut file,
+        &script,
+        name.as_bytes(),
+    )
+    .map_err(|e| std::io::Error::other(e.to_string()))?;
     Ok((file, index))
 }

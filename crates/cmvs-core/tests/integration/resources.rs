@@ -1,0 +1,300 @@
+use cmvs_core::{
+    host::resources::ResourceArchives, host::resources::ResourceKind,
+    host::resources::ResourceSource,
+};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+struct Root(PathBuf);
+impl Root {
+    fn new() -> Self {
+        static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "cmvs-resources-{}-{id}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        for dir in ["a", "b", "c"] {
+            fs::create_dir(root.join(dir)).unwrap();
+        }
+        Self(root.canonicalize().unwrap())
+    }
+    fn put(&self, path: &str, bytes: &[u8]) {
+        fs::write(self.0.join(path), bytes).unwrap();
+    }
+}
+impl Drop for Root {
+    fn drop(&mut self) {
+        for dir in ["a", "b", "c"] {
+            for name in ["same.bin", "later.bin"] {
+                let _ = fs::remove_file(self.0.join(dir).join(name));
+            }
+            let _ = fs::remove_dir(self.0.join(dir));
+        }
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+#[test]
+fn resource_families_and_slot_limits_are_independent() {
+    let root = Root::new();
+    root.put("a/same.bin", b"image");
+    root.put("b/same.bin", b"SE");
+    root.put("c/same.bin", b"BGM");
+    root.put("c/later.bin", b"outside SE slots");
+    let paths = BTreeMap::from([
+        ((0x2011, 9), b"a\\".to_vec()),
+        ((0x2012, 3), b"b\\".to_vec()),
+        ((0x2012, 4), b"c\\".to_vec()),
+        ((0x2013, 3), b"c\\".to_vec()),
+    ]);
+    let mut archives = ResourceArchives::new(&root.0).unwrap();
+    for (kind, expected) in [
+        (ResourceKind::Image, b"image".as_slice()),
+        (ResourceKind::SoundEffect, b"SE"),
+        (ResourceKind::Music, b"BGM"),
+    ] {
+        assert_eq!(
+            archives
+                .with_paths(&paths, kind)
+                .read(b"same.bin")
+                .unwrap()
+                .unwrap(),
+            expected
+        );
+    }
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::SoundEffect)
+            .read(b"later.bin")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn keyed_archives_reopen_when_only_the_parameters_change() {
+    use cmvs_core::{format::cpz::ArchiveIndex, format::cpz::Cpz7Parameters};
+    let root = Root::new();
+    let bytes: Vec<_> = include_str!("../../../../tests/fixtures/cpz7-keyed.hex")
+        .trim()
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
+        .collect();
+    let keys = Cpz7Parameters::from([0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210]);
+    let index =
+        ArchiveIndex::read_with_cpz7_parameters(&mut std::io::Cursor::new(&bytes), keys).unwrap();
+    let name = &index.entries()[0].name;
+    root.put("a/same.bin", &bytes);
+    let paths = BTreeMap::from([((0x2011, 0), b"a\\same.bin".to_vec())]);
+    let mut archives = ResourceArchives::new(&root.0).unwrap();
+    archives.configure_parameters(&BTreeMap::from([((0x2011, 0), keys)]));
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::Image)
+            .read(name)
+            .unwrap()
+            .unwrap(),
+        b"synthetic CPZ7 payload 0!!!"
+    );
+    archives.configure_parameters(&BTreeMap::new());
+    assert!(
+        archives
+            .with_paths(&paths, ResourceKind::Image)
+            .read(name)
+            .is_err()
+    );
+    archives.configure_parameters(&BTreeMap::from([((0x2011, 0), keys)]));
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::Image)
+            .read(name)
+            .unwrap()
+            .unwrap(),
+        b"synthetic CPZ7 payload 0!!!"
+    );
+}
+#[test]
+fn audio_roots_search_in_order_and_follow_reregistration() {
+    let root = Root::new();
+    root.put("a/same.bin", b"first");
+    root.put("b/same.bin", b"second");
+    root.put("b/later.bin", b"fallback");
+    let mut paths = BTreeMap::from([
+        ((0x2012, 0), b"a\\".to_vec()),
+        ((0x2012, 1), b"b\\".to_vec()),
+    ]);
+    let mut archives = ResourceArchives::new(&root.0).unwrap();
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::SoundEffect)
+            .read(b"same.bin")
+            .unwrap()
+            .unwrap(),
+        b"first"
+    );
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::SoundEffect)
+            .read(b"later.bin")
+            .unwrap()
+            .unwrap(),
+        b"fallback"
+    );
+    paths.insert((0x2012, 0), b"c\\".to_vec());
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::SoundEffect)
+            .read(b"same.bin")
+            .unwrap()
+            .unwrap(),
+        b"second"
+    );
+    paths.insert((0x2012, 0), b"missing.cpz".to_vec());
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::SoundEffect)
+            .read(b"same.bin")
+            .unwrap()
+            .unwrap(),
+        b"second"
+    );
+}
+#[test]
+fn shared_reader_confines_audio_paths_and_rejects_file_roots() {
+    let root = Root::new();
+    root.put("a/same.bin", b"valid");
+    assert!(ResourceArchives::new(root.0.join("a/same.bin")).is_err());
+    let paths = BTreeMap::from([((0x2013, 0), b"a\\".to_vec())]);
+    let mut archives = ResourceArchives::new(&root.0).unwrap();
+    assert!(
+        archives
+            .with_paths(&paths, ResourceKind::Music)
+            .read(b"..\\..\\outside.bin")
+            .is_err()
+    );
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::Music)
+            .read(b"absent.bin")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn repeated_interior_separators_resolve_without_accepting_rooted_or_dot_paths() {
+    use cmvs_core::{host::platform::DirectoryAssets, host::platform::PlatformAssets};
+    let root = Root::new();
+    root.put("a/same.bin", b"valid");
+    let mut assets = DirectoryAssets::new(&root.0).unwrap();
+    for name in [b"a\\\\same.bin".as_slice(), b"a//same.bin", b"a\\/same.bin"] {
+        assert_eq!(assets.read(name).unwrap(), b"valid");
+    }
+    for name in [
+        b"\\a\\same.bin".as_slice(),
+        b"//a/same.bin",
+        b"a/same.bin/",
+        b"a//../a/same.bin",
+        b"a//./same.bin",
+        b"a//C:/same.bin",
+    ] {
+        assert!(assets.read(name).is_err(), "{name:?}");
+    }
+}
+
+#[test]
+fn scene_movie_registration_is_independent_and_searches_only_four_slots() {
+    let root = Root::new();
+    root.put("a/same.bin", b"image");
+    root.put("b/same.bin", b"movie");
+    root.put("c/later.bin", b"outside movie slots");
+    let paths = BTreeMap::from([
+        ((0x2011, 0), b"a\\".to_vec()),
+        ((0x201a, 3), b"b\\".to_vec()),
+        ((0x201a, 4), b"c\\".to_vec()),
+    ]);
+    let mut archives = ResourceArchives::new(&root.0).unwrap();
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::SceneMovie)
+            .read(b"same.bin")
+            .unwrap()
+            .unwrap(),
+        b"movie"
+    );
+    assert!(
+        archives
+            .with_paths(&paths, ResourceKind::SceneMovie)
+            .read(b"later.bin")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::Image)
+            .read(b"same.bin")
+            .unwrap()
+            .unwrap(),
+        b"image"
+    );
+}
+
+#[test]
+fn resolve_under_distinguishes_missing_files_from_invalid_paths() {
+    use cmvs_core::{host::filesystem::PathError, host::filesystem::resolve_under};
+    let root = Root::new();
+    let missing = resolve_under(&root.0, b"a/missing.bin").unwrap_err();
+    assert!(missing.is_not_found());
+    assert!(matches!(missing, PathError::Io(_)));
+
+    let invalid = resolve_under(&root.0, b"../outside.bin").unwrap_err();
+    assert!(!invalid.is_not_found());
+    assert!(matches!(invalid, PathError::Format(_)));
+}
+
+#[test]
+fn resolve_under_and_loose_directory_reads_fold_ascii_case_without_escaping_root() {
+    use cmvs_core::host::filesystem::resolve_under;
+    let root = Root::new();
+    fs::create_dir_all(root.0.join("DATA/Music")).unwrap();
+    fs::write(root.0.join("DATA/Music/BGM30.ogg"), b"vorbis").unwrap();
+
+    let resolved = resolve_under(&root.0, br"data\music\bgm30.ogg").unwrap();
+    assert_eq!(fs::read(resolved).unwrap(), b"vorbis");
+
+    let mut archives = ResourceArchives::new(&root.0).unwrap();
+    let paths = BTreeMap::from([((0x2013, 0), b"data\\music\\".to_vec())]);
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::Music)
+            .read(b"bgm30.ogg")
+            .unwrap()
+            .as_deref(),
+        Some(&b"vorbis"[..])
+    );
+
+    #[cfg(unix)]
+    {
+        use cmvs_core::host::filesystem::PathError;
+
+        let outside = crate::support::temp_dir::TempDir::new("escape");
+        fs::write(outside.join("SECRET.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(&outside, root.0.join("LINKDIR")).unwrap();
+        let escaped = resolve_under(&root.0, b"linkdir/secret.txt").unwrap_err();
+        assert!(!escaped.is_not_found());
+        assert!(matches!(escaped, PathError::Format(_)));
+    }
+}

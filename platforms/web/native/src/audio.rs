@@ -1,21 +1,20 @@
 //! Streaming Vorbis channels backed by the page's Web Audio device.
+use crate::fs::WebFs;
 use cmvs_audio::AudioProgram;
 use cmvs_core::{
-    MAX_PAYLOAD,
-    audio::{
-        AudioBackend, AudioRequest, MovieAudioClock, SE_CHANNELS, SePlayback, VoiceActivity,
-        VoiceCompressor, VoiceDucking, VoiceDuckingSettings, VoiceMixer,
-    },
-    cpz::Cpz7Parameters,
-    filesystem::File,
-    platform::resolve_under,
-    resources::{ResourceArchives, ResourceKind, ResourceSource},
+    MAX_PAYLOAD, format::cpz::Cpz7Parameters, host::audio::AudioBackend, host::audio::AudioRequest,
+    host::audio::MovieAudioClock, host::audio::SE_CHANNELS, host::audio::SePlayback,
+    host::audio::VoiceActivity, host::audio::VoiceCompressor, host::audio::VoiceDucking,
+    host::audio::VoiceDuckingSettings, host::audio::VoiceMixer, host::filesystem::HostFs,
+    host::filesystem::resolve_under_with_fs, host::resources::ResourceArchives,
+    host::resources::ResourceKind, host::resources::ResourceSource,
 };
 use std::{
     collections::BTreeMap,
     error::Error,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
@@ -67,13 +66,13 @@ impl Channel {
             volume: volume.min(256) as f32 / 256.0,
         }
     }
-    fn pcm(&mut self) -> Result<Option<i16>, Box<dyn Error>> {
+    fn pcm(&mut self) -> Result<Option<i16>, Box<dyn Error + Send + Sync>> {
         Ok(self
             .program
             .next_sample()?
             .map(|x| (x * 32768.0).clamp(-32768.0, 32767.0).trunc() as i16))
     }
-    fn next(&mut self) -> Result<Option<i16>, Box<dyn Error>> {
+    fn next(&mut self) -> Result<Option<i16>, Box<dyn Error + Send + Sync>> {
         let Some(compression) = &mut self.compression else {
             return self.pcm();
         };
@@ -103,7 +102,7 @@ impl Channel {
         compression.at += 1;
         Ok(Some(sample))
     }
-    fn pump(&mut self, id: usize) -> Result<(), Box<dyn Error>> {
+    fn pump(&mut self, id: usize) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !self.started || self.drained {
             return Ok(());
         }
@@ -139,10 +138,10 @@ pub struct BrowserAudio {
     duck_gain: f32,
 }
 impl BrowserAudio {
-    pub fn new(root: &Path) -> Result<Self, Box<dyn Error>> {
+    pub fn new(root: &Path) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(Self {
             root: root.into(),
-            archives: ResourceArchives::new(root)?,
+            archives: ResourceArchives::with_fs(root, Arc::new(WebFs))?,
             paths: BTreeMap::new(),
             slots: std::array::from_fn(|_| None),
             epoch: 0,
@@ -150,7 +149,11 @@ impl BrowserAudio {
             duck_gain: 1.0,
         })
     }
-    fn load(&mut self, kind: ResourceKind, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn load(
+        &mut self,
+        kind: ResourceKind,
+        name: &[u8],
+    ) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         if name.is_empty() {
             return Ok(None);
         }
@@ -169,7 +172,7 @@ impl BrowserAudio {
         channel: Option<Channel>,
         start: bool,
         fade_ms: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.release(id);
         self.epoch = self.epoch.wrapping_add(1);
         self.slots[id] = channel.map(|mut c| {
@@ -181,7 +184,7 @@ impl BrowserAudio {
         }
         Ok(())
     }
-    fn start_slot(&mut self, id: usize, fade_ms: u32) -> Result<(), Box<dyn Error>> {
+    fn start_slot(&mut self, id: usize, fade_ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         if let Some(channel) = &mut self.slots[id]
             && !channel.started
         {
@@ -216,14 +219,14 @@ impl BrowserAudio {
         let value = position(id as u32, channel.epoch);
         (value >= 0.0).then_some(value.min(f64::from(u32::MAX)) as u32)
     }
-    fn se(channel: u8) -> Result<usize, Box<dyn Error>> {
+    fn se(channel: u8) -> Result<usize, Box<dyn Error + Send + Sync>> {
         if channel < 6 {
             Ok(9 + usize::from(channel))
         } else {
             Err("SE channel out of range".into())
         }
     }
-    fn voice(channel: u8) -> Result<usize, Box<dyn Error>> {
+    fn voice(channel: u8) -> Result<usize, Box<dyn Error + Send + Sync>> {
         if channel < 4 {
             Ok(5 + usize::from(channel))
         } else {
@@ -232,35 +235,35 @@ impl BrowserAudio {
     }
 }
 impl AudioBackend for BrowserAudio {
-    fn set_output_enabled(&mut self, value: bool) -> Result<(), Box<dyn Error>> {
+    fn set_output_enabled(&mut self, value: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
         enabled(value);
         Ok(())
     }
     fn configure_voice_ducking(
         &mut self,
         value: VoiceDuckingSettings,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.ducking.configure(value);
         Ok(())
     }
     fn configure_paths(
         &mut self,
         value: &BTreeMap<(u16, u32), Vec<u8>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.paths.clone_from(value);
         Ok(())
     }
     fn configure_archive_parameters(
         &mut self,
         value: &BTreeMap<(u16, u32), Cpz7Parameters>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.archives.configure_parameters(value);
         Ok(())
     }
     fn configure_se(
         &mut self,
         values: &[Option<SePlayback>; SE_CHANNELS],
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut prepared: [Option<Channel>; 6] = std::array::from_fn(|_| None);
         for (id, value) in values.iter().enumerate() {
             if let Some(value) = value
@@ -282,7 +285,10 @@ impl AudioBackend for BrowserAudio {
         }
         Ok(())
     }
-    fn set_volumes(&mut self, values: &[Option<u32>; 15]) -> Result<(), Box<dyn Error>> {
+    fn set_volumes(
+        &mut self,
+        values: &[Option<u32>; 15],
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         for (id, value) in values.iter().enumerate() {
             if let Some(value) = value
                 && *value <= 256
@@ -299,7 +305,7 @@ impl AudioBackend for BrowserAudio {
         }
         Ok(())
     }
-    fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         let AudioRequest::PlaySe {
             channel,
             name,
@@ -325,7 +331,7 @@ impl AudioBackend for BrowserAudio {
         )?;
         Ok(true)
     }
-    fn start(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+    fn start(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
         let id = Self::se(channel)?;
         if let Some(c) = &self.slots[id]
             && !c.started
@@ -334,7 +340,11 @@ impl AudioBackend for BrowserAudio {
         }
         self.start_slot(id, 0)
     }
-    fn restart_se(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+    fn restart_se(
+        &mut self,
+        channel: u8,
+        looped: bool,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let id = Self::se(channel)?;
         let Some(current) = &self.slots[id] else {
             return Ok(());
@@ -371,31 +381,31 @@ impl AudioBackend for BrowserAudio {
         samples(id as u32, channel.epoch, &pcm, channel.drained);
         Ok(())
     }
-    fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         let id = Self::se(channel)?;
         self.release(id);
         Ok(())
     }
-    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.release(15);
         Ok(())
     }
-    fn fade_out_se(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_se(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         let id = Self::se(channel)?;
         self.fade_slot(id, ms);
         Ok(())
     }
-    fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         let id = Self::voice(channel)?;
         self.release(id);
         Ok(())
     }
-    fn fade_out_voice(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_voice(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         let id = Self::voice(channel)?;
         self.fade_slot(id, ms);
         Ok(())
     }
-    fn play_voice(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play_voice(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         let AudioRequest::PlayVoice {
             channel,
             name,
@@ -431,7 +441,7 @@ impl AudioBackend for BrowserAudio {
         self.install(id, Some(candidate), *start, 0)?;
         Ok(true)
     }
-    fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+    fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         let AudioRequest::PlayBgm {
             channel,
             previous,
@@ -475,19 +485,22 @@ impl AudioBackend for BrowserAudio {
         }
         self.install(usize::from(*channel), Some(candidate), true, *fade_ms)
     }
-    fn fade_out_bgm(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_bgm(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         if channel > 1 {
             return Err("BGM channel out of range".into());
         }
         self.fade_slot(usize::from(channel), ms);
         Ok(())
     }
-    fn stop_bgm(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_bgm(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.release(0);
         self.release(1);
         Ok(())
     }
-    fn play_movie_audio(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+    fn play_movie_audio(
+        &mut self,
+        request: &AudioRequest,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let AudioRequest::PlayMovieAudio {
             path,
             offset,
@@ -500,7 +513,7 @@ impl AudioBackend for BrowserAudio {
         if *size as usize > MAX_PAYLOAD {
             return Err("movie Ogg resource exceeds limit".into());
         }
-        let mut file = File::open(resolve_under(&self.root, path)?)?;
+        let mut file = WebFs.open_read(&resolve_under_with_fs(&WebFs, &self.root, path)?)?;
         if offset
             .checked_add(u64::from(*size))
             .is_none_or(|end| file.metadata().map_or(true, |m| end > m.len()))
@@ -513,11 +526,11 @@ impl AudioBackend for BrowserAudio {
         let candidate = Channel::new(AudioProgram::new(bytes, None, false)?, *volume);
         self.install(2, Some(candidate), true, 0)
     }
-    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.release(2);
         Ok(())
     }
-    fn update(&mut self) -> Result<(), Box<dyn Error>> {
+    fn update(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let voices: [VoiceActivity; 4] = std::array::from_fn(|i| VoiceActivity {
             playing: self.source_position(i + 5).is_some(),
             fading_out: self.slots[i + 5].as_ref().is_some_and(|c| c.fading),
@@ -546,13 +559,13 @@ impl AudioBackend for BrowserAudio {
         }
         Ok(())
     }
-    fn se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         Ok(self.source_position(Self::se(channel)?))
     }
-    fn voice_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn voice_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         Ok(self.source_position(Self::voice(channel)?))
     }
-    fn movie_clock(&self) -> Result<Option<MovieAudioClock>, Box<dyn Error>> {
+    fn movie_clock(&self) -> Result<Option<MovieAudioClock>, Box<dyn Error + Send + Sync>> {
         Ok(Some(
             self.source_position(2)
                 .map_or(MovieAudioClock::Ended, |position_ms| {

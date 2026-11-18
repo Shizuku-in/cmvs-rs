@@ -53,7 +53,7 @@ mod tests {
 
     struct NoImages;
     impl ImageSource for NoImages {
-        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             panic!("retained replacement resources must not be loaded");
         }
     }
@@ -384,15 +384,15 @@ mod tests {
     }
 }
 
-struct Reader<'a> {
+pub(super) struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
 }
 impl<'a> Reader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(super) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, at: 0 }
     }
-    fn take(&mut self, count: usize) -> Result<&'a [u8], FormatError> {
+    pub(super) fn take(&mut self, count: usize) -> Result<&'a [u8], FormatError> {
         let end = self
             .at
             .checked_add(count)
@@ -402,20 +402,20 @@ impl<'a> Reader<'a> {
         self.at = end;
         Ok(bytes)
     }
-    fn u16(&mut self) -> Result<u16, FormatError> {
+    pub(super) fn u16(&mut self) -> Result<u16, FormatError> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
-    fn u32(&mut self) -> Result<u32, FormatError> {
+    pub(super) fn u32(&mut self) -> Result<u32, FormatError> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
-    fn words<const N: usize>(&mut self) -> Result<[u32; N], FormatError> {
+    pub(super) fn words<const N: usize>(&mut self) -> Result<[u32; N], FormatError> {
         let mut out = [0; N];
         for n in &mut out {
             *n = self.u32()?;
         }
         Ok(out)
     }
-    fn string(&mut self, limit: usize) -> Result<&'a [u8], FormatError> {
+    pub(super) fn string(&mut self, limit: usize) -> Result<&'a [u8], FormatError> {
         let len = self.bytes[self.at..]
             .iter()
             .take(limit)
@@ -436,12 +436,16 @@ impl<'a> Reader<'a> {
         let len = self.u32()?;
         self.take(len as usize)
     }
-    fn finish(&self) -> Result<(), FormatError> {
-        if self.at == self.bytes.len() {
+    pub(super) fn finish(&self) -> Result<(), FormatError> {
+        if self.is_empty() {
             Ok(())
         } else {
             Err(FormatError("trailing snapshot visual bytes"))
         }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.at == self.bytes.len()
     }
 }
 
@@ -598,7 +602,7 @@ impl SavedImage {
         &self,
         source: &mut dyn ImageSource,
         budget: &mut usize,
-    ) -> Result<ObjectImage, Box<dyn Error>> {
+    ) -> Result<ObjectImage, Box<dyn Error + Send + Sync>> {
         // Check the saved dimensions before allocating decoded pixels. The actual
         // resource must match them below; image::load also has its own codec bound.
         let required = u64::from(self.size[0]) * u64::from(self.size[1]) * 4;
@@ -921,7 +925,7 @@ impl SavedScene {
         &self,
         source: &mut dyn ImageSource,
         budget: &mut usize,
-    ) -> Result<SceneObject, Box<dyn Error>> {
+    ) -> Result<SceneObject, Box<dyn Error + Send + Sync>> {
         let mut object = SceneObject {
             shown: self.shown,
             flags: self.flags,
@@ -998,7 +1002,7 @@ impl SavedWindow {
         &self,
         source: &mut dyn ImageSource,
         budget: &mut usize,
-    ) -> Result<MessageWindow, Box<dyn Error>> {
+    ) -> Result<MessageWindow, Box<dyn Error + Send + Sync>> {
         Ok(MessageWindow {
             object: self.scene.load(source, budget)?,
             pressed_button: -1,
@@ -1106,7 +1110,10 @@ impl VisualSnapshot {
     }
     /// Reads named resources through the caller's existing read-only image source.
     /// Returns hosts only after every resource succeeds; no existing engine is changed.
-    pub fn preview(&self, source: &mut dyn ImageSource) -> Result<VisualPreview, Box<dyn Error>> {
+    pub fn preview(
+        &self,
+        source: &mut dyn ImageSource,
+    ) -> Result<VisualPreview, Box<dyn Error + Send + Sync>> {
         let mut budget = MAX_PIXELS;
         let mut objects = BTreeMap::new();
         for (&slot, saved) in &self.objects {

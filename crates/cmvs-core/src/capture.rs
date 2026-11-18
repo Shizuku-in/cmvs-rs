@@ -1,13 +1,20 @@
-//! Engine +11104..+11128: the screen capture requested by 0x2304, taken when the next
-//! frame draw ends (0x1400157b0, the last step of 0x140015fc0) and handed to a scene object
-//! by 0x203c. 0x203e instead reads the backend's current completed device frame without
-//! consuming this held image or its pending request. Addresses bind the documented hash.
+//! Deferred screenshots retained for use as scene images.
+//!
+//! [`ScreenCapture`] records a request, accepts the completed frame, and retains
+//! it until released. [`crate::runtime::Runtime`] renders supported captures in
+//! software or accepts a host-rendered frame at logical screen size. Immediate
+//! readback uses [`crate::platform::PlatformBackend::read_device_frame`].
+
+// Engine +11104..+11128: the screen capture requested by 0x2304, taken when the next
+// frame draw ends (0x1400157b0, the last step of 0x140015fc0) and handed to a scene object
+// by 0x203c. 0x203e instead reads the backend's current completed device frame without
+// consuming this held image or its pending request. Addresses bind the documented hash.
 use crate::{
     bytecode::DecodeError,
-    dispatch::Call,
+    dispatch::{Call, Flow},
     evaluate::error,
     machine::Machine,
-    platform::PlatformBackend,
+    platform::{DeviceFrameResult, PlatformBackend},
     raster::RgbaImage,
     scene::{ObjectImage, SceneHost},
 };
@@ -27,22 +34,21 @@ impl ScreenCapture {
     /// image intact, rather than reproducing the original's empty partial image.
     pub fn try_immediate(
         &self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
         backend: &mut impl PlatformBackend,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         let Some((pc, command @ (0x3d | 0x3e))) = vm.pending_system() else {
             return Ok(false);
         };
-        self.handle_immediate(&mut Call::new(vm, pc, command), scene, backend)?;
-        Ok(true)
+        Ok(self.handle_immediate(&mut Call::new(vm, pc, command), scene, backend)? == Flow::Done)
     }
     pub(crate) fn handle_immediate(
         &self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut SceneHost,
         backend: &mut dyn PlatformBackend,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<Flow, Box<dyn std::error::Error + Send + Sync>> {
         let pc = call.pc;
         let op = call.command + 0x2000;
         let fail = |why| error(pc, op, why);
@@ -53,7 +59,10 @@ impl ScreenCapture {
             .filter(|_| child < 0)
             .filter(|slot| scene.object(*slot).is_some())
             .ok_or_else(|| fail("device image needs an existing object in slots 0..255 itself"))?;
-        let frame = opaque(backend.read_device_frame()?)?;
+        let frame = match backend.poll_device_frame()? {
+            DeviceFrameResult::Pending => return Ok(Flow::DeviceFramePending),
+            DeviceFrameResult::Ready(frame) => opaque(frame)?,
+        };
         call.complete(0x4008)?;
         scene.object_mut(slot).expect("validated").image = Some(ObjectImage {
             filter: None,
@@ -66,7 +75,7 @@ impl ScreenCapture {
             .state_mut()
             .set_system_integer(0, 1)
             .expect("result 0 exists");
-        Ok(())
+        Ok(Flow::Done)
     }
     pub fn requested(&self) -> bool {
         self.requested
@@ -82,26 +91,9 @@ impl ScreenCapture {
         Ok(())
     }
 
-    /// No stack parameters:
-    /// - 0x2304 / 0x1400158f0: request a capture (+11112 = 1).
-    /// - 0x2305 / 0x1400158a0: free the capture and clear the request and size.
-    /// - 0x2306 / 0x14007fb20 -> 0x1400158e0: system result 0 = whether a capture is held.
-    ///
-    /// All return 0x4000. 0x203c is described at `give`.
-    pub fn try_handle(
-        &mut self,
-        vm: &mut Machine<'_>,
-        scene: &mut SceneHost,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x3c | 0x304..=0x306))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command), scene)?;
-        Ok(true)
-    }
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut SceneHost,
     ) -> Result<(), DecodeError> {
         let command = call.command;
@@ -126,7 +118,7 @@ impl ScreenCapture {
     /// image (+6176) and builds one from the capture (0x140032f80: empty name, +1152 = 0);
     /// result 0 = success, then the capture is reset (0x1400158a0). Pops 8. Without a
     /// capture the original keeps an empty image object, which Rust rejects.
-    fn give(&mut self, call: &mut Call<'_, '_>, scene: &mut SceneHost) -> Result<(), DecodeError> {
+    fn give(&mut self, call: &mut Call<'_>, scene: &mut SceneHost) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x203c, why);
         let (slot, child) = (

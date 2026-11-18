@@ -1,8 +1,7 @@
 //! 0x2309 -> 0x1400385a0, mode 0 update 0x140039330; hash-bound in vm-semantics.md.
 use super::{MOVIE_SLOTS, MovieHost};
 use crate::{
-    FormatError, bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine,
-    scene::SceneHost,
+    FormatError, bytecode::DecodeError, dispatch::Call, evaluate::error, scene::SceneHost,
 };
 use std::error::Error;
 pub const MOVIE_SEGMENTS: usize = 16;
@@ -144,7 +143,7 @@ impl MoviePlayback {
 }
 impl MovieHost {
     /// HAROUSE 0x450830/0x4508b0: mode setter and raw segment/frame query.
-    pub(crate) fn legacy_control(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn legacy_control(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let slot = call.argument(4, "player slot")? as usize;
         if slot >= MOVIE_SLOTS {
             return Err(call.error("movie slot outside 0..2 sets an unmodeled flag"));
@@ -190,9 +189,9 @@ impl MovieHost {
     /// HAROUSE 0x4509f0/0x450a70: seek and clear pause, or apply a queued segment.
     pub(crate) fn seek_scene(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut SceneHost,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "player slot")? as usize;
         let requested = if call.command == 0x31b {
             Some(call.argument(8, "target frame")?)
@@ -278,17 +277,10 @@ impl MovieHost {
 
     /// SP-4 player, SP-8 key, SP-12 start, SP-16 end (-1 = last), SP-20 loop.
     /// Empty player: pop 20 bytes without reading loop. No result writes or immediate seek.
-    pub fn try_start_scene(&mut self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, 0x309)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_start_scene(&mut Call::new(vm, pc, 0x309))?;
-        Ok(true)
-    }
     pub(crate) fn handle_start_scene(
         &mut self,
-        call: &mut Call<'_, '_>,
-    ) -> Result<(), Box<dyn Error>> {
+        call: &mut Call<'_>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x2309, why);
         let (slot, key, start, end) = (
@@ -340,11 +332,16 @@ impl MovieHost {
         &mut self,
         delta: u32,
         scene: &mut SceneHost,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.scene_clock = self.scene_clock.wrapping_add(delta);
         if let Some(prefetch) = &mut self.prefetch {
-            let live: Vec<_> = self.slots.iter().flatten().map(|m| m.id).collect();
-            prefetch.retain_players(&live);
+            let mut live = [0u64; MOVIE_SLOTS];
+            let mut len = 0;
+            for movie in self.slots.iter().flatten() {
+                live[len] = movie.id;
+                len += 1;
+            }
+            prefetch.retain_players(&live[..len]);
         }
         for movie in self.slots.iter_mut().flatten() {
             let mut playback = movie.playback.clone();

@@ -1,11 +1,15 @@
-//! Screen cameras at engine +1968 -> +16 and +24 (0xa0 bytes each, constructor 0x14004fab0);
-//! addresses refer to the documented binary hash. 0x2058..0x205f/0x2066/0x2067/0x209c set
-//! fields of the camera selected by SP-4 (0x140027090), 0x2060..0x2065 the same fields of camera 0
-//! (0x140027070). Fields stay raw words named by offset. The original renderer uses them
-//! for coordinate modes 2/3 (0x140020340 -> 0x14004ef40); the software renderer supports
-//! cameras of type 3 and the hash-bound types 1/2, with screen roll applied by scene_render. 0x2056 queries projected
-//! integer coordinates without rendering. Camera 0 motion supports linear and quadratic
-//! ease-out branches. 0x2126 queries the screen device size at +1968 -> +8.
+//! Camera state, projection queries, and timed camera movement.
+//!
+//! [`CameraHost`] stores screen cameras and independent device views. Renderers
+//! consume this state through [`crate::scene_render`]; changing a camera does not
+//! draw a frame. Raw camera words preserve fields whose meaning is not yet modeled.
+
+// Screen cameras: engine +1968 -> +16/+24, each 0xa0 bytes; constructor 0x14004fab0.
+// 0x2058..0x205f/0x2066/0x2067/0x209c select by SP-4 (0x140027090);
+// 0x2060..0x2065 select camera 0 (0x140027070). Modes 2/3 render through
+// 0x140020340 -> 0x14004ef40. Supported types are 3 and hash-bound variants 1/2.
+// 0x2056 queries projected coordinates; 0x2126 reads device size at +1968 -> +8.
+// Camera 0 motion covers linear and quadratic ease-out; scene_render applies roll.
 use crate::{
     bytecode::DecodeError,
     dispatch::{Call, Flow},
@@ -23,6 +27,10 @@ pub const CAMERA_WORDS: usize = 40;
 /// Word index of +84, set while an eased move runs (0x14004f5b0..0x14004f9a0).
 const MOVING: usize = 21;
 
+/// One screen camera stored as raw words for lossless state and snapshot handling.
+///
+/// [`Self::float`] interprets a word as `f32` bits. Use [`CameraHost`] for command
+/// handling and projection queries rather than assuming every word is a float.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Camera {
     pub words: [u32; CAMERA_WORDS],
@@ -237,44 +245,42 @@ impl Default for CameraConfig {
 
 impl CameraConfig {
     fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
-        if profile.is_inspected_20070119() {
+        use crate::profile::InspectedBuild;
+
+        match profile.inspected_build() {
             // PURIRING: constructor 0x422200, projection 0x422430, writer 0x422280.
             // Runtime motion uses our normalized layout; native words 15+ are motion,
             // not the screen center and scale introduced in later versions.
-            Self {
+            Some(InspectedBuild::Cmvs20070119) => Self {
                 object_projection: ObjectProjectionSet::Type1,
                 default_height: 614.0,
                 default_center_y: 307.0,
                 snapshot_format: CameraSnapshotFormat::V1,
-            }
-        } else if profile.is_inspected_20071117()
-            || profile.is_inspected_20080903()
-            || profile.is_inspected_20090815()
-            || profile.is_inspected_20100314()
-        {
+            },
             // Constructor 0x42dc10, projection 0x42df60, snapshot 0x42dca0.
             // ASUNANA: 0x42fcf0 / 0x430200, with independent v3 writer 0x42fd80.
-            Self {
-                object_projection: if profile.is_inspected_20090815()
-                    || profile.is_inspected_20100314()
-                {
-                    ObjectProjectionSet::Types1And2And3
-                } else {
-                    ObjectProjectionSet::Types1And2
+            Some(
+                build @ (InspectedBuild::Cmvs20071117
+                | InspectedBuild::Cmvs20080903
+                | InspectedBuild::Cmvs20090815
+                | InspectedBuild::Cmvs20100314),
+            ) => Self {
+                object_projection: match build {
+                    InspectedBuild::Cmvs20090815 | InspectedBuild::Cmvs20100314 => {
+                        ObjectProjectionSet::Types1And2And3
+                    }
+                    _ => ObjectProjectionSet::Types1And2,
                 },
                 default_height: 614.0,
                 default_center_y: 307.0,
-                snapshot_format: if profile.is_inspected_20080903()
-                    || profile.is_inspected_20090815()
-                    || profile.is_inspected_20100314()
-                {
-                    CameraSnapshotFormat::V3
-                } else {
-                    CameraSnapshotFormat::V2
+                snapshot_format: match build {
+                    InspectedBuild::Cmvs20080903
+                    | InspectedBuild::Cmvs20090815
+                    | InspectedBuild::Cmvs20100314 => CameraSnapshotFormat::V3,
+                    _ => CameraSnapshotFormat::V2,
                 },
-            }
-        } else {
-            Self::default()
+            },
+            _ => Self::default(),
         }
     }
 
@@ -498,7 +504,7 @@ impl CameraHost {
 
     /// 0x206b/0x206c/0x206d -> 0x14004f5b0/0x14004f680/0x14004f820.
     /// Camera 0 only; first argument mode, last duration, intervening floats XZ/XYZ/Y.
-    fn start_move(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn start_move(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let fail = |why| error(pc, command + 0x2000, why);
         let count = match command {
@@ -569,7 +575,7 @@ impl CameraHost {
     /// 0x2069 / 0x14006fd90: wait on camera 0, using 0x4004/0xa000/0xc004.
     pub fn try_wait_move(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Option<Step>, DecodeError> {
@@ -582,7 +588,7 @@ impl CameraHost {
 
     pub(crate) fn handle_wait_move(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Flow, DecodeError> {
@@ -616,18 +622,8 @@ impl CameraHost {
             .expect("result 0 exists");
         Ok(flow)
     }
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(command, 0x56 | 0x58..=0x68 | 0x6a..=0x6d | 0x9c | 0x126 | 0x260..=0x264) {
-            return Ok(false);
-        }
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         if matches!(call.command, 0x260..=0x264) {
             return self.set_view(call);
@@ -751,7 +747,7 @@ impl CameraHost {
     /// 0x2056 / 0x14006fa20: SP-4 camera, SP-8 query mode, SP-12..20 XYZ,
     /// SP-24 vertical offset, SP-28 reference depth. Returns 0x401c and writes only
     /// integer system results 1..3 with cvttss2si (including its indefinite i32 value).
-    fn project_query(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn project_query(&self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x2056, why);
         let mut args = [0; 7];

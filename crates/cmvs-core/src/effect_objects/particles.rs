@@ -266,12 +266,12 @@ impl SceneHost {
 
     pub(crate) fn create_particles(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
         x87_arithmetic: bool,
         backend: Option<&mut dyn AudioBackend>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         let mode = call.argument(12, "particle mode")?;
         let parameters = [

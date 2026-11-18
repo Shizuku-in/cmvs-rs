@@ -1,4 +1,4 @@
-use super::bits::{Bits, Huffman, Result};
+use super::bits::{Bits, CoeffHuffman, Result};
 use cmvs_core::{FormatError, MAX_PAYLOAD};
 
 #[derive(Clone)]
@@ -100,7 +100,7 @@ pub(super) struct Setup {
     pub limits: [u8; 64],
     // Quantization tables are computed once, rather than twice for each 8x8 block.
     pub quant: Vec<[[u16; 64]; 64]>, // [type * 3 + plane][qi][coefficient]
-    pub huffman: Vec<Huffman>,
+    pub huffman: Vec<CoeffHuffman>,
 }
 
 impl Setup {
@@ -175,9 +175,11 @@ impl Setup {
         }
         let mut huffman = Vec::with_capacity(80);
         for _ in 0..80 {
-            let mut table = Huffman::parse(&mut b)?;
-            table.prepare(&super::packet::TOKEN_EXTRA_BITS);
-            huffman.push(table);
+            huffman.push(CoeffHuffman::parse(
+                &mut b,
+                &super::packet::TOKEN_EXTRA_BITS,
+                super::packet::resolve_coeff,
+            )?);
         }
         Ok(Self {
             limits,

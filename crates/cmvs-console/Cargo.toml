@@ -9,7 +9,9 @@ description = "Host policy shared by the game-console players: controls, game li
 [lints]
 workspace = true
 [dependencies]
+cmvs-audio = { path = "../cmvs-audio", default-features = false, features = ["mixer"] }
 cmvs-core = { path = "../cmvs-core" }
+cmvs-host = { path = "../cmvs-host", default-features = false }
 cmvs-native = { path = "../cmvs-native" }
 cmvs-font = { path = "../cmvs-font" }
 ab_glyph.workspace = true

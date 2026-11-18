@@ -1,25 +1,93 @@
 //! Explicit OpenType font preview. Script layout stays in core; this backend replaces
 //! the original GDI mask rasterizer, so its pixels are not claimed to match GDI.
+use crate::composition::SceneComposition;
 use crate::font_library::FontLibrary;
 use crate::glyph_cache::GlyphCache;
 use ab_glyph::{Font, FontVec, ScaleFont, point};
 use cmvs_core::{
     FormatError, TextEncoding,
-    camera::CameraHost,
-    message::{AUXILIARY_TEXTS, MessageHost, RecordedGlyph, TEXT_OBJECTS},
-    raster::RgbaImage,
-    scene::{DrawState, ObjectImage, SceneHost, SceneObject},
-    scene_render,
+    render::camera::CameraHost,
+    render::message::{AUXILIARY_TEXTS, GlyphRasterizer, MessageHost, RecordedGlyph, TEXT_OBJECTS},
+    render::raster::RgbaImage,
+    render::scene::{SceneHost, SceneObject},
 };
 use std::{
     error::Error,
     fs::File,
+    hash::{Hash, Hasher},
     io::Read,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 const MAX_FONT: usize = 32 * 1024 * 1024;
+
+#[derive(Clone)]
+struct CachedGlyphScene {
+    fingerprint: u128,
+    objects: Vec<SceneObject>,
+}
+
+/// Deterministic two-lane 128-bit streaming hasher for visible glyph-scene state.
+struct GlyphSceneHasher {
+    lo: u64,
+    hi: u64,
+}
+
+impl GlyphSceneHasher {
+    fn new() -> Self {
+        Self {
+            lo: 0xcbf2_9ce4_8422_2325,
+            hi: 0x8422_2325_cbf2_9ce4,
+        }
+    }
+
+    fn mix64(mut x: u64) -> u64 {
+        x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        x ^ (x >> 31)
+    }
+
+    fn finish128(self) -> u128 {
+        let lo = Self::mix64(self.lo);
+        let hi = Self::mix64(self.hi ^ lo.rotate_left(17));
+        (u128::from(hi) << 64) | u128::from(lo)
+    }
+}
+
+impl Hasher for GlyphSceneHasher {
+    fn finish(&self) -> u64 {
+        Self::mix64(self.lo ^ self.hi)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let (chunks, tail) = bytes.as_chunks::<8>();
+        for chunk in chunks {
+            let word = u64::from_le_bytes(*chunk);
+            self.lo = (self.lo ^ word)
+                .rotate_left(23)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                .wrapping_add(0x517c_c1b7_2722_0a95);
+            self.hi = (self.hi.wrapping_add(word ^ 0xa076_1d64_78bd_642f))
+                .rotate_right(19)
+                .wrapping_mul(0xe703_7ed1_a0b4_28db);
+        }
+        if !tail.is_empty() {
+            let mut last = 0u64;
+            for (i, &b) in tail.iter().enumerate() {
+                last |= u64::from(b) << (i * 8);
+            }
+            last |= (tail.len() as u64) << 56;
+            self.lo = (self.lo ^ last)
+                .rotate_left(11)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            self.hi = (self.hi ^ last.rotate_left(32)).wrapping_mul(0xe703_7ed1_a0b4_28db);
+        }
+    }
+}
 
 /// The explicit font file (TTC face selected explicitly) serves the built-in default
 /// face; faces named by glyphs are resolved through `FontLibrary`.
@@ -27,7 +95,15 @@ const MAX_FONT: usize = 32 * 1024 * 1024;
 pub struct FontRenderer {
     encoding: TextEncoding,
     library: Arc<Mutex<FontLibrary>>,
+    library_generation: Arc<AtomicU64>,
+    cached_generation: u64,
     cache: GlyphCache,
+    scene_cache: Option<CachedGlyphScene>,
+    scene_used_transient_fallback: bool,
+    #[cfg(test)]
+    scene_cache_hits: u64,
+    #[cfg(test)]
+    glyph_build_calls: u64,
 }
 
 struct PreviewMetrics(Arc<Mutex<FontLibrary>>, TextEncoding);
@@ -44,7 +120,7 @@ impl std::fmt::Debug for PreviewMetrics {
         f.write_str("OpenType preview metrics")
     }
 }
-impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
+impl cmvs_core::render::message::GlyphMetrics for PreviewMetrics {
     fn display_face_name(&self, face: &[u8]) -> Option<Vec<u8>> {
         if !face.starts_with(b"CMVS-U-") {
             return None;
@@ -269,7 +345,7 @@ fn paint(
 }
 
 impl FontRenderer {
-    pub fn read(path: &Path, face: u32) -> Result<Self, Box<dyn Error>> {
+    pub fn read(path: &Path, face: u32) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut bytes = Vec::new();
         File::open(path)?
             .take(MAX_FONT as u64 + 1)
@@ -285,7 +361,15 @@ impl FontRenderer {
         Ok(Self {
             encoding: TextEncoding::default(),
             library: Arc::new(Mutex::new(FontLibrary::new(Arc::new(font)))),
+            library_generation: Arc::new(AtomicU64::new(0)),
+            cached_generation: 0,
             cache: GlyphCache::default(),
+            scene_cache: None,
+            scene_used_transient_fallback: false,
+            #[cfg(test)]
+            scene_cache_hits: 0,
+            #[cfg(test)]
+            glyph_build_calls: 0,
         })
     }
     /// Adds a font for characters the selected face and the default font lack.
@@ -299,6 +383,7 @@ impl FontRenderer {
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))?
             .add_fallback(Arc::new(font));
+        self.library_generation.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
     /// Uses `library` (sharing its explicit default font) for every face.
@@ -306,7 +391,15 @@ impl FontRenderer {
         Self {
             encoding: TextEncoding::default(),
             library: Arc::new(Mutex::new(library)),
+            library_generation: Arc::new(AtomicU64::new(0)),
+            cached_generation: 0,
             cache: GlyphCache::default(),
+            scene_cache: None,
+            scene_used_transient_fallback: false,
+            #[cfg(test)]
+            scene_cache_hits: 0,
+            #[cfg(test)]
+            glyph_build_calls: 0,
         }
     }
     /// Select the game text encoding before installing this renderer's metrics.
@@ -315,12 +408,22 @@ impl FontRenderer {
     /// discards cached glyph images; existing metrics retain their encoding.
     pub fn with_text_encoding(mut self, encoding: TextEncoding) -> Self {
         self.encoding = encoding;
+        self.cached_generation = self.library_generation.load(Ordering::Relaxed);
         self.cache = GlyphCache::default();
+        self.scene_cache = None;
         self
+    }
+    fn sync_library_generation(&mut self) {
+        let generation = self.library_generation.load(Ordering::Relaxed);
+        if self.cached_generation != generation {
+            self.cached_generation = generation;
+            self.cache = GlyphCache::default();
+            self.scene_cache = None;
+        }
     }
     /// Matches this renderer's fonts; OpenType ink bounds replace GDI's
     /// device metrics. Whitespace deterministically has zero ink extent.
-    pub fn metrics(&self) -> Box<dyn cmvs_core::message::GlyphMetrics> {
+    pub fn metrics(&self) -> Box<dyn cmvs_core::render::message::GlyphMetrics> {
         Box::new(PreviewMetrics(Arc::clone(&self.library), self.encoding))
     }
     /// Whether a face in the game encoding resolves to a font (startup check).
@@ -334,6 +437,7 @@ impl FontRenderer {
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))?
             .set_user_directory(directory);
+        self.library_generation.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
     pub fn family_name(&self, face: &[u8]) -> Result<String, FormatError> {
@@ -349,9 +453,14 @@ impl FontRenderer {
             .map_err(|_| FormatError("font library lock poisoned"))?;
         let face = library.register_unicode(name)?;
         library.face(&face, self.encoding)?;
+        self.library_generation.fetch_add(1, Ordering::Relaxed);
         Ok(face)
     }
-    pub fn import_font(&self, path: &Path, index: u32) -> Result<Vec<u8>, Box<dyn Error>> {
+    pub fn import_font(
+        &self,
+        path: &Path,
+        index: u32,
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let mut bytes = Vec::new();
         File::open(path)?
             .take(MAX_FONT as u64 + 1)
@@ -381,20 +490,17 @@ impl FontRenderer {
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))?;
         let key = library.import_file(bytes, index)?;
-        if let Some(name) = name {
+        let out = if let Some(name) = name {
             library.name_imported_font(&name, &key)?;
-            Ok(name)
+            name
         } else {
-            Ok(key)
-        }
-    }
-    fn font(&self, face: &[u8], ch: char) -> Result<Arc<FontVec>, FormatError> {
-        self.library
-            .lock()
-            .map_err(|_| FormatError("font library lock poisoned"))
-            .map(|mut library| library.for_character(face, self.encoding, ch))
+            key
+        };
+        self.library_generation.fetch_add(1, Ordering::Relaxed);
+        Ok(out)
     }
     fn glyph(&mut self, glyph: &RecordedGlyph) -> Result<RgbaImage, FormatError> {
+        self.sync_library_generation();
         if !(1..=128).contains(&glyph.size) {
             return Err(FormatError("glyph size outside 1..128 preview range"));
         }
@@ -420,7 +526,11 @@ impl FontRenderer {
             return Ok(image.clone());
         }
         let ch = character(self.encoding, glyph.code)?;
-        let font = self.font(&glyph.face, ch)?;
+        let (font, cacheable) = self
+            .library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?
+            .resolve_character(&glyph.face, self.encoding, ch);
         let id = font.glyph_id(ch);
         let scale = glyph.size as f32;
         let baseline = font.as_scaled(scale).ascent();
@@ -459,7 +569,11 @@ impl FontRenderer {
             embolden(&mut mask, side);
         }
         let image = paint(&mask, side, glyph.colors, glyph.gradient, glyph.outline)?;
-        self.cache.insert(key, image.clone());
+        if cacheable {
+            self.cache.insert(key, image.clone());
+        } else {
+            self.scene_used_transient_fallback = true;
+        }
         Ok(image)
     }
 
@@ -471,162 +585,171 @@ impl FontRenderer {
         cameras: &CameraHost,
         messages: &MessageHost,
     ) -> Result<RgbaImage, FormatError> {
-        let objects = self.prepare_objects(messages)?;
-        let mut additional: Vec<_> = objects.iter().collect();
-        additional.extend(messages.visible_window_objects());
-        {
-            let [width, height] = messages.screen_size();
-            scene_render::render_scene(scene, Some(cameras), &additional, width, height)
-        }
+        self.compose(scene, cameras, messages)?
+            .prepare()?
+            .render_cpu()
+    }
+
+    /// Combine scene state, rasterized glyphs and visible message windows.
+    /// Prepare the returned composition for either CPU or GPU rendering.
+    pub fn compose<'a>(
+        &mut self,
+        scene: &'a SceneHost,
+        cameras: &'a CameraHost,
+        messages: &'a MessageHost,
+    ) -> Result<SceneComposition<'a>, FormatError> {
+        Ok(SceneComposition {
+            scene,
+            cameras,
+            messages,
+            glyphs: self.prepare_objects(messages)?,
+        })
     }
 
     /// Builds glyph objects without compositing a frame.
     /// Visible message windows must also be passed to the shared scene queue.
+    /// Prefer [`Self::compose`] when preparing a complete game scene.
     pub fn prepare_objects(
         &mut self,
         messages: &MessageHost,
     ) -> Result<Vec<SceneObject>, FormatError> {
-        let mut objects = Vec::new();
-        let mut visible_glyphs = 0;
-        for text in (0..TEXT_OBJECTS)
-            .filter_map(|i| messages.text(i))
-            .filter(|t| t.visible && !t.glyphs.is_empty())
+        self.sync_library_generation();
+        let fingerprint = self.glyph_scene_fingerprint(messages);
+        if let (Some(fp), Some(cached)) = (fingerprint, self.scene_cache.as_ref())
+            && cached.fingerprint == fp
         {
+            #[cfg(test)]
+            {
+                self.scene_cache_hits += 1;
+            }
+            return Ok(cached.objects.clone());
+        }
+        #[cfg(test)]
+        {
+            self.glyph_build_calls += 1;
+        }
+        self.scene_used_transient_fallback = false;
+        let objects = messages.build_glyph_objects(self)?;
+        if let Some(fingerprint) = fingerprint
+            && !self.scene_used_transient_fallback
+        {
+            self.scene_cache = Some(CachedGlyphScene {
+                fingerprint,
+                objects: objects.clone(),
+            });
+        }
+        Ok(objects)
+    }
+
+    fn glyph_scene_fingerprint(&self, messages: &MessageHost) -> Option<u128> {
+        let mut h = GlyphSceneHasher::new();
+        (
+            self.encoding,
+            self.library_generation.load(Ordering::Relaxed),
+            messages.screen_size(),
+            messages.allows_logical_text_scale(),
+        )
+            .hash(&mut h);
+
+        let mut visible_glyphs = 0usize;
+        for slot in 0..TEXT_OBJECTS {
+            let Some(text) = messages
+                .text(slot)
+                .filter(|t| t.visible && !t.glyphs.is_empty())
+            else {
+                continue;
+            };
             let scale = f32::from_bits(text.scale_bits);
             if !scale.is_finite() || scale < 0.0 {
-                return Err(FormatError(
-                    "font preview requires finite nonnegative scale",
-                ));
+                return None;
             }
-            // A text created with its own logical size (NATSUUTA 0x211c) is drawn in that
-            // space; as for logically scaled scene objects, the device over logical width
-            // scales both axes, including the anchor. The scene's logical sizing applies
-            // it to the final vertices, so fractional device anchors are kept. Other
-            // builds keep refusing it.
-            let screen = messages.screen_size();
-            let logical_size = if text.logical_size == screen.map(|v| v as i32) {
-                [0, 0]
-            } else if !messages.allows_logical_text_scale() {
-                return Err(FormatError(
-                    "font preview requires text coordinates matching the logical screen",
-                ));
-            } else if text.logical_size[0] > 0 {
-                text.logical_size.map(|v| v as u32)
-            } else {
-                return Err(FormatError(
-                    "font preview requires a positive logical text width",
-                ));
-            };
-            let mut parent_draw = DrawState::default();
-            parent_draw.words[8..10].copy_from_slice(&text.position.map(|v| v as u32));
-            parent_draw.words[10] = text.layer as u32;
-            parent_draw.words[18..20].fill(scale.to_bits());
-            // The original text scene object owns attached glyph children. Scaling
-            // acts on their relative positions and padded cells, not the text anchor.
-            // Glyph children inherit the parent's logical factor (flag bit 0).
-            let mut parent = SceneObject {
-                draw: Some(parent_draw),
-                flags: 0xffff_ffff,
-                logical_size,
-                ..SceneObject::default()
-            };
+            (
+                0x11u8,
+                slot as u8,
+                text.scale_bits,
+                text.logical_size,
+                text.position,
+                text.layer,
+            )
+                .hash(&mut h);
             for glyph in text.glyphs.iter().filter(|g| g.shown && g.opacity != 0) {
-                if visible_glyphs >= 512 {
-                    return Err(FormatError("font preview exceeds 512 visible glyphs"));
-                }
                 visible_glyphs += 1;
-                let pixels = self.glyph(glyph)?;
-                let mut draw = DrawState::default();
-                draw.words[4] = glyph.reveal_width.min(pixels.width());
-                draw.words[5] = pixels.height();
-                draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
-                draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
-                draw.words[10] = text.layer as u32;
-                draw.words[17] = glyph.opacity;
-                parent.children.insert(
-                    parent.children.len() as u16,
-                    SceneObject {
-                        image: Some(ObjectImage {
-                            filter: None,
-                            name: Vec::new(),
-                            pixels,
-                            alpha: true,
-                            surface: false,
-                        }),
-                        draw: Some(draw),
-                        ..SceneObject::default()
-                    },
-                );
+                if visible_glyphs > 512 {
+                    return None;
+                }
+                (
+                    0x12u8,
+                    glyph.face.as_ref(),
+                    glyph.bold,
+                    glyph.revision_alpha,
+                    glyph.code,
+                    glyph.position,
+                    glyph.size,
+                    glyph.colors,
+                    glyph.gradient,
+                    glyph.outline,
+                    glyph.opacity,
+                    glyph.reveal_width,
+                )
+                    .hash(&mut h);
             }
-            objects.push(parent);
+            0x1fu8.hash(&mut h);
         }
-        // 0x140015da0 queues the +4328 auxiliary atlas objects after the text objects and
-        // before the windows. Attached glyphs (0x14002eb10) inherit the atlas position,
-        // opacity and mode-4 second texture, keep the layer they were attached with, and
-        // queue independently.
-        for group in (0..AUXILIARY_TEXTS)
-            .filter_map(|i| messages.auxiliary_text(i))
-            .filter(|g| g.attached_glyphs().next().is_some())
-        {
-            let mut parent_draw = DrawState::default();
-            parent_draw.words[8..10].copy_from_slice(&group.glyph_origin()?.map(|v| v as u32));
-            parent_draw.texture_mode = group
+
+        for slot in 0..AUXILIARY_TEXTS {
+            let Some(group) = messages.auxiliary_text(slot) else {
+                continue;
+            };
+            let mut attached = group.attached_glyphs().peekable();
+            if attached.peek().is_none() {
+                continue;
+            }
+            let Ok(origin) = group.glyph_origin() else {
+                return None;
+            };
+            let texture_mode = group
                 .object
                 .draw
                 .as_ref()
                 .map_or(0, |draw| draw.texture_mode);
-            let mut parent = SceneObject {
-                draw: Some(parent_draw),
-                secondary_image: group.secondary_image.clone(),
-                flags: 0x8000_0000,
-                ..SceneObject::default()
-            };
-            for glyph in group.attached_glyphs() {
-                let pixels = self.glyph(&RecordedGlyph {
-                    snapshot_indices: None,
-                    face: glyph.face.clone(),
-                    bold: false,
-                    revision_alpha: glyph.revision_alpha,
-                    code: glyph.code,
-                    position: glyph.position,
-                    size: glyph.size,
-                    colors: glyph.colors,
-                    gradient: glyph.gradient,
-                    outline: glyph.outline,
-                    delay_ms: 0,
-                    elapsed_ms: 0,
-                    duration_ms: 0,
-                    active: false,
-                    shown: true,
-                    opacity: 255,
-                    reveal_mode: 0,
-                    reveal_width: glyph.size + 4,
-                })?;
-                let mut draw = DrawState::default();
-                draw.words[4] = pixels.width();
-                draw.words[5] = pixels.height();
-                draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
-                draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
-                draw.words[10] = glyph.layer;
-                parent.children.insert(
-                    parent.children.len() as u16,
-                    SceneObject {
-                        image: Some(ObjectImage {
-                            filter: None,
-                            name: Vec::new(),
-                            pixels,
-                            alpha: true,
-                            surface: false,
-                        }),
-                        draw: Some(draw),
-                        flags: 1,
-                        ..SceneObject::default()
-                    },
-                );
+            (0x21u8, slot as u8, origin, texture_mode).hash(&mut h);
+            match &group.secondary_image {
+                None => 0u8.hash(&mut h),
+                Some(img) => (
+                    1u8,
+                    img.filter,
+                    img.name.as_slice(),
+                    img.pixels.cache_key(),
+                    img.alpha,
+                    img.surface,
+                )
+                    .hash(&mut h),
             }
-            objects.push(parent);
+            for glyph in attached {
+                (
+                    0x22u8,
+                    glyph.face.as_ref(),
+                    glyph.revision_alpha,
+                    glyph.code,
+                    glyph.position,
+                    glyph.size,
+                    glyph.colors,
+                    glyph.gradient,
+                    glyph.outline,
+                    glyph.layer,
+                )
+                    .hash(&mut h);
+            }
+            0x2fu8.hash(&mut h);
         }
-        Ok(objects)
+
+        Some(h.finish128())
+    }
+}
+
+impl GlyphRasterizer for FontRenderer {
+    fn rasterize_glyph(&mut self, glyph: &RecordedGlyph) -> Result<RgbaImage, FormatError> {
+        self.glyph(glyph)
     }
 }
 
@@ -646,7 +769,7 @@ mod tests {
         let unsupported = library.register_unicode("😀").unwrap();
         drop(library);
         let library = shared;
-        use cmvs_core::message::GlyphMetrics;
+        use cmvs_core::render::message::GlyphMetrics;
         let metrics = PreviewMetrics(library.clone(), TextEncoding::Gbk);
         assert_eq!(
             metrics.display_face_name(&handle).unwrap(),
@@ -668,7 +791,7 @@ mod tests {
     fn recorded_glyph(code: u16) -> RecordedGlyph {
         RecordedGlyph {
             snapshot_indices: None,
-            face: Arc::from(cmvs_core::settings::DEFAULT_FONT_FACE),
+            face: Arc::from(cmvs_core::host::settings::DEFAULT_FONT_FACE),
             bold: false,
             revision_alpha: false,
             code,
@@ -738,7 +861,7 @@ mod tests {
         assert_eq!(font.glyph(&glyph).unwrap(), normal);
         assert_eq!(font.cache.len(), 3);
         let metrics = font.metrics();
-        let face = cmvs_core::settings::DEFAULT_FONT_FACE;
+        let face = cmvs_core::host::settings::DEFAULT_FONT_FACE;
         let width = metrics.ink_width(face, 65, 27).unwrap();
         assert_eq!(
             metrics.styled_ink_width(face, 65, 27, true).unwrap(),
@@ -847,6 +970,374 @@ mod tests {
     fn invalid_font_data_or_collection_face_is_an_error() {
         assert!(FontRenderer::from_bytes(vec![], 0).is_err());
         assert!(FontRenderer::from_bytes(b"ttcf".to_vec(), 1).is_err());
+    }
+
+    #[test]
+    fn library_mutations_invalidate_glyph_cache_and_scene_cache() {
+        use crate::font_library::tests::minimal_ttf_with_box;
+        use cmvs_core::{
+            host::input::ActionInput,
+            profile::Semantics,
+            vm::dispatch::{self, Hosts},
+            vm::machine::{Machine, Step},
+        };
+
+        let root =
+            std::env::temp_dir().join(format!("cmvs-font-invalidate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Default font renders a small 120x120 box for 'A' and lacks 'B'.
+        let default_bytes = minimal_ttf_with_box("Default", 0x0041, 120, 120);
+        let mut font = FontRenderer::from_bytes(default_bytes, 0).unwrap();
+        let custom_ttf = minimal_ttf_with_box("CustomFace", 0x0041, 500, 700);
+        let custom_path = root.join("custom.ttf");
+        std::fs::write(&custom_path, &custom_ttf).unwrap();
+        let mut expected_custom_font = FontRenderer::from_bytes(custom_ttf, 0).unwrap();
+
+        let fallback_ttf = minimal_ttf_with_box("FallbackFace", 0x0042, 500, 700);
+        let mut expected_fallback_font = FontRenderer::from_bytes(fallback_ttf.clone(), 0).unwrap();
+
+        let ink = |image: &RgbaImage| -> u64 {
+            image
+                .pixels()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| u64::from(p[3]))
+                .sum()
+        };
+
+        // Warm both `font` and a clone sharing its `FontLibrary` before `CustomFace` is imported:
+        // missing face falls back to Default and caches the 120x120 glyph under `"CustomFace"`.
+        let mut custom_glyph = recorded_glyph(u16::from(b'A'));
+        custom_glyph.face = Arc::from(&b"CustomFace"[..]);
+        let before = font.rasterize_glyph(&custom_glyph).unwrap();
+        let mut clone = font.clone();
+        assert_eq!(clone.rasterize_glyph(&custom_glyph).unwrap(), before);
+
+        // Also warm `scene_cache` for a visible message using `CustomFace` via `0x2157`.
+        let mut messages = MessageHost::default();
+        messages.set_glyph_metrics(font.metrics());
+        messages.set_record_output(true);
+        let mut code = Vec::new();
+        push_call(&mut code, 0x215d, &[720, 1280, 120, 400, 0, 0, 7, 0]);
+        push_call(&mut code, 0x214e, &[1, 0]);
+        push_call(&mut code, 0x2106, &[0, 7]);
+        push_call(&mut code, 0x2152, &[11, u32::MAX, 0]);
+        let script = ps2_script(&code, b"CustomFace\0A\0");
+        let mut vm = Machine::new(&script).unwrap();
+        for _ in 0..3 {
+            while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            let mut hosts = Hosts {
+                messages: Some(&mut messages),
+                ..Hosts::default()
+            };
+            dispatch::run(Semantics::Root, &mut vm, &mut hosts).unwrap();
+        }
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let mut input = ActionInput::default();
+        messages
+            .try_record_output(&mut vm, &mut input, Default::default())
+            .unwrap()
+            .unwrap();
+        messages.advance_frame(1000);
+        let scene_before = font.prepare_objects(&messages).unwrap();
+        assert_eq!(clone.prepare_objects(&messages).unwrap(), scene_before);
+
+        // Set user directory + import `CustomFace`: both `font` and `clone` must invalidate
+        // both `scene_cache` and `GlyphCache`.
+        font.set_user_directory(&root).unwrap();
+        let imported_name = font.import_font(&custom_path, 0).unwrap();
+        assert_eq!(imported_name, b"CustomFace");
+
+        let expected_a = expected_custom_font
+            .rasterize_glyph(&recorded_glyph(u16::from(b'A')))
+            .unwrap();
+        assert!(ink(&expected_a) > ink(&before));
+        assert_eq!(font.rasterize_glyph(&custom_glyph).unwrap(), expected_a);
+        assert_eq!(clone.rasterize_glyph(&custom_glyph).unwrap(), expected_a);
+
+        let expected_scene = expected_custom_font.prepare_objects(&messages).unwrap();
+        let scene_after = font.prepare_objects(&messages).unwrap();
+        assert_ne!(scene_after, scene_before);
+        assert_eq!(scene_after, expected_scene);
+        let clone_scene_after = clone.prepare_objects(&messages).unwrap();
+        assert_eq!(clone_scene_after, scene_after);
+
+        // Now check `add_fallback` and `set_user_directory` invalidation too.
+        let b_glyph = recorded_glyph(u16::from(b'B'));
+        assert!(font.rasterize_glyph(&b_glyph).is_err());
+        assert!(clone.rasterize_glyph(&b_glyph).is_err());
+
+        font.add_fallback(fallback_ttf, 0).unwrap();
+        let expected_b = expected_fallback_font.rasterize_glyph(&b_glyph).unwrap();
+        assert!(ink(&expected_b) > 0);
+        assert_eq!(font.rasterize_glyph(&b_glyph).unwrap(), expected_b);
+        assert_eq!(clone.rasterize_glyph(&b_glyph).unwrap(), expected_b);
+
+        // Pre-warm a fresh renderer with the unavailable `CustomFace` (cached as Default),
+        // then call `set_user_directory(&root)` where `CustomFace` was already imported above.
+        let mut late_user_dir =
+            FontRenderer::from_bytes(minimal_ttf_with_box("Default", 0x0041, 120, 120), 0).unwrap();
+        assert_eq!(
+            late_user_dir.rasterize_glyph(&custom_glyph).unwrap(),
+            before
+        );
+        late_user_dir.set_user_directory(&root).unwrap();
+        // Fail an actual read of the imported face while leaving its alias intact.
+        let stored = std::fs::read_dir(root.join("font-faces"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("CMVS-F-")
+            })
+            .unwrap();
+        let backup = stored.with_extension("saved");
+        std::fs::rename(&stored, &backup).unwrap();
+        std::fs::create_dir(&stored).unwrap();
+        assert_eq!(
+            late_user_dir.prepare_objects(&messages).unwrap(),
+            scene_before
+        );
+        std::fs::remove_dir(&stored).unwrap();
+        std::fs::rename(backup, stored).unwrap();
+        assert_eq!(
+            late_user_dir.prepare_objects(&messages).unwrap(),
+            expected_scene
+        );
+        assert_eq!(
+            late_user_dir.rasterize_glyph(&custom_glyph).unwrap(),
+            expected_a
+        );
+
+        // Both directories resolve the same family name to distinct stored font files.
+        let other = root.join("other");
+        font.set_user_directory(&other).unwrap();
+        std::fs::write(
+            &custom_path,
+            minimal_ttf_with_box("CustomFace", 0x41, 320, 480),
+        )
+        .unwrap();
+        assert_eq!(font.import_font(&custom_path, 0).unwrap(), b"CustomFace");
+        let expected_other = font.rasterize_glyph(&custom_glyph).unwrap();
+        assert_ne!(expected_other, expected_a);
+        late_user_dir.set_user_directory(&other).unwrap();
+        assert_eq!(
+            late_user_dir.rasterize_glyph(&custom_glyph).unwrap(),
+            expected_other
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn ps2_script(code: &[u8], text: &[u8]) -> cmvs_core::format::ps3::Script {
+        let mut payload = 0u32.to_le_bytes().to_vec();
+        payload.extend_from_slice(code);
+        payload.extend_from_slice(text);
+        let mut raw = b"PS2A".to_vec();
+        for n in [
+            48,
+            0,
+            0,
+            1,
+            code.len() as u32,
+            0,
+            text.len() as u32,
+            0,
+            0,
+            payload.len() as u32,
+            0,
+        ] {
+            raw.extend(n.to_le_bytes());
+        }
+        raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        cmvs_core::format::ps3::Script::decode(&raw).unwrap()
+    }
+
+    fn push_call(code: &mut Vec<u8>, command: u16, words: &[u32]) {
+        for &word in words {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(word.to_le_bytes());
+        }
+        code.extend(command.to_le_bytes());
+    }
+
+    #[test]
+    fn idle_glyph_scene_cache_hits_and_invalidates_on_reveal_opacity_and_visibility_changes() {
+        use cmvs_core::{
+            host::input::ActionInput,
+            host::settings::TextOutputSettings,
+            profile::Semantics,
+            vm::dispatch::{self, Hosts},
+            vm::machine::{Machine, Step},
+        };
+
+        let mut font =
+            FontRenderer::from_bytes(crate::font_library::tests::minimal_ttf("BenchFont"), 0)
+                .unwrap();
+        let mut messages = MessageHost::default();
+        messages.set_glyph_metrics(font.metrics());
+        messages.set_record_output(true);
+
+        // Script:
+        // 1) 0x215d create window 0 bound to text 7
+        // 2) 0x214e show window 0 (shown = 1)
+        // 3) 0x2152 output text string 0 ("AA\0") under reveal_mode 2 (width wipe)
+        // 4) 0x214a clear window 0
+        // 5) 0x2152 output text string 0 ("AA\0") under reveal_mode 1 (opacity fade)
+        // 6) 0x214e hide window 0 (shown = 0)
+        // 7) 0x214e show window 0 (shown = 1)
+        let mut code = Vec::new();
+        push_call(&mut code, 0x215d, &[720, 1280, 120, 400, 0, 0, 7, 0]);
+        push_call(&mut code, 0x214e, &[1, 0]);
+        push_call(&mut code, 0x2152, &[0, u32::MAX, 0]);
+        push_call(&mut code, 0x214a, &[0]);
+        push_call(&mut code, 0x2152, &[0, u32::MAX, 0]);
+        push_call(&mut code, 0x214e, &[0, 0]);
+        push_call(&mut code, 0x214e, &[1, 0]);
+        let script = ps2_script(&code, b"AA\0");
+        let mut vm = Machine::new(&script).unwrap();
+
+        let step_window_cmd = |vm: &mut Machine, messages: &mut MessageHost| {
+            while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            let mut hosts = Hosts {
+                messages: Some(messages),
+                ..Hosts::default()
+            };
+            let flow = dispatch::run(Semantics::Root, vm, &mut hosts).unwrap();
+            assert!(flow.is_some());
+        };
+        let step_record_text = |vm: &mut Machine, messages: &mut MessageHost| {
+            if vm.pending_system().is_none() {
+                while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            }
+            let mut input = ActionInput::default();
+            messages
+                .try_record_output(vm, &mut input, Default::default())
+                .unwrap()
+                .unwrap();
+        };
+
+        // 1) Create window 0 -> text 7 and show window 0.
+        step_window_cmd(&mut vm, &mut messages);
+        step_window_cmd(&mut vm, &mut messages);
+
+        // Configure width-wipe reveal (mode 2, duration index 1 = 200ms) and emit "AA".
+        messages.set_text_settings(TextOutputSettings {
+            bold: false,
+            revision_alpha: false,
+            speed: 3,
+            outline: 1,
+            reveal_mode: 2,
+            reveal_duration: 1,
+        });
+        step_record_text(&mut vm, &mut messages);
+
+        // Advance 50ms: first glyph is partially revealed by width.
+        messages.advance_frame(50);
+        let frame_w1 = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 1);
+        assert_eq!(font.scene_cache_hits, 0);
+        let width_1 = frame_w1[0].children[&0]
+            .draw
+            .as_ref()
+            .unwrap()
+            .source_rect()[2];
+        assert!(width_1 > 0 && width_1 < 31);
+
+        // Stationary repeat frame reuses the cached SceneObject tree without rebuilding!
+        let frame_w1_hit = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 1);
+        assert_eq!(font.scene_cache_hits, 1);
+        assert_eq!(frame_w1_hit, frame_w1);
+        assert!(std::ptr::eq(
+            frame_w1_hit[0].children[&0]
+                .image
+                .as_ref()
+                .unwrap()
+                .pixels
+                .pixels(),
+            frame_w1[0].children[&0]
+                .image
+                .as_ref()
+                .unwrap()
+                .pixels
+                .pixels()
+        ));
+
+        // Advance 100ms: `reveal_width` increases and second glyph becomes shown -> invalidates!
+        messages.advance_frame(100);
+        let frame_w2 = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 2);
+        let width_2 = frame_w2[0].children[&0]
+            .draw
+            .as_ref()
+            .unwrap()
+            .source_rect()[2];
+        assert!(width_2 > width_1);
+
+        // Finish reveal, complete 0x2152, and simulate 5 stationary wait frames at 60 fps -> 5 hits!
+        messages.advance_frame(1000);
+        step_record_text(&mut vm, &mut messages);
+        let settled = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 3);
+        let hits_before = font.scene_cache_hits;
+        for _ in 0..5 {
+            assert_eq!(font.prepare_objects(&messages).unwrap(), settled);
+        }
+        assert_eq!(font.glyph_build_calls, 3);
+        assert_eq!(font.scene_cache_hits, hits_before + 5);
+
+        // Clear window and emit "AA" under opacity-fade reveal (mode 1, duration index 1 = 200ms).
+        step_window_cmd(&mut vm, &mut messages);
+        messages.set_text_settings(TextOutputSettings {
+            bold: false,
+            revision_alpha: false,
+            speed: 3,
+            outline: 1,
+            reveal_mode: 1,
+            reveal_duration: 1,
+        });
+        step_record_text(&mut vm, &mut messages);
+
+        messages.advance_frame(50);
+        let fade_1 = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 4);
+        let opacity_1 = fade_1[0].children[&0].draw.as_ref().unwrap().opacity();
+        assert!(opacity_1 > 0 && opacity_1 < 255);
+
+        // Advancing opacity invalidates the cache and updates the glyph SceneObject opacity.
+        messages.advance_frame(80);
+        let fade_2 = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 5);
+        let opacity_2 = fade_2[0].children[&0].draw.as_ref().unwrap().opacity();
+        assert!(opacity_2 > opacity_1);
+
+        // Visibility toggle (0x214e hide -> empty glyphs, 0x214e show -> restored glyphs) invalidates!
+        messages.advance_frame(1000);
+        step_record_text(&mut vm, &mut messages);
+        let visible_objs = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 6);
+        assert!(!visible_objs.is_empty());
+
+        step_window_cmd(&mut vm, &mut messages); // 0x214e hide
+        let hidden_objs = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 7);
+        assert!(hidden_objs.is_empty());
+
+        // Repeated hidden frame also hits the cache.
+        assert!(font.prepare_objects(&messages).unwrap().is_empty());
+        assert_eq!(font.glyph_build_calls, 7);
+
+        step_window_cmd(&mut vm, &mut messages); // 0x214e show
+        let reshown_objs = font.prepare_objects(&messages).unwrap();
+        assert_eq!(font.glyph_build_calls, 8);
+        assert_eq!(reshown_objs, visible_objs);
     }
 }
 

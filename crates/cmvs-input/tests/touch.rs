@@ -1,4 +1,4 @@
-use cmvs_core::input::{ActionInput, KeyBindings};
+use cmvs_core::{host::input::ActionInput, host::input::KeyBindings};
 use cmvs_input::{TouchEvent, TouchInput, TouchPhase, Viewport};
 
 fn bindings() -> KeyBindings {

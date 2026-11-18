@@ -7,9 +7,10 @@ pub(crate) struct PcmWave {
     end: usize,
     pub channels: u16,
     pub rate: u32,
+    pub pcm_bytes: u32,
 }
 impl PcmWave {
-    pub fn new(bytes: Arc<[u8]>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(bytes: Arc<[u8]>) -> Result<Self, Box<dyn Error + Send + Sync>> {
         if bytes.len() > cmvs_core::MAX_PAYLOAD
             || bytes.len() < 12
             || &bytes[..4] != b"RIFF"
@@ -80,6 +81,7 @@ impl PcmWave {
             end,
             channels,
             rate,
+            pcm_bytes: (end - at) as u32,
         })
     }
     pub fn packet(&mut self) -> Option<Vec<f32>> {
@@ -122,6 +124,7 @@ mod tests {
     #[test]
     fn pcm_samples_loop_restart_and_eof() {
         let mut p = AudioProgram::new(fixture(), None, true).unwrap();
+        assert_eq!(p.primary_pcm_bytes().unwrap(), 12);
         assert_eq!((p.channels(), p.sample_rate()), (2, 44100));
         let expected = [-1.0, 32767.0 / 32768.0, 0.0, 0.5, -0.5, 0.0];
         for _ in 0..3 {
@@ -162,7 +165,7 @@ mod tests {
         assert!(count.is_multiple_of(usize::from(p.channels())));
         #[cfg(feature = "mixer")]
         {
-            use cmvs_core::audio::AudioBackend;
+            use cmvs_core::host::audio::AudioBackend;
             let path = std::path::PathBuf::from(std::env::var_os("CMVS_TEST_WAV").unwrap());
             let (mut audio, mut output) =
                 crate::NativeAudio::pull(path.parent().unwrap().parent().unwrap(), 48000, 2)

@@ -96,6 +96,9 @@ pub(super) fn rewrite<R: Read + Seek, W: Write + Seek>(
     {
         return Err(FormatError("CPZ replacement index or size exceeds bounds").into());
     }
+    if matches!(index, ArchiveIndex::Cpz1(_) | ArchiveIndex::Cpz2(_)) {
+        return Err(FormatError("CPZ1/CPZ2 write-back is not supported").into());
+    }
     // Revalidate the supplied source with the selected mode/per-archive parameters.
     let fresh = match index {
         ArchiveIndex::Cpz5(index) => ArchiveIndex::read_with_cpz5_mode(source, index.mode)?,
@@ -133,13 +136,13 @@ pub(super) fn rewrite<R: Read + Seek, W: Write + Seek>(
             index.layout.file_index_bytes,
             index.layout.encryption_mode == 1,
         ),
-        ArchiveIndex::Cpz3(_) => unreachable!(),
+        ArchiveIndex::Cpz1(_) | ArchiveIndex::Cpz2(_) | ArchiveIndex::Cpz3(_) => unreachable!(),
     };
     let data_offset = match &fresh {
         ArchiveIndex::Cpz5(index) => index.layout.data_offset,
         ArchiveIndex::Cpz6(index) => index.layout.data_offset,
         ArchiveIndex::Cpz7(index) => index.layout.data_offset,
-        ArchiveIndex::Cpz3(_) => unreachable!(),
+        ArchiveIndex::Cpz1(_) | ArchiveIndex::Cpz2(_) | ArchiveIndex::Cpz3(_) => unreachable!(),
     };
     source.rewind()?;
     let mut header = vec![0; header_size];

@@ -1,7 +1,11 @@
-//! Bounded JBP1 decoder for PB3B types 2/3; addresses refer to the documented cmvs64.exe hash.
-//! 0x1400a0ad0 reads the header, 0x1400b4020 the trees, streams and MCU layout,
-//! 0x1400b3c80 dequantizes and runs the scalar integer IDCT, and the 768-byte table at
-//! 0x1400e47b0 clamps the color conversion. Entropy coding is shared with JBPD.
+//! JBP1 image decoding used by PB3B image types 2 and 3.
+//!
+//! Use [`crate::pb3::decode`] for a complete PB3B resource. This module exposes the
+//! underlying bounded decoder; its entropy coding is shared with [`crate::jbpd`].
+
+// Hash-bound decoder: 0x1400a0ad0 (header), 0x1400b4020 (trees, streams, MCU
+// layout), 0x1400b3c80 (dequantization and integer IDCT), and the 768-byte table
+// at 0x1400e47b0 (color clamp).
 use crate::{
     FormatError, MAX_PAYLOAD,
     jbpd::{Bits, Huffman, ORDER, Tree, word},

@@ -35,7 +35,6 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 合成测试覆盖字符分配、混合编码、半角字符、图片名称优先级、RGB/RGBA 像素及 CPZ7 加密封包。实际补丁已完成 UTF-8/GBK 转换；全部脚本文本与源补丁对照通过，188 张图片逐像素回读一致，原版 11 组封包密钥保持不变。桌面检查覆盖中文标题菜单、剧情文字及原生音频初始化，用户实测确认正常；完整路线及原版存档互操作未验证。
 
 ```sh
-python3 -m unittest discover -s tools/fan_patch/realive -p 'test_*.py'
-cargo test --offline --locked --manifest-path tools/fan_patch/realive/Cargo.toml \
-  --target-dir target/fan-patch-realive
+python3 -I tools/fan_patch/realive/test_convert_realive_patch.py
+cargo test --offline --locked -p cmvs-patch realive
 ```

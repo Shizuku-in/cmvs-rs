@@ -6,12 +6,15 @@ use android_activity::{
 };
 use cmvs_audio::{HostAudioControl, NativeAudio};
 use cmvs_core::{
-    input::KeyBindings,
-    platform::resolve_under,
-    profile::Registry,
-    runner::{Startup, StartupEvent, load_start},
+    host::filesystem::resolve_under, host::input::KeyBindings, runtime::FrameBudget,
+    runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent,
+    runtime::SaveStorage,
 };
 use cmvs_font::font::FontRenderer;
+use cmvs_host::{
+    AndroidHostFs, EncodingPolicy, GameBootstrap, GpuTarget, KeyBindingPolicy, SessionConfig,
+    compose_cpu_frame, with_gpu_target,
+};
 use cmvs_input::{TouchEvent, TouchInput, TouchPhase, Viewport};
 use cmvs_native::AndroidWindow;
 use cmvs_wgpu::{GpuFrame, Presenter, Renderer, wgpu};
@@ -25,7 +28,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const FRAME_TIME: Duration = Duration::from_millis(16);
 struct Graphics {
     // Drop the surface before its owning native window.
@@ -36,10 +39,10 @@ struct Graphics {
     instance: wgpu::Instance,
     window: Arc<AndroidWindow>,
 }
-struct Player<'a> {
+struct Player {
     audio_control: HostAudioControl,
     graphics: Option<Graphics>,
-    startup: Startup<'a>,
+    startup: Runtime,
     backend: MobileBackend,
     touch: TouchInput,
     bindings: KeyBindings,
@@ -47,16 +50,17 @@ struct Player<'a> {
     focused: bool,
     next_frame: Instant,
     last_frame: Instant,
-    input_due: bool,
+    driver: FrameDriver,
     draw_ready: bool,
     exit: bool,
 }
-impl Player<'_> {
+impl Player {
     fn active(&self) -> bool {
         self.resumed && self.focused && self.graphics.is_some()
     }
     fn sync_input(&mut self) {
         let active = self.active();
+        self.driver.suspend();
         self.audio_control.set_active(active);
         self.touch.focus(active, self.startup.input_mut());
         self.startup.set_focused(active);
@@ -64,6 +68,7 @@ impl Player<'_> {
         self.last_frame = self.next_frame;
     }
     fn release_surface(&mut self) {
+        self.driver.suspend();
         self.audio_control.set_active(false);
         self.touch.focus(false, self.startup.input_mut());
         self.startup.set_focused(false);
@@ -105,30 +110,31 @@ impl Player<'_> {
         self.sync_input();
         Ok(())
     }
+    fn render_software(&self) -> Result<cmvs_core::render::raster::RgbaImage> {
+        let mut font = self.backend.font.borrow_mut();
+        compose_cpu_frame(
+            &self.startup,
+            Some(&mut *font),
+            self.backend.display.render_mode == 1,
+        )
+    }
     fn render_game(&mut self) -> Result<Arc<GpuFrame>> {
         let graphics = self.graphics.as_mut().ok_or("no graphics device")?;
-        if let Some(image) = self.startup.movie_frame() {
-            return Ok(Arc::new(graphics.renderer.render_image(
-                image,
-                self.startup.screen_size(),
-                self.backend.display.render_mode == 1,
-            )?));
-        }
-        let objects = self
-            .backend
-            .font
-            .borrow_mut()
-            .prepare_objects(self.startup.messages())?;
-        let mut additional: Vec<_> = objects.iter().collect();
-        additional.extend(self.startup.messages().visible_window_objects());
-        let frame = cmvs_core::scene_render::prepare_scene(
-            self.startup.scene(),
-            Some(self.startup.camera()),
-            &additional,
-            self.startup.screen_size()[0],
-            self.startup.screen_size()[1],
+        let mut font = self.backend.font.borrow_mut();
+        let frame = with_gpu_target(
+            &self.startup,
+            Some(&mut *font),
+            self.backend.display.render_mode == 1,
+            |target| match target {
+                GpuTarget::Movie {
+                    image,
+                    size,
+                    linear,
+                } => graphics.renderer.render_image(image, size, linear),
+                GpuTarget::Scene(frame) => graphics.renderer.render(&frame),
+            },
         )?;
-        Ok(Arc::new(graphics.renderer.render(&frame)?))
+        Ok(Arc::new(frame))
     }
     fn redraw(&mut self) -> Result<()> {
         if self.graphics.is_none() {
@@ -165,7 +171,7 @@ impl Player<'_> {
         Ok(())
     }
     fn execute(&mut self) -> Result<()> {
-        if self.input_due {
+        if self.driver.needs_input() {
             let size = self
                 .graphics
                 .as_ref()
@@ -175,50 +181,58 @@ impl Player<'_> {
             if let Some(viewport) =
                 Viewport::for_canvas(self.startup.screen_size(), size, self.backend.mode())
             {
-                self.touch
-                    .frame(&self.bindings, viewport, self.startup.input_mut());
-                self.input_due = false;
+                self.driver.sample_input(self.startup.input_mut(), |input| {
+                    self.touch.frame(&self.bindings, viewport, input);
+                });
             } else {
                 self.next_frame = Instant::now() + FRAME_TIME;
                 return Ok(());
             }
         }
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(8) {
-            match self.startup.tick(&mut self.backend)? {
-                StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
-                StartupEvent::Quit => {
-                    self.exit = true;
-                    return Ok(());
-                }
-                StartupEvent::Yield => {
-                    self.input_due = true;
-                    if self.backend.font_pending {
-                        // Keep the last canvas while the asynchronous modal dialog
-                        // runs, and continue polling Android lifecycle events.
-                        self.last_frame = Instant::now();
-                        self.next_frame = self.last_frame + FRAME_TIME;
-                        return Ok(());
-                    }
-                    let now = Instant::now();
-                    let delta = now
-                        .duration_since(self.last_frame)
-                        .as_millis()
-                        .min(u128::from(u32::MAX)) as u32;
-                    self.last_frame = now;
-                    self.startup.advance_decoded_frame(delta)?;
-                    self.draw_ready = true;
-                    self.redraw()?;
-                    self.next_frame = Instant::now() + FRAME_TIME;
-                    return Ok(());
-                }
-                StartupEvent::Inactive => {
+        match self.driver.run_slice(
+            &mut self.startup,
+            &mut FrameBudget::time(Duration::from_millis(8)),
+            |runtime| runtime.tick(&mut self.backend),
+        )? {
+            FrameOutcome::Stopped(RuntimeEvent::Quit) => {
+                self.exit = true;
+                return Ok(());
+            }
+            FrameOutcome::Yield => {
+                if self.backend.font_pending {
+                    self.driver.skip_frame();
+                    // Keep the last canvas while the asynchronous modal dialog
+                    // runs, and continue polling Android lifecycle events.
                     self.last_frame = Instant::now();
                     self.next_frame = self.last_frame + FRAME_TIME;
                     return Ok(());
                 }
-                event => return Err(format!("game stopped: {event:?}").into()),
+                let now = Instant::now();
+                let delta = now
+                    .duration_since(self.last_frame)
+                    .as_millis()
+                    .min(u128::from(u32::MAX)) as u32;
+                self.last_frame = now;
+                self.driver.finish_frame(&mut self.startup, delta)?;
+                self.draw_ready = true;
+                self.redraw()?;
+                if self.startup.capture_due() {
+                    let captured = match self.graphics.as_ref().and_then(|g| g.frame.as_ref()) {
+                        Some(frame) => frame.read()?,
+                        None => self.render_software()?,
+                    };
+                    self.startup.supply_capture(captured)?;
+                }
+                self.next_frame = Instant::now() + FRAME_TIME;
+                return Ok(());
             }
+            FrameOutcome::Inactive => {
+                self.last_frame = Instant::now();
+                self.next_frame = self.last_frame + FRAME_TIME;
+                return Ok(());
+            }
+            FrameOutcome::Stopped(event) => return Err(format!("game stopped: {event:?}").into()),
+            FrameOutcome::BudgetExhausted => {}
         }
         self.next_frame = Instant::now();
         Ok(())
@@ -336,55 +350,48 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         config.next().ok_or("no font selected")?.as_bytes(),
     )?;
     let face = config.next().ok_or("no font collection index")?.parse()?;
-    let font = Rc::new(RefCell::new(FontRenderer::read(&font_path, face)?));
-    let game = Registry::builtin().identify_game(&root, None)?;
-    let record = game
+    let fs = Arc::new(AndroidHostFs);
+    let bootstrap = GameBootstrap::load(fs, &root, None, EncodingPolicy::AutoDefaultShiftJis)?;
+    let record = bootstrap
+        .game
         .selection
         .record
         .ok_or("game does not have a registered identity")?;
     log::info!(
         "Loading game {} with profile {}",
         record.game,
-        game.selection.profile.id
+        bootstrap.game.selection.profile.id
     );
+    let encoding = bootstrap.encoding;
     let user = directory.join("users").join(&record.game);
-    let script = load_start(&root, &game.files)?;
-    let mut startup = Startup::new(&script, &root, &game, 0)?;
-    // Match the desktop host's existing command policy; identity and unsupported
-    // commands still pass through the core's normal validation gates.
-    startup.set_block_unreviewed(false);
-    startup.set_block_presumed(false);
-    startup.set_user_data_directory(&user)?;
+    let font = Rc::new(RefCell::new(
+        FontRenderer::read(&font_path, face)?.with_text_encoding(encoding),
+    ));
+    let (mut startup, bindings) = bootstrap.open_runtime(
+        Some(&*font.borrow()),
+        SessionConfig {
+            saves: SaveStorage::UserDirectory(user.clone()),
+            user_font_dir: Some(user),
+            decoded_image_cache: Some(128 << 20),
+            key_bindings: KeyBindingPolicy::Required,
+            ..SessionConfig::default()
+        },
+    )?;
     let audio = NativeAudio::new(&root)?;
     let audio_control = audio.host_control();
     audio_control.set_active(false);
     startup.set_audio_backend(Box::new(audio))?;
     log::info!("Native Vorbis audio enabled");
-    startup.set_decode_movie_frames(true);
-    startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory::default()));
-    startup.set_scene_prefetch(|| {});
-    startup.set_decoded_image_cache(128 << 20);
-    startup.set_record_text(true);
-    startup.set_glyph_metrics(font.borrow().metrics());
-    font.borrow().set_user_directory(&user)?;
-    if !font.borrow().has_face(startup.settings().font_face()) {
-        startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
-    }
-    startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
-    let mut keys = String::new();
-    File::open(root.join("key.cfg"))?
-        .take(65537)
-        .read_to_string(&mut keys)?;
-    let bindings = KeyBindings::parse(&keys)?;
     let mut backend = MobileBackend::new(
         app.clone(),
         directory,
         font,
+        encoding,
         startup.display_preferences(),
         startup.screen_size(),
     );
     backend.display.render_mode =
-        cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;
+        cmvs_core::host::platform::supported_render_mode(&backend, backend.display.render_mode)?;
     let mut player = Player {
         audio_control,
         graphics: None,
@@ -396,7 +403,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         focused: false,
         next_frame: Instant::now(),
         last_frame: Instant::now(),
-        input_due: true,
+        driver: FrameDriver::default(),
         draw_ready: false,
         exit: false,
     };

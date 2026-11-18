@@ -2,7 +2,7 @@
 //! not an IR interpreter: hashes bind the offline evidence, not a proof of the lifter.
 use super::{EngineProfile, ProfileError, text};
 use crate::{
-    digest::{Sha256, sha256, to_hex},
+    digest::{sha256, to_hex},
     exe::{Arch, Case},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,45 +16,37 @@ pub struct ContractRules {
 }
 
 impl ContractRules {
-    /// Recompute active rules from the actual bundled sources. Editing any dependency
-    /// invalidates the registered certificates until extraction and review are repeated.
-    pub fn builtin() -> Self {
-        let mut extractor = Sha256::new();
-        for (name, bytes) in [
-            (
-                "contract_extract.py",
-                include_bytes!("../../../../tools/contract_extract.py").as_slice(),
-            ),
-            (
-                "contract_x64.py",
-                include_bytes!("../../../../tools/contract_x64.py").as_slice(),
-            ),
-            (
-                "command_contract.py",
-                include_bytes!("../../../../tools/command_contract.py").as_slice(),
-            ),
-            (
-                "profile_compare.py",
-                include_bytes!("../../../../tools/profile_compare.py").as_slice(),
-            ),
-        ] {
-            extractor.update(name.as_bytes());
-            extractor.update(&[0]);
-            extractor.update(bytes);
-            extractor.update(&[0]);
+    /// Parses a declarative `contract_rules.txt` file containing the four pinned SHA-256 digests.
+    pub fn parse(text: &str) -> Result<Self, ProfileError> {
+        let mut lines = text::Lines::new(text);
+        let (line, words) = lines.expect("extractor", 1)?;
+        let extractor = text::sha(line, words[0])?;
+        let (line, words) = lines.expect("context", 1)?;
+        let context = text::sha(line, words[0])?;
+        let (line, words) = lines.expect("mappings", 1)?;
+        let mappings = text::sha(line, words[0])?;
+        let (line, words) = lines.expect("summaries", 1)?;
+        let summaries = text::sha(line, words[0])?;
+        if let Some((line, _)) = lines.next() {
+            return Err(text::at(line, "unexpected trailing contract rule line"));
         }
-        Self {
-            extractor: extractor.finish(),
-            context: sha256(include_bytes!(
-                "../../../../docs/games/chronoclock/contract-context.json"
-            )),
-            mappings: sha256(include_bytes!(
-                "../../../../docs/games/chronoclock/contract-mappings.json"
-            )),
-            summaries: sha256(include_bytes!(
-                "../../../../docs/games/chronoclock/contract-summaries.json"
-            )),
-        }
+        Ok(Self {
+            extractor,
+            context,
+            mappings,
+            summaries,
+        })
+    }
+
+    /// Canonical four-line `contract_rules.txt` representation.
+    pub fn to_text(&self) -> String {
+        format!(
+            "extractor {}\ncontext {}\nmappings {}\nsummaries {}\n",
+            to_hex(&self.extractor),
+            to_hex(&self.context),
+            to_hex(&self.mappings),
+            to_hex(&self.summaries),
+        )
     }
 }
 
@@ -81,7 +73,7 @@ pub struct ContractProof {
     pub summaries_used: Vec<String>,
 }
 
-const KEYS: &[&str] = &[
+const KEYS: [&str; 26] = [
     "arch",
     "opcode",
     "base-profile",
@@ -154,7 +146,7 @@ impl ContractProof {
         if words.get(1) != Some(&"v1") {
             return Err(text::at(line, "unknown contract proof version"));
         }
-        let v = text::fields(line, &words[2..], KEYS)?;
+        let v = text::fields(line, &words[2..], &KEYS)?;
         let deps = |value: &str| -> Result<Vec<String>, ProfileError> {
             if value == "-" {
                 return Ok(Vec::new());
@@ -264,17 +256,17 @@ impl ContractProof {
     }
 }
 
-pub(super) fn parse_catalog(
+pub(crate) fn parse_catalog(
     text: &str,
     active: &[ContractRules],
 ) -> Result<BTreeMap<[u8; 32], ContractProof>, ProfileError> {
     let mut proofs = BTreeMap::new();
     let mut revoked = BTreeSet::new();
-    for (line, words) in text
-        .lines()
-        .enumerate()
-        .map(|(i, l)| (i + 1, l.split_whitespace().collect::<Vec<_>>()))
-    {
+    let mut words = Vec::new();
+    for (index, raw_line) in text.lines().enumerate() {
+        let line = index + 1;
+        words.clear();
+        words.extend(raw_line.split_whitespace());
         if words.is_empty() || words[0].starts_with('#') {
             continue;
         }

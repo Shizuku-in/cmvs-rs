@@ -102,7 +102,7 @@ impl<'a> VmSnapshot<'a> {
         if active_pc_verified {
             let instructions = bytecode::decode_layout(
                 main_script.code(),
-                main_script.header.entry_pc,
+                main_script.header().entry_pc,
                 &main_script.labels(),
             )
             .map_err(|_| FormatError("snapshot main script bytecode layout is invalid"))?;

@@ -5,10 +5,9 @@
 | 字段 | 内容 |
 |---|---|
 | 游戏标识 | `hassaku` |
-| 本地样本目录 | `2010-12-24_HASSAKU` |
 | 英文名称 | Hatsukoi Sacrament |
 | 引擎 / 脚本自报版本 | `cmvs64[ver.1.94]` / `ps2[ver.1.00]` |
-| 发行版本与补丁 | 未确认；目录日期仅作为样本标签 |
+| 发行版本与补丁 | 未确认 |
 | 平台与架构 | Windows PC；x86 + x64 |
 | 文本编码 | Shift-JIS |
 | 引擎 profile | `cmvs-20101211`，基准 `cmvs-20160201` |
@@ -80,7 +79,7 @@ CPU 与共享 GPU 绘制命令现支持相应 2D 图像、纯色及继承子对�
 
 ```bash
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- \
-  "/run/media/gkouen/New Volume/Download/Purple Software/2010-12-24_HASSAKU" \
+  "<游戏目录>" \
   --encoding shift-jis --user-data-dir local/hassaku/play-user --audio native \
   --font /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 ```

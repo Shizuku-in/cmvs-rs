@@ -1,5 +1,4 @@
 mod audio;
-mod backend;
 mod boost;
 mod gpu;
 #[cfg(target_os = "horizon")]
@@ -15,27 +14,27 @@ mod sys;
 
 use cmvs_console::{
     ButtonMap, Console, Labels,
+    backend::{ConsoleBackend, ConsoleFrame},
     controls::{self, Controls},
-    encoding::{self, SystemFont},
-    error_screen, library, menu,
+    encoding::{self, SystemFont, UNCERTAIN_ENCODING_MESSAGE},
+    error_screen, format_tick_error, library, menu, millis,
 };
 use cmvs_core::{
-    input::KeyBindings,
-    profile::Registry,
-    raster::RgbaImage,
-    runner::{Startup, StartupEvent, load_start},
-    viewport::{Viewport, presentation_mode},
+    render::raster::RgbaImage, render::viewport::Viewport, render::viewport::presentation_mode,
+    runtime::FrameBudget, runtime::FrameOutcome, runtime::RuntimeEvent, runtime::SaveStorage,
 };
-use cmvs_font::font::FontRenderer;
+use cmvs_host::{
+    EncodingPolicy, GameBootstrap, GpuTarget, HostSession, KeyBindingPolicy, MovieConfig,
+    SessionConfig,
+};
 use cmvs_native::switch_button as button;
 use std::{
     error::Error,
-    io::{ErrorKind, Read},
     path::Path,
     time::{Duration, Instant},
 };
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const BASE: &str = "sdmc:/switch/cmvs-rs";
 const LOG_PATH: &str = "sdmc:/switch/cmvs-rs/error.log";
 /// `LOG_PATH` as the player sees it on the SD card.
@@ -93,46 +92,6 @@ fn decoded_cache_bytes(total_memory: u64) -> usize {
     }
 }
 
-fn millis(duration: Duration) -> u32 {
-    duration.as_millis().min(u128::from(u32::MAX)) as u32
-}
-
-/// `font.ttf` beside the program wins; otherwise the system's shared Japanese font.
-fn font_bytes(base: &Path) -> Result<Vec<u8>> {
-    match std::fs::read(base.join("font.ttf")) {
-        Ok(bytes) => Ok(bytes),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            Ok(sys::shared_font(false).ok_or("no font.ttf and no system shared font")?)
-        }
-        Err(error) => Err(error.into()),
-    }
-}
-
-/// `font.ttf` beside the program alone wins; otherwise the shared fonts the game's text needs,
-/// the first available one primary and the rest as fallbacks.
-fn game_font(base: &Path, encoding: cmvs_core::TextEncoding) -> Result<FontRenderer> {
-    let renderer = |bytes| -> Result<FontRenderer> {
-        Ok(FontRenderer::from_bytes(bytes, 0)?.with_text_encoding(encoding))
-    };
-    match std::fs::read(base.join("font.ttf")) {
-        Ok(bytes) => return renderer(bytes),
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    let mut fonts = encoding::system_fonts(encoding)
-        .iter()
-        .filter_map(|&font| sys::shared_font(font == SystemFont::SimplifiedChinese));
-    let font = renderer(
-        fonts
-            .next()
-            .ok_or("no font.ttf and no system shared font")?,
-    )?;
-    for bytes in fonts {
-        font.add_fallback(bytes, 0)?;
-    }
-    Ok(font)
-}
-
 /// How a game session ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ended {
@@ -142,44 +101,15 @@ enum Ended {
     Exit,
 }
 
-fn render_gpu(
-    startup: &Startup<'_>,
-    font: &mut FontRenderer,
-    gpu: &mut gpu::GpuRenderer,
-    linear: bool,
-) -> Result<()> {
-    let size = startup.screen_size();
-    if let Some(frame) = startup.movie_frame() {
-        return gpu.render_image(frame, size, linear);
-    }
-    let objects = font.prepare_objects(startup.messages())?;
-    let mut extra: Vec<_> = objects.iter().collect();
-    extra.extend(startup.messages().visible_window_objects());
-    let frame = cmvs_core::scene_render::prepare_scene(
-        startup.scene(),
-        Some(startup.camera()),
-        &extra,
-        size[0],
-        size[1],
-    )?;
-    gpu.render(&frame)
-}
-
-fn render(startup: &Startup<'_>, font: &mut FontRenderer) -> Result<RgbaImage> {
-    if let Some(frame) = startup.movie_frame() {
-        return Ok(frame.clone());
-    }
-    let objects = font.prepare_objects(startup.messages())?;
-    let mut extra: Vec<_> = objects.iter().collect();
-    extra.extend(startup.messages().visible_window_objects());
-    let size = startup.screen_size();
-    Ok(cmvs_core::scene_render::render_scene(
-        startup.scene(),
-        Some(startup.camera()),
-        &extra,
-        size[0],
-        size[1],
-    )?)
+fn render_gpu(session: &mut HostSession, gpu: &mut gpu::GpuRenderer, linear: bool) -> Result<()> {
+    session.with_gpu_target(linear, |target| match target {
+        GpuTarget::Movie {
+            image,
+            size,
+            linear,
+        } => gpu.render_image(image, size, linear),
+        GpuTarget::Scene(frame) => gpu.render(&frame),
+    })
 }
 
 /// Host-only crosshair; the engine screenshot readback never includes it.
@@ -207,66 +137,61 @@ fn run(
     let mut cpu_boost = boost::CpuBoost::default();
     cpu_boost.apply(load.wanted(true));
     let base = Path::new(BASE);
-    let game = Registry::builtin().identify_game(root, None)?;
-    let record = game.selection.record.ok_or("unregistered game")?;
-    let script = load_start(root, &game.files)?;
-    let encoding = cmvs_console::encoding::select(root, &game.files, &script)?;
-    let mut startup = Startup::new_with_encoding(&script, root, &game, 0, encoding)?;
+    let bootstrap = GameBootstrap::load(
+        std::sync::Arc::new(cmvs_console::ConsoleFs),
+        root,
+        None,
+        EncodingPolicy::AutoStrict(UNCERTAIN_ENCODING_MESSAGE),
+    )?;
+    let record = bootstrap.game.selection.record.ok_or("unregistered game")?;
+    let encoding = bootstrap.encoding;
     let user = base.join("users").join(&record.game);
-    startup.set_user_data_directory(&user)?;
-    startup.set_block_unreviewed(false);
-    startup.set_block_presumed(false);
-    let (audio, audio_thread) = audio::AudioThread::start(root)?;
-    let audio_control = audio.host_control();
-    startup.set_audio_backend(Box::new(audio))?;
-    startup.set_decode_movie_frames(true);
-    // Core 0 runs the VM and rendering, core 1 the audio thread.
-    startup.set_mgv_factory(Box::new(
-        cmvs_video::PrefetchTheoraFactory {
-            on_thread_start: || {
-                sys::prefer_core(2);
+    let font = encoding::load_game_font(
+        base,
+        encoding,
+        "no font.ttf and no system shared font",
+        |font| sys::shared_font(font == SystemFont::SimplifiedChinese),
+    )?;
+    let mut session = bootstrap.into_session(
+        font,
+        SessionConfig {
+            saves: SaveStorage::UserDirectory(user.clone()),
+            user_font_dir: Some(user),
+            // Core 0 runs the VM and rendering, core 1 the audio thread, core 2 prefetch/decode.
+            movie: MovieConfig::Prefetch {
+                budget_bytes: 192 << 20,
+                max_frames: 144,
+                on_thread_start: || {
+                    sys::prefer_core(2);
+                },
             },
-        }
-        .with_lookahead(192 << 20, 144),
-    ));
-    startup.set_scene_prefetch(|| {
-        sys::prefer_core(2);
-    });
-    // Image planes decode on this thread and on one more, on the core the movie
-    // prefetch uses: the audio core stays free.
-    startup.set_image_decode_threads(cmvs_core::image::DecodeThreads {
-        extra: 1,
-        on_start: Some(|_| {
-            sys::prefer_core(2);
-        }),
-    });
-    startup.set_decoded_image_cache(decoded_cache_bytes(sys::total_memory()));
-    startup.set_record_text(true);
-    // Requested screen captures read back the canvas instead of a software redraw.
-    startup.set_host_capture(gpu.is_some());
-    startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
-    let mut font = game_font(base, encoding)?;
-    font.set_user_directory(&user)?;
-    startup.set_glyph_metrics(font.metrics());
-    if !font.has_face(startup.settings().font_face()) {
-        startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
-    }
-    let mut keys = String::new();
-    std::fs::File::open(root.join("key.cfg"))?
-        .take(65537)
-        .read_to_string(&mut keys)?;
-    let bindings = KeyBindings::parse(&keys)?;
-    let size = startup.screen_size();
-    let mut backend = backend::Backend {
-        display: startup.display_preferences(),
+            image_decode_threads: Some(cmvs_core::host::image::DecodeThreads {
+                extra: 1,
+                on_start: Some(|_| {
+                    sys::prefer_core(2);
+                }),
+            }),
+            decoded_image_cache: Some(decoded_cache_bytes(sys::total_memory())),
+            key_bindings: KeyBindingPolicy::Required,
+            ..SessionConfig::default()
+        },
+    )?;
+    let (audio, audio_thread) = audio::start(root)?;
+    let audio_control = audio.host_control();
+    session.runtime.set_audio_backend(Box::new(audio))?;
+    let size = session.runtime.screen_size();
+    let mut backend = ConsoleBackend {
+        display: session.runtime.display_preferences(),
         size,
         frame: None,
         gpu,
         modal_shown: false,
         encoding,
+        platform_name: "Switch",
+        text_dialog: |t, p, i, l, c| sys::software_keyboard(t, p, i, l, c),
     };
     backend.display.render_mode =
-        cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;
+        cmvs_core::host::platform::supported_render_mode(&backend, backend.display.render_mode)?;
 
     let mut surface = match backend.gpu {
         Some(_) => Vec::new(),
@@ -274,9 +199,8 @@ fn run(
     };
     let mut controls = Controls::new(size, console().buttons);
     // The button that started the game must not click it.
-    controls.suppress_held(startup.input_mut());
+    controls.suppress_held(session.runtime.input_mut());
     let mut focused = true;
-    let mut input_due = true;
     let mut last_poll = Instant::now();
     let mut last_frame = last_poll;
     let ended = loop {
@@ -291,8 +215,9 @@ fn run(
         if sample.focused != focused {
             focused = sample.focused;
             audio_control.set_active(focused);
-            startup.set_focused(focused);
-            controls.focus(focused, startup.input_mut());
+            session.runtime.set_focused(focused);
+            controls.focus(focused, session.runtime.input_mut());
+            session.driver.suspend();
             last_frame = now;
         }
         cpu_boost.apply(load.wanted(focused));
@@ -306,80 +231,82 @@ fn run(
         if controls.quit_requested() {
             break Ended::Quit;
         }
-        if input_due {
-            if let Some(warp) = startup.input_mut().take_warp() {
-                controls.warp(warp);
-            }
-            controls.frame(&bindings, startup.input_mut());
-            input_due = false;
-        }
-        let budget = Instant::now();
-        while budget.elapsed() < BUDGET {
-            let tick = Instant::now();
-            let event = startup.tick(&mut backend).map_err(|error| {
-                let vm = startup.machine();
-                format!(
-                    "{error}\nat {} / 0x{:x} after {} steps",
-                    vm.current_name().escape_ascii(),
-                    vm.pc(),
-                    startup.steps()
-                )
-            })?;
-            if std::mem::take(&mut backend.modal_shown) {
-                // Time inside the keyboard is not game time, and the button that
-                // closed it must not click the game.
-                controls.suppress_held(startup.input_mut());
-                last_frame = Instant::now();
-                last_poll = last_frame;
-                load.interrupted();
-            } else {
-                load.ran(tick.elapsed());
-            }
-            match event {
-                StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
-                StartupEvent::Quit => {
-                    startup.save_preferences(backend.display)?;
-                    return Ok(Ended::Quit);
+        let bindings = &session.bindings;
+        session
+            .driver
+            .sample_input(session.runtime.input_mut(), |input| {
+                if let Some(warp) = input.take_warp() {
+                    controls.warp(warp);
                 }
-                StartupEvent::Inactive => {
-                    load.interrupted();
-                    std::thread::sleep(IDLE);
+                controls.frame(bindings, input);
+            });
+        let outcome = session.driver.run_slice(
+            &mut session.runtime,
+            &mut FrameBudget::time(BUDGET),
+            |startup| {
+                let tick = Instant::now();
+                let event = startup
+                    .tick(&mut backend)
+                    .map_err(|error| format_tick_error(startup, error))?;
+                if std::mem::take(&mut backend.modal_shown) {
+                    // Time inside the keyboard is not game time, and the button that
+                    // closed it must not click the game.
+                    controls.suppress_held(startup.input_mut());
                     last_frame = Instant::now();
-                    break;
+                    last_poll = last_frame;
+                    load.interrupted();
+                } else {
+                    load.ran(tick.elapsed());
                 }
-                StartupEvent::Yield => {
-                    let now = Instant::now();
-                    load.frame(now);
-                    startup.advance_decoded_frame(millis(now.duration_since(last_frame)))?;
-                    last_frame = now;
-                    let linear = backend.display.render_mode == 1;
-                    if let Some(gpu) = &mut backend.gpu {
-                        render_gpu(&startup, &mut font, gpu, linear)?;
-                        let cursor = controls
-                            .cursor_visible()
-                            .then(|| view.to_target(controls.pointer()));
-                        gpu.present(mode, linear, cursor)?;
-                        if startup.capture_due() {
-                            startup.supply_capture(gpu.read()?)?;
-                        }
-                    } else {
-                        let frame = render(&startup, &mut font)?;
-                        surface.fill(0);
-                        frame.draw_scaled(&mut surface, SCREEN[0], SCREEN[1], mode, linear)?;
-                        if controls.cursor_visible() {
-                            draw_cursor(&mut surface, view, controls.pointer());
-                        }
-                        window.present(&surface)?;
-                        backend.frame = Some(frame);
-                    }
-                    input_due = true;
-                    break;
-                }
-                event => return Err(format!("game stopped: {event:?}").into()),
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(event)
+            },
+        )?;
+        match outcome {
+            FrameOutcome::Stopped(RuntimeEvent::Quit) => {
+                session.runtime.save_preferences(backend.display)?;
+                return Ok(Ended::Quit);
             }
+            FrameOutcome::Inactive => {
+                load.interrupted();
+                std::thread::sleep(IDLE);
+                last_frame = Instant::now();
+            }
+            FrameOutcome::Yield => {
+                let now = Instant::now();
+                load.frame(now);
+                session
+                    .driver
+                    .finish_frame(&mut session.runtime, millis(now.duration_since(last_frame)))?;
+                last_frame = now;
+                let linear = backend.display.render_mode == 1;
+                if let Some(gpu) = &mut backend.gpu {
+                    render_gpu(&mut session, gpu, linear)?;
+                    let cursor = controls
+                        .cursor_visible()
+                        .then(|| view.to_target(controls.pointer()));
+                    gpu.present(mode, linear, cursor)?;
+                    if session.runtime.capture_due() {
+                        session.runtime.supply_capture(gpu.read()?)?;
+                    }
+                } else {
+                    let frame = session.compose_cpu_frame(linear, false)?;
+                    surface.fill(0);
+                    frame.draw_scaled(&mut surface, SCREEN[0], SCREEN[1], mode, linear)?;
+                    if controls.cursor_visible() {
+                        draw_cursor(&mut surface, view, controls.pointer());
+                    }
+                    window.present(&surface)?;
+                    if session.runtime.capture_due() {
+                        session.runtime.supply_capture(frame.clone())?;
+                    }
+                    backend.frame = Some(ConsoleFrame::Canvas(frame));
+                }
+            }
+            FrameOutcome::Stopped(event) => return Err(format!("game stopped: {event:?}").into()),
+            FrameOutcome::BudgetExhausted => {}
         }
     };
-    startup.save_preferences(backend.display)?;
+    session.runtime.save_preferences(backend.display)?;
     Ok(ended)
 }
 
@@ -588,8 +515,8 @@ fn main() {
         Ok(gpu) => gpu,
         Err(error) => return system_error(&error.to_string()),
     };
-    let font = match font_bytes(Path::new(BASE)).and_then(|bytes| {
-        Ok(ab_glyph::FontVec::try_from_vec_and_index(bytes, 0).map_err(|_| "invalid font")?)
+    let font = match encoding::load_host_font(Path::new(BASE), || {
+        Ok(sys::shared_font(false).ok_or("no font.ttf and no system shared font")?)
     }) {
         Ok(font) => font,
         Err(error) => return system_error(&format!("cannot load the font: {error}")),

@@ -125,7 +125,8 @@ impl PeImage {
     }
 }
 
-/// Where one switch case leads.
+/// Where one switch case leads. In unoptimized builds, whose cases only call a member
+/// function, `NoOp` and `Handler` carry that callee's RVA instead of the stub's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Case {
     /// The `ja` target, which returns 0; also reached by every out-of-range command.
@@ -139,7 +140,7 @@ pub enum Case {
 /// The system-command switch: case `n` handles VM opcode `0x2000 + n`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dispatch {
-    /// RVA of the `cmp eax, imm32` bounding the switch.
+    /// RVA of the `cmp` bounding the switch.
     pub compare_rva: u32,
     pub table_rva: u32,
     pub default_rva: u32,
@@ -186,15 +187,70 @@ const X86_PREFIXES: [&[u8]; 3] = [
 // movzx eax, dx; mov rbx, rcx
 const X64_PREFIX: &[u8] = &[0x0f, 0xb7, 0xc2, 0x48, 0x8b, 0xd9];
 
+/// Unoptimized VC9 dispatcher of the 2009 CVNS build: push ebp; mov ebp, esp; sub esp, 8;
+/// mov [ebp-4], ecx; movzx eax, word [ebp+8]; mov [ebp-8], eax; then `cmp dword [ebp-8], imm32`.
+const X86_FRAME_PREFIX: &[u8] = &[
+    0x55, 0x8b, 0xec, 0x83, 0xec, 0x08, 0x89, 0x4d, 0xfc, 0x0f, 0xb7, 0x45, 0x08, 0x89, 0x45, 0xf8,
+];
+/// The unoptimized no-op member function: frame, `mov eax, 0x4000`, plain `ret`.
+const X86_FRAME_NOOP: &[u8] = &[
+    0x55, 0x8b, 0xec, 0x51, 0x89, 0x4d, 0xfc, 0xb8, 0x00, 0x40, 0x00, 0x00, 0x8b, 0xe5, 0x5d, 0xc3,
+];
+
+/// How a jump table entry leads to the command's code.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaseShape {
+    /// The entry is the handler (optimized builds).
+    Direct,
+    /// The entry is `mov ecx, [ebp-4]; call handler; jmp end` (unoptimized builds).
+    MemberCall,
+}
+
 struct Candidate {
     compare: usize,
     limit: u32,
     default: usize,
     table_rva: u32,
+    shape: CaseShape,
 }
 
 fn le32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+}
+
+/// `cmp dword [ebp-8], imm32; ja rel32; mov ecx, [ebp-8]; jmp dword [ecx*4 + table]`.
+fn match_frame_at(image: &PeImage, bytes: &[u8], at: usize) -> Option<Candidate> {
+    if image.arch != Arch::X86 || bytes.get(at..at + X86_FRAME_PREFIX.len())? != X86_FRAME_PREFIX {
+        return None;
+    }
+    let compare = at + X86_FRAME_PREFIX.len();
+    if bytes.get(compare..compare + 3)? != [0x81, 0x7d, 0xf8]
+        || bytes.get(compare + 7..compare + 9)? != [0x0f, 0x87]
+        || bytes.get(compare + 13..compare + 19)? != [0x8b, 0x4d, 0xf8, 0xff, 0x24, 0x8d]
+    {
+        return None;
+    }
+    let limit = le32(bytes, compare + 3)?;
+    let after_ja = compare + 13;
+    let default = after_ja.checked_add_signed(le32(bytes, compare + 9)? as i32 as isize)?;
+    let va = le32(bytes, compare + 19)? as u64;
+    Some(Candidate {
+        compare,
+        limit,
+        default,
+        table_rva: u32::try_from(va.checked_sub(image.image_base)?).ok()?,
+        shape: CaseShape::MemberCall,
+    })
+}
+
+/// Callee of a `mov ecx, [ebp-4]; call rel32; jmp` case stub.
+fn member_call_target(image: &PeImage, bytes: &[u8], rva: u32) -> Option<u32> {
+    let at = image.offset(rva, 10)?;
+    if bytes.get(at..at + 4)? != [0x8b, 0x4d, 0xfc, 0xe8] || !matches!(bytes[at + 8], 0xe9 | 0xeb) {
+        return None;
+    }
+    rva.checked_add(8)?
+        .checked_add_signed(le32(bytes, at + 4)? as i32)
 }
 
 fn match_at(image: &PeImage, bytes: &[u8], at: usize) -> Option<Candidate> {
@@ -242,6 +298,7 @@ fn match_at(image: &PeImage, bytes: &[u8], at: usize) -> Option<Candidate> {
         limit,
         default,
         table_rva,
+        shape: CaseShape::Direct,
     })
 }
 
@@ -259,7 +316,9 @@ pub fn find_dispatch(image: &PeImage, bytes: &[u8]) -> Result<Dispatch, FormatEr
             .filter(|&end| end <= bytes.len())
             .ok_or(FormatError("PE section outside file"))?;
         for at in start..end {
-            if let Some(candidate) = match_at(image, bytes, at) {
+            if let Some(candidate) =
+                match_at(image, bytes, at).or_else(|| match_frame_at(image, bytes, at))
+            {
                 if found.is_some() {
                     return Err(FormatError("several system-command switch candidates"));
                 }
@@ -293,9 +352,14 @@ pub fn find_dispatch(image: &PeImage, bytes: &[u8]) -> Result<Dispatch, FormatEr
             if rva == default_rva {
                 return Ok(Case::Default);
             }
-            let stubs: &[&[u8]] = match image.arch {
-                Arch::X86 => &X86_NOOPS,
-                Arch::X64 => &[X64_NOOP],
+            let (rva, stubs): (u32, &[&[u8]]) = match (c.shape, image.arch) {
+                (CaseShape::MemberCall, _) => (
+                    member_call_target(image, bytes, rva)
+                        .ok_or(FormatError("switch case is not a member-call stub"))?,
+                    &[X86_FRAME_NOOP],
+                ),
+                (CaseShape::Direct, Arch::X86) => (rva, &X86_NOOPS),
+                (CaseShape::Direct, Arch::X64) => (rva, &[X64_NOOP]),
             };
             let noop = stubs.iter().any(|stub| {
                 image

@@ -1,6 +1,6 @@
 //! C callers serialize every call, keep buffers valid for the call and destroy each
 //! handle once. Returned frame/error pointers last until the next mutating call.
-use crate::Player;
+use crate::{Player, TickOutcome};
 use std::{
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -26,10 +26,13 @@ pub unsafe extern "C" fn cmvs_host_initialize_android(
     if java_vm.is_null() || application_context.is_null() {
         return -1;
     }
-    ANDROID_INITIALIZED.call_once(|| unsafe {
-        ndk_context::initialize_android_context(java_vm, application_context);
-    });
-    0
+    catch_unwind(AssertUnwindSafe(|| {
+        ANDROID_INITIALIZED.call_once(|| unsafe {
+            ndk_context::initialize_android_context(java_vm, application_context);
+        });
+        0
+    }))
+    .unwrap_or(-1)
 }
 
 pub struct Handle {
@@ -39,7 +42,8 @@ pub struct Handle {
 impl Handle {
     fn run(
         &mut self,
-        f: impl FnOnce(&mut Player) -> Result<i32, Box<dyn std::error::Error>>,
+        clear_error: bool,
+        f: impl FnOnce(&mut Player) -> Result<i32, Box<dyn std::error::Error + Send + Sync>>,
     ) -> i32 {
         let result = catch_unwind(AssertUnwindSafe(|| match self.player.as_mut() {
             Some(player) => f(player),
@@ -47,7 +51,9 @@ impl Handle {
         }));
         match result {
             Ok(Ok(value)) => {
-                self.error = CString::default();
+                if clear_error {
+                    self.error = CString::default();
+                }
                 value
             }
             error => {
@@ -107,25 +113,27 @@ unsafe fn open(
         return -1;
     };
     h.player = None;
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        if game.is_null() || user.is_null() || font.is_null() {
-            return Err("null CMVS path".into());
-        }
-        let game = unsafe { CStr::from_ptr(game) }.to_str()?;
-        let user = unsafe { CStr::from_ptr(user) }.to_str()?;
-        let font = unsafe { CStr::from_ptr(font) }.to_str()?;
-        let open_player = if game_savedata {
-            Player::open_game_savedata
-        } else {
-            Player::open
-        };
-        open_player(
-            Path::new(game),
-            Path::new(user),
-            Path::new(font),
-            audio != 0,
-        )
-    }));
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> Result<Player, Box<dyn std::error::Error + Send + Sync>> {
+            if game.is_null() || user.is_null() || font.is_null() {
+                return Err("null CMVS path".into());
+            }
+            let game = unsafe { CStr::from_ptr(game) }.to_str()?;
+            let user = unsafe { CStr::from_ptr(user) }.to_str()?;
+            let font = unsafe { CStr::from_ptr(font) }.to_str()?;
+            let open_player = if game_savedata {
+                Player::open_game_savedata
+            } else {
+                Player::open
+            };
+            Ok(open_player(
+                Path::new(game),
+                Path::new(user),
+                Path::new(font),
+                audio != 0,
+            )?)
+        },
+    ));
     match result {
         Ok(Ok(player)) => {
             h.player = Some(player);
@@ -145,18 +153,29 @@ unsafe fn open(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_destroy(handle: *mut Handle) {
     if !handle.is_null() {
-        drop(unsafe { Box::from_raw(handle) });
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            drop(unsafe { Box::from_raw(handle) });
+        }));
     }
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_tick(handle: *mut Handle, delta_ms: u32) -> i32 {
-    unsafe { handle.as_mut() }.map_or(-1, |h| h.run(|p| p.tick(delta_ms)))
+    unsafe { handle.as_mut() }.map_or(-1, |h| h.run(true, |p| Ok(tick_code(p.tick(delta_ms)?))))
+}
+
+fn tick_code(outcome: TickOutcome) -> i32 {
+    match outcome {
+        TickOutcome::BudgetExhausted => 0,
+        TickOutcome::FrameReady => 1,
+        TickOutcome::Quit => 2,
+        TickOutcome::Inactive => 3,
+    }
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_key(handle: *mut Handle, code: u32, pressed: i32) -> i32 {
     unsafe { handle.as_mut() }.map_or(-1, |h| {
-        h.run(|p| {
-            p.key(code as usize, pressed != 0)?;
+        h.run(false, |p| {
+            p.set_key_state(code as usize, pressed != 0)?;
             Ok(0)
         })
     })
@@ -164,8 +183,8 @@ pub unsafe extern "C" fn cmvs_host_key(handle: *mut Handle, code: u32, pressed: 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_pointer(handle: *mut Handle, x: i32, y: i32) -> i32 {
     unsafe { handle.as_mut() }.map_or(-1, |h| {
-        h.run(|p| {
-            p.pointer(x, y);
+        h.run(false, |p| {
+            p.set_pointer_position(x, y);
             Ok(0)
         })
     })
@@ -173,8 +192,8 @@ pub unsafe extern "C" fn cmvs_host_pointer(handle: *mut Handle, x: i32, y: i32) 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_pause(handle: *mut Handle, paused: i32) -> i32 {
     unsafe { handle.as_mut() }.map_or(-1, |h| {
-        h.run(|p| {
-            p.pause(paused != 0);
+        h.run(false, |p| {
+            p.set_paused(paused != 0);
             Ok(0)
         })
     })
@@ -182,7 +201,7 @@ pub unsafe extern "C" fn cmvs_host_pause(handle: *mut Handle, paused: i32) -> i3
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_save_preferences(handle: *mut Handle) -> i32 {
     unsafe { handle.as_mut() }.map_or(-1, |h| {
-        h.run(|p| {
+        h.run(true, |p| {
             p.save_preferences()?;
             Ok(0)
         })
@@ -208,7 +227,7 @@ pub unsafe extern "C" fn cmvs_host_height(handle: *const Handle) -> u32 {
 pub unsafe extern "C" fn cmvs_host_frame_serial(handle: *const Handle) -> u64 {
     unsafe { handle.as_ref() }
         .and_then(|h| h.player.as_ref())
-        .map_or(0, Player::serial)
+        .map_or(0, Player::frame_serial)
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_pixels(handle: *const Handle) -> *const u8 {
@@ -221,6 +240,16 @@ pub unsafe extern "C" fn cmvs_host_pixels(handle: *const Handle) -> *const u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tick_outcomes_preserve_api_v1_status_codes() {
+        assert_eq!(tick_code(TickOutcome::BudgetExhausted), 0);
+        assert_eq!(tick_code(TickOutcome::FrameReady), 1);
+        assert_eq!(tick_code(TickOutcome::Quit), 2);
+        assert_eq!(tick_code(TickOutcome::Inactive), 3);
+        assert_eq!(cmvs_host_api_version(), 1);
+    }
+
     #[cfg(target_os = "android")]
     #[test]
     fn android_audio_without_a_context_returns_an_error() {

@@ -1,4 +1,4 @@
-//! Type-8 image fragments; executable-bound evidence is in games/aoitori/vm-semantics.md.
+//! Type-8 image fragments; executable-bound evidence is in games/aoitori/README.md.
 use crate::{
     audio::AudioBackend,
     bytecode::DecodeError,
@@ -114,7 +114,7 @@ impl FragmentEffect {
 
 impl SceneHost {
     /// Hapymaher 0x140072370 -> 0x140037840: only the inspected type-8 branch.
-    pub(crate) fn query_fragments(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn query_fragments(&self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let slot = call.argument(4, "effect slot")?;
         let value = if slot < 4 {
             let slot = slot as u8;
@@ -147,10 +147,10 @@ impl SceneHost {
 
     pub(crate) fn create_fragments(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         random: &mut CrtRandom,
         backend: Option<&mut dyn AudioBackend>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         let source = call.argument(8, "source object")?;
         let parameters = [

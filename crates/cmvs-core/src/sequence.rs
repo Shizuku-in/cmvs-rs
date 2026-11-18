@@ -1,10 +1,14 @@
-//! Engine +4736: a timed action sequence (0x614-byte buffer from 0x140014270: a five-word
-//! header plus 16 entries of 96 bytes) that the frame update 0x140015900 runs through
-//! 0x140014b10; addresses refer to the documented binary hash. Wait entries and their
-//! start/stop/finish lifecycle, image replacement and XYZ motion entries are modeled; other actions stay unhandled.
+//! Timed action sequences for waits, image replacement, and scene movement.
+//!
+//! [`SequenceHost`] advances supported actions with frame time and coordinates
+//! input-based skipping. Unsupported action kinds remain unhandled.
+
+// Engine +4736: a 0x614-byte buffer allocated by 0x140014270, with a five-word
+// header and sixteen 96-byte entries. Frame update 0x140015900 calls 0x140014b10.
+// Modeled actions cover wait lifecycle, image replacement, and XYZ motion.
 use crate::{
-    camera::CameraHost, dispatch::Call, evaluate::error, image::ImageSource, machine::Machine,
-    message::MessageHost, scene::SceneHost,
+    camera::CameraHost, dispatch::Call, evaluate::error, image::ImageSource, message::MessageHost,
+    scene::SceneHost,
 };
 use std::error::Error;
 
@@ -118,7 +122,7 @@ impl SequenceHost {
     /// 0x140015900 calls 0x140014b10 before updating scene objects. Waits use absolute
     /// clock - start - already-waited (u32 wrapping), allowing consecutive waits to
     /// consume leftover time within the same update. No 200 ms frame clamp.
-    pub fn advance_frame(&mut self, delta: u32) -> Result<(), Box<dyn Error>> {
+    pub fn advance_frame(&mut self, delta: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.clock = self.clock.wrapping_add(delta);
         self.run(false, missing_scene)
     }
@@ -128,7 +132,7 @@ impl SequenceHost {
         delta: u32,
         scene: &mut SceneHost,
         images: &mut dyn ImageSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.clock = self.clock.wrapping_add(delta);
         self.run_images(false, scene, images)
     }
@@ -139,7 +143,7 @@ impl SequenceHost {
         scene: &mut SceneHost,
         images: &mut dyn ImageSource,
         camera: &mut CameraHost,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.clock = self.clock.wrapping_add(delta);
         self.run_with_camera(false, scene, images, Some(camera), None)
     }
@@ -151,7 +155,7 @@ impl SequenceHost {
         images: &mut dyn ImageSource,
         camera: &mut CameraHost,
         messages: &mut MessageHost,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.clock = self.clock.wrapping_add(delta);
         self.run_with_camera(false, scene, images, Some(camera), Some(messages))
     }
@@ -161,7 +165,7 @@ impl SequenceHost {
         finish: bool,
         scene: &mut SceneHost,
         images: &mut dyn ImageSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.run_with_camera(finish, scene, images, None, None)
     }
 
@@ -172,7 +176,7 @@ impl SequenceHost {
         images: &mut dyn ImageSource,
         mut camera: Option<&mut CameraHost>,
         mut messages: Option<&mut MessageHost>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.run(finish, |entry, finish| {
             match entry {
                 SequenceEntry::CameraMotion {
@@ -248,8 +252,8 @@ impl SequenceHost {
     fn run(
         &mut self,
         finish: bool,
-        mut apply: impl FnMut(&SequenceEntry, bool) -> Result<(), Box<dyn Error>>,
-    ) -> Result<(), Box<dyn Error>> {
+        mut apply: impl FnMut(&SequenceEntry, bool) -> Result<(), Box<dyn Error + Send + Sync>>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.header.active == 0 || self.header.index >= self.header.count {
             return Ok(());
         }
@@ -279,64 +283,11 @@ impl SequenceHost {
         Ok(())
     }
 
-    /// Resource-aware finish runs image actions with duration zero, snaps subtype 1
-    /// motion and skips subtype 2 motion.
-    pub fn try_handle_with_images(
-        &mut self,
-        vm: &mut Machine<'_>,
-        scene: &mut SceneHost,
-        images: &mut dyn ImageSource,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command @ 0x280..=0x28a)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(
-            &mut Call::new(vm, pc, command),
-            Some(SequenceContext {
-                scene,
-                images,
-                camera: None,
-                messages: None,
-            }),
-        )?;
-        Ok(true)
-    }
-
-    pub fn try_handle_with_hosts(
-        &mut self,
-        vm: &mut Machine<'_>,
-        scene: &mut SceneHost,
-        images: &mut dyn ImageSource,
-        camera: &mut CameraHost,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command @ 0x280..=0x28a)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(
-            &mut Call::new(vm, pc, command),
-            Some(SequenceContext {
-                scene,
-                images,
-                camera: Some(camera),
-                messages: None,
-            }),
-        )?;
-        Ok(true)
-    }
-    /// 0x2280: the dispatcher calls 0x140014320 inline, zeroing the five header words, and
-    /// returns 0x4000 (nothing popped). Entries keep their bytes but are no longer run.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command @ 0x280..=0x28a)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command), None)?;
-        Ok(true)
-    }
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         context: Option<SequenceContext<'_>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (pc, command) = (call.pc, call.command);
         if command == 0x287 {
             let mut args = [0; 5];
@@ -483,7 +434,7 @@ fn argument_names(command: u16) -> &'static [&'static str] {
     }
 }
 
-fn missing_scene(entry: &SequenceEntry, finish: bool) -> Result<(), Box<dyn Error>> {
+fn missing_scene(entry: &SequenceEntry, finish: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
     match entry {
         SequenceEntry::CameraMotion { pc, .. } => {
             Err(error(*pc, 0x2287, "camera sequence needs a camera host").into())
@@ -677,7 +628,10 @@ mod motion_snapshot_tests {
             fail: bool,
         }
         impl ImageSource for Source {
-            fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+            fn read(
+                &mut self,
+                name: &[u8],
+            ) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
                 assert_eq!(name, b"new.pb3");
                 self.reads += 1;
                 if self.fail {

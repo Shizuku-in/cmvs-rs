@@ -1,14 +1,17 @@
 //! CSS1 persistent variable data; optional exclusive-file export, no gameplay snapshot restore.
-use crate::filesystem::File;
+use crate::filesystem::HostFs;
+mod css0;
 mod pack;
 mod profile;
 mod write;
-use crate::{FormatError, MAX_PAYLOAD, dispatch::Call, evaluate::State, machine::Machine};
+use crate::{FormatError, MAX_PAYLOAD, dispatch::Call, evaluate::State};
+pub use css0::{CSS0_HEADER, Css0Parameters, Css0Save, PersistentStarts};
 pub use profile::ProfileSystemSave;
 use std::{
     error::Error,
     io::{self, Read},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 pub use write::{Css1Parameters, NewSystemSave, SystemSaveSink};
 
@@ -240,23 +243,110 @@ impl Css1Save {
 pub trait SystemSaveSource {
     fn read(&mut self) -> io::Result<Option<Vec<u8>>>;
 }
+enum SavePath {
+    File(PathBuf),
+    GameTemplate { root: PathBuf, name: Vec<u8> },
+}
 pub struct FileSystemSave {
-    path: PathBuf,
+    fs: Arc<dyn HostFs>,
+    path: SavePath,
+    /// CVNS `save000.dat` is CSS0, whose layout the decoder checks; read it whole.
+    css0: bool,
 }
 impl FileSystemSave {
-    pub fn new(path: impl AsRef<Path>) -> Self {
+    pub fn with_fs(path: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Self {
         Self {
-            path: path.as_ref().to_owned(),
+            fs,
+            path: SavePath::File(path.as_ref().to_owned()),
+            css0: false,
         }
+    }
+    pub fn css0_with_fs(path: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Self {
+        Self {
+            fs,
+            path: SavePath::File(path.as_ref().to_owned()),
+            css0: true,
+        }
+    }
+    pub fn for_profile_with_fs(
+        profile: &crate::profile::EngineProfile,
+        path: impl AsRef<Path>,
+        fs: Arc<dyn HostFs>,
+    ) -> Self {
+        if profile.is_cvns() {
+            Self::css0_with_fs(path, fs)
+        } else {
+            Self::with_fs(path, fs)
+        }
+    }
+    pub(crate) fn game_template(
+        profile: &crate::profile::EngineProfile,
+        root: &Path,
+        fs: Arc<dyn HostFs>,
+    ) -> Self {
+        let filename = profile.system_save_file_name();
+        if !profile.is_cvns() {
+            return Self::with_fs(root.join("save").join(filename), fs);
+        }
+        Self {
+            fs,
+            path: SavePath::GameTemplate {
+                root: root.to_owned(),
+                name: format!("save/{filename}").into_bytes(),
+            },
+            css0: true,
+        }
+    }
+    pub(crate) fn set_template_directory(&mut self, directory: &[u8], filename: &str) {
+        if let SavePath::GameTemplate { name, .. } = &mut self.path {
+            name.clear();
+            name.extend_from_slice(directory);
+            if !name.is_empty() && !name.ends_with(b"/") && !name.ends_with(b"\\") {
+                name.push(b'/');
+            }
+            name.extend_from_slice(filename.as_bytes());
+        }
+    }
+    #[cfg(feature = "std-fs")]
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self::with_fs(path, crate::filesystem::default_fs())
+    }
+    #[cfg(feature = "std-fs")]
+    pub fn css0(path: impl AsRef<Path>) -> Self {
+        Self::css0_with_fs(path, crate::filesystem::default_fs())
+    }
+    #[cfg(feature = "std-fs")]
+    pub fn for_profile(profile: &crate::profile::EngineProfile, path: impl AsRef<Path>) -> Self {
+        Self::for_profile_with_fs(profile, path, crate::filesystem::default_fs())
     }
 }
 impl SystemSaveSource for FileSystemSave {
     fn read(&mut self) -> io::Result<Option<Vec<u8>>> {
-        let mut file = match File::open(&self.path) {
+        let resolved;
+        let path = match &self.path {
+            SavePath::File(path) => path,
+            SavePath::GameTemplate { root, name } => {
+                resolved = match crate::filesystem::resolve_under_with_fs(&*self.fs, root, name) {
+                    Ok(path) => path,
+                    Err(e) if e.is_not_found() => return Ok(None),
+                    Err(e) => return Err(io::Error::other(e)),
+                };
+                &resolved
+            }
+        };
+        let mut file = match self.fs.open_read(path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
         };
+        if self.css0 {
+            let mut raw = Vec::new();
+            file.take(MAX_PAYLOAD as u64 + 1).read_to_end(&mut raw)?;
+            if raw.len() > MAX_PAYLOAD {
+                return Err(io::Error::other("CSS0 file exceeds research limit"));
+            }
+            return Ok(Some(raw));
+        }
         let mut header = [0; PAYLOAD_OFFSET];
         file.read_exact(&mut header)?;
         let size = file.metadata()?.len();
@@ -280,28 +370,53 @@ pub enum SystemSaveEvent {
 #[derive(Default)]
 pub struct SystemSaveHost {
     pub loaded: Option<Css1Save>,
+    /// Active CSS0 persistent bank starts when running CVNS.
+    pub css0_starts: Option<PersistentStarts>,
     /// Zero-count lists leave the previous list unchanged in the original loader.
     pub lists: [Option<Vec<Vec<u8>>>; 2],
 }
 impl SystemSaveHost {
-    pub fn try_handle(
+    /// Construct system-save host state for the selected engine profile.
+    pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        let mut host = Self::default();
+        if profile.is_cvns() {
+            host.set_css0(PersistentStarts::default());
+        }
+        host
+    }
+    /// Switches `write_now` / `try_write` to emit CSS0 `save000.dat` with `starts`.
+    pub fn set_css0(&mut self, starts: PersistentStarts) {
+        self.css0_starts = Some(starts);
+    }
+    /// CVNS 0x21c0 (cvns-20090203 0x465240 -> 0x4208e0): no parameters, returns 0x4000.
+    pub(crate) fn handle_css0_read(
         &mut self,
-        vm: &mut Machine<'_>,
-        source: &mut impl SystemSaveSource,
-        game_id: Option<u32>,
-    ) -> Result<Option<SystemSaveEvent>, Box<dyn Error>> {
-        let Some((pc, 0x128)) = vm.pending_system() else {
-            return Ok(None);
+        call: &mut Call<'_>,
+        source: &mut dyn SystemSaveSource,
+        starts: PersistentStarts,
+    ) -> Result<SystemSaveEvent, Box<dyn Error + Send + Sync>> {
+        let Some(raw) = source.read()? else {
+            call.complete(0x4000)?;
+            return Ok(SystemSaveEvent::Missing);
         };
-        self.handle_read(&mut Call::new(vm, pc, 0x128), source, game_id)
-            .map(Some)
+        let save = Css0Save::decode(&raw, starts)?;
+        let candidate = save.applied(call.vm.state())?;
+        call.complete(0x4000)?;
+        *call.vm.state_mut() = candidate;
+        self.css0_starts = Some(starts);
+        for (current, new) in self.lists.iter_mut().zip(save.lists()) {
+            if !new.is_empty() {
+                *current = Some(new.clone());
+            }
+        }
+        Ok(SystemSaveEvent::Applied)
     }
     pub(crate) fn handle_read(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn SystemSaveSource,
         game_id: Option<u32>,
-    ) -> Result<SystemSaveEvent, Box<dyn Error>> {
+    ) -> Result<SystemSaveEvent, Box<dyn Error + Send + Sync>> {
         let Some(raw) = source.read()? else {
             call.complete(0x4000)?;
             return Ok(SystemSaveEvent::Missing);

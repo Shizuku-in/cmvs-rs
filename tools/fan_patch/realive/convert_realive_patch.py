@@ -19,8 +19,9 @@ import sys
 import tempfile
 import zipfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from mai_characters import character_map
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from fan_patch.launcher import cmvs_patch_command
+from fan_patch.mai_characters import character_map
 
 LIMIT = 64 * 1024 * 1024
 ROOT = "[天之圣杯汉化组]realive/"
@@ -114,6 +115,10 @@ def extract_patch(archive: zipfile.ZipFile, stage: Path) -> tuple[dict[str, str]
     return aliases, ignored
 
 
+def patch_command(*args: str) -> list[str]:
+    return cmvs_patch_command("realive", *args)
+
+
 def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
         raise ValueError("encoding must be utf-8, utf8 or gbk")
@@ -126,17 +131,11 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
             raise ValueError(f"Unsupported original game: {name}")
     if sha256(patch) != PATCH_SHA256:
         raise ValueError("Unsupported patch ZIP (SHA-256 mismatch)")
-    tool = Path(__file__).resolve().parent
-    repository = tool.parents[2]
     with tempfile.TemporaryDirectory(prefix="cmvs-realive-") as temp:
         stage = Path(temp)
         with zipfile.ZipFile(patch) as archive:
             aliases, ignored = extract_patch(archive, stage)
-        subprocess.run([
-            "cargo", "run", "--offline", "--locked", "--release", "--manifest-path",
-            str(tool / "Cargo.toml"), "--target-dir", str(repository / "target/fan-patch-realive"),
-            "--", str(game), str(stage), encoding,
-        ], check=True)
+        subprocess.run(patch_command(str(game), str(stage), encoding), check=True)
         reports = {}
         for name in ("scripts", "images"):
             with (stage / f"{name}.tsv").open() as stream:

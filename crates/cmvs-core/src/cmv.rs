@@ -1,7 +1,10 @@
-//! CMV6/CMV8 movie containers: header/index parsing and bounded JBPD/JBPE frame reads.
-//! The Ogg soundtrack is located but not decoded. Field meanings follow the movie
-//! player in the documented binary (0x1400379f0, 0x140037bb0, 0x140037900) and were checked
-//! read-only against this title's data/video files.
+//! CMV3/CMV4/CMV6/CMV8 movie headers, frame indices, and bounded frame decoding.
+//!
+//! [`CmvIndex`] reads container metadata and locates image frames and the Ogg
+//! soundtrack. Audio decoding and playback are separate host services.
+
+// Field meanings follow the hash-bound movie player at 0x1400379f0,
+// 0x140037bb0, and 0x140037900, checked read-only against the game's video files.
 use crate::FormatError;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -47,42 +50,68 @@ pub struct CmvIndex {
     /// CMV8 (0x1400390b0 type 4) frames are 32-bit JBPE images with alpha; CMV6 frames are
     /// opaque 24-bit JBPD images.
     pub alpha: bool,
-    /// CMV4 (cmvs-20070119 op.cmv) keeps the CMV6 container with opaque JBP1 frames; that
-    /// player checks no signature (docs/games/puriring).
+    /// CMV3 (cvns-20090203 op.cmv) and CMV4 (cmvs-20070119 op.cmv) keep the 44-byte CMV6
+    /// container with opaque JBP1 frames; those players check no container signature.
     pub jbp1: bool,
 }
 
 impl CmvIndex {
-    /// Reads and bounds-checks a CMV6 header and its `max_sequence + 1` index entries.
-    pub fn read(reader: &mut (impl Read + Seek)) -> Result<Self, FormatError> {
+    /// Reads and bounds-checks a CMV3/CMV4/CMV6 header and its `max_sequence + 1` index entries.
+    pub fn read(reader: &mut (impl Read + Seek + ?Sized)) -> Result<Self, FormatError> {
         Self::read_signature(reader, false)
     }
     /// Scene movies also accept CMV8, whose container fields match CMV6.
-    pub fn read_scene(reader: &mut (impl Read + Seek)) -> Result<Self, FormatError> {
+    pub fn read_scene(reader: &mut (impl Read + Seek + ?Sized)) -> Result<Self, FormatError> {
         Self::read_signature(reader, true)
     }
+    /// Like [`Self::read`], preserving underlying [`std::io::Error`] failures instead of
+    /// collapsing them into [`FormatError`].
+    pub fn read_io(
+        reader: &mut (impl Read + Seek + ?Sized),
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::read_signature_io(reader, false)
+    }
+    /// Like [`Self::read_scene`], preserving underlying [`std::io::Error`] failures.
+    pub fn read_scene_io(
+        reader: &mut (impl Read + Seek + ?Sized),
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::read_signature_io(reader, true)
+    }
     fn read_signature(
-        reader: &mut (impl Read + Seek),
+        reader: &mut (impl Read + Seek + ?Sized),
         allow_alpha: bool,
     ) -> Result<Self, FormatError> {
-        let length = reader
-            .seek(SeekFrom::End(0))
-            .map_err(|_| FormatError("CMV length unavailable"))?;
-        reader
-            .seek(SeekFrom::Start(0))
-            .map_err(|_| FormatError("CMV seek failed"))?;
+        Self::read_signature_io(reader, allow_alpha).map_err(|err| {
+            match err.downcast::<FormatError>() {
+                Ok(format_err) => *format_err,
+                Err(_) => FormatError("CMV I/O failure"),
+            }
+        })
+    }
+    fn read_signature_io(
+        reader: &mut (impl Read + Seek + ?Sized),
+        allow_alpha: bool,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let length = reader.seek(SeekFrom::End(0))?;
+        reader.seek(SeekFrom::Start(0))?;
         let mut head = [0u8; HEADER_SIZE as usize];
-        reader
-            .read_exact(&mut head)
-            .map_err(|_| FormatError("CMV header truncated"))?;
+        reader.read_exact(&mut head).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::UnexpectedEof {
+                Box::new(FormatError("CMV header truncated"))
+                    as Box<dyn std::error::Error + Send + Sync>
+            } else {
+                Box::new(err)
+            }
+        })?;
         let (alpha, jbp1) = match &head[..4] {
             b"CMV6" => (false, false),
-            b"CMV4" => (false, true),
+            b"CMV3" | b"CMV4" => (false, true),
             b"CMV8" if allow_alpha => (true, false),
             _ => {
                 return Err(FormatError(
-                    "only the verified CMV4/CMV6 signatures are supported",
-                ));
+                    "only the verified CMV3/CMV4/CMV6 signatures are supported",
+                )
+                .into());
             }
         };
         let word = |i: usize| u32::from_le_bytes(head[4 + 4 * i..8 + 4 * i].try_into().unwrap());
@@ -99,10 +128,10 @@ impl CmvIndex {
             audio_flag: word(9),
         };
         if u64::from(header.file_size) != length {
-            return Err(FormatError("CMV size field differs from the file length"));
+            return Err(FormatError("CMV size field differs from the file length").into());
         }
         if header.rate == 0 || header.rate_time == 0 {
-            return Err(FormatError("CMV frame rate is zero"));
+            return Err(FormatError("CMV frame rate is zero").into());
         }
         let count = header
             .max_sequence
@@ -110,12 +139,17 @@ impl CmvIndex {
             .filter(|count| *count <= ENTRY_LIMIT)
             .ok_or(FormatError("CMV entry count outside research limit"))?;
         if u64::from(header.resource_offset) != HEADER_SIZE + u64::from(count) * ENTRY_SIZE {
-            return Err(FormatError("CMV resources do not follow the index"));
+            return Err(FormatError("CMV resources do not follow the index").into());
         }
         let mut table = vec![0u8; (u64::from(count) * ENTRY_SIZE) as usize];
-        reader
-            .read_exact(&mut table)
-            .map_err(|_| FormatError("CMV index truncated"))?;
+        reader.read_exact(&mut table).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::UnexpectedEof {
+                Box::new(FormatError("CMV index truncated"))
+                    as Box<dyn std::error::Error + Send + Sync>
+            } else {
+                Box::new(err)
+            }
+        })?;
         let mut entries = Vec::with_capacity(count as usize);
         for raw in table.as_chunks::<{ ENTRY_SIZE as usize }>().0 {
             let field = |i: usize| u32::from_le_bytes(raw[4 * i..4 * i + 4].try_into().unwrap());
@@ -127,7 +161,7 @@ impl CmvIndex {
                 offset: field(4),
             };
             if entry.file_offset(&header) + u64::from(entry.stored_size) > length {
-                return Err(FormatError("CMV entry outside the file"));
+                return Err(FormatError("CMV entry outside the file").into());
             }
             entries.push(entry);
         }
@@ -148,9 +182,9 @@ impl CmvIndex {
     /// Read one bounded encoded frame and validate its dimensions against the container.
     pub fn decode_frame(
         &self,
-        reader: &mut (impl Read + Seek),
+        reader: &mut (impl Read + Seek + ?Sized),
         frame: u32,
-    ) -> Result<crate::raster::RgbaImage, Box<dyn std::error::Error>> {
+    ) -> Result<crate::raster::RgbaImage, Box<dyn std::error::Error + Send + Sync>> {
         let entry = self
             .entries
             .get(frame as usize)
@@ -197,5 +231,167 @@ impl CmvIndex {
 impl CmvEntry {
     pub fn file_offset(&self, header: &CmvHeader) -> u64 {
         u64::from(header.resource_offset) + u64::from(self.offset)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Cursor};
+
+    fn synthetic_cmv() -> Vec<u8> {
+        let frames = 2u32;
+        let count = frames + 1;
+        let resource = 44 + count * 20;
+        let data = frames * 4 + 3;
+        let mut bytes = b"CMV6".to_vec();
+        for word in [
+            resource,
+            resource + data,
+            0,
+            frames,
+            24,
+            1,
+            1280,
+            720,
+            24,
+            2,
+        ] {
+            bytes.extend(word.to_le_bytes());
+        }
+        for i in 0..frames {
+            for word in [i, 4, 1280 * 720 * 3, KIND_JBPX, i * 4] {
+                bytes.extend(word.to_le_bytes());
+            }
+        }
+        for word in [frames, 3, 3, KIND_OGG, frames * 4] {
+            bytes.extend(word.to_le_bytes());
+        }
+        for i in 0..frames {
+            bytes.extend(b"JBP");
+            bytes.push(i as u8);
+        }
+        bytes.extend(b"Ogg");
+        bytes
+    }
+
+    struct FaultyReader {
+        data: Vec<u8>,
+        reported_len: u64,
+        pos: usize,
+        fail_seek: Option<io::ErrorKind>,
+        fail_read_at: Option<(usize, Option<io::ErrorKind>)>,
+    }
+
+    impl FaultyReader {
+        fn new(data: Vec<u8>) -> Self {
+            let reported_len = data.len() as u64;
+            Self {
+                data,
+                reported_len,
+                pos: 0,
+                fail_seek: None,
+                fail_read_at: None,
+            }
+        }
+    }
+
+    impl Read for FaultyReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            if let Some((at, action)) = self.fail_read_at {
+                if self.pos >= at {
+                    return match action {
+                        Some(kind) => Err(io::Error::new(kind, "injected CMV read error")),
+                        None => Ok(0),
+                    };
+                }
+                let allowed = (at - self.pos).min(buf.len());
+                let src = &self.data[self.pos..self.data.len().min(self.pos + allowed)];
+                buf[..src.len()].copy_from_slice(src);
+                self.pos += src.len();
+                return Ok(src.len());
+            }
+            if self.pos >= self.data.len() {
+                return Ok(0);
+            }
+            let n = buf.len().min(self.data.len() - self.pos);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    impl Seek for FaultyReader {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            if let Some(kind) = self.fail_seek {
+                return Err(io::Error::new(kind, "injected CMV seek error"));
+            }
+            let next = match pos {
+                SeekFrom::Start(offset) => offset as i64,
+                SeekFrom::End(delta) => self.reported_len as i64 + delta,
+                SeekFrom::Current(delta) => self.pos as i64 + delta,
+            };
+            if next < 0 {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "negative seek"));
+            }
+            self.pos = next as usize;
+            Ok(next as u64)
+        }
+    }
+
+    #[test]
+    fn read_io_preserves_non_eof_io_errors_and_maps_truncation_to_format_error() {
+        let valid = synthetic_cmv();
+        assert_eq!(
+            CmvIndex::read_io(&mut Cursor::new(&valid)).unwrap(),
+            CmvIndex::read(&mut Cursor::new(&valid)).unwrap()
+        );
+
+        // Seek failure preserves io::Error.
+        let mut seek_err = FaultyReader::new(valid.clone());
+        seek_err.fail_seek = Some(io::ErrorKind::PermissionDenied);
+        let err = CmvIndex::read_io(&mut seek_err).unwrap_err();
+        assert!(err.downcast_ref::<FormatError>().is_none());
+        assert_eq!(
+            err.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+
+        // Header and index non-EOF read failures preserve io::Error on both read_io and read_scene_io.
+        for (at, kind) in [
+            (12, io::ErrorKind::PermissionDenied),
+            (52, io::ErrorKind::Other),
+        ] {
+            let mut reader = FaultyReader::new(valid.clone());
+            reader.fail_read_at = Some((at, Some(kind)));
+            let err = CmvIndex::read_io(&mut reader).unwrap_err();
+            assert!(err.downcast_ref::<FormatError>().is_none());
+            assert_eq!(err.downcast_ref::<io::Error>().unwrap().kind(), kind);
+
+            let mut scene_reader = FaultyReader::new(valid.clone());
+            scene_reader.fail_read_at = Some((at, Some(kind)));
+            let scene_err = CmvIndex::read_scene_io(&mut scene_reader).unwrap_err();
+            assert!(scene_err.downcast_ref::<FormatError>().is_none());
+            assert_eq!(scene_err.downcast_ref::<io::Error>().unwrap().kind(), kind);
+        }
+
+        // Truncated header buffer (`UnexpectedEof`) still produces FormatError.
+        let short_err = CmvIndex::read_io(&mut Cursor::new(&valid[..20])).unwrap_err();
+        assert_eq!(
+            short_err.downcast_ref::<FormatError>(),
+            Some(&FormatError("CMV header truncated"))
+        );
+
+        // Truncated index buffer (`UnexpectedEof` after valid header) still produces FormatError.
+        let mut truncated_index = FaultyReader::new(valid);
+        truncated_index.fail_read_at = Some((52, None));
+        let idx_err = CmvIndex::read_io(&mut truncated_index).unwrap_err();
+        assert_eq!(
+            idx_err.downcast_ref::<FormatError>(),
+            Some(&FormatError("CMV index truncated"))
+        );
     }
 }

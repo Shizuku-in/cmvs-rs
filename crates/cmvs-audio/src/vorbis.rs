@@ -9,7 +9,7 @@ pub struct Vorbis {
     rate: u32,
 }
 impl Vorbis {
-    pub fn new(bytes: Arc<[u8]>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(bytes: Arc<[u8]>) -> Result<Self, Box<dyn Error + Send + Sync>> {
         if bytes.len() > MAX_PAYLOAD {
             return Err("Ogg resource exceeds research limit".into());
         }
@@ -31,7 +31,7 @@ impl Vorbis {
     pub fn sample_rate(&self) -> u32 {
         self.rate
     }
-    pub fn packet(&mut self) -> Result<Option<Vec<f32>>, Box<dyn Error>> {
+    pub fn packet(&mut self) -> Result<Option<Vec<f32>>, Box<dyn Error + Send + Sync>> {
         let packet = self
             .reader
             .read_dec_packet_generic::<InterleavedSamples<f32>>()?;

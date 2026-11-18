@@ -307,7 +307,7 @@ fn actions_at(session: &Session<'_>) -> Vec<Step> {
             .collect();
     }
     if session.device() == crate::device::Device::Mouse {
-        for slot in cmvs_core::buttons::BUTTON_GROUPS..crate::controls::GROUPS {
+        for slot in cmvs_core::runtime::BUTTON_GROUPS..crate::controls::GROUPS {
             if crate::controls::group(session.startup(), slot)
                 .and_then(|group| group.scroll_point())
                 .is_some()
@@ -744,14 +744,17 @@ fn apply_and_save(
     }
     let changed = session.settings_fingerprint();
     session.save_preferences().map_err(Outcome::Fail)?;
-    let files = ["system.dat", "cmvs.cfg"]
-        .into_iter()
-        .filter_map(|name| {
-            fs::read(session.user_dir().join(name))
-                .ok()
-                .map(|b| (name.to_owned(), b))
-        })
-        .collect();
+    let files = [
+        runner.target.system_save_name(),
+        runner.target.config_file_name(),
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        fs::read(session.user_dir().join(name))
+            .ok()
+            .map(|b| (name.to_owned(), b))
+    })
+    .collect();
     Ok((changed, files))
 }
 
@@ -920,7 +923,13 @@ pub fn unlocks(runner: &Runner<'_>) -> CheckResult {
         );
     };
     let before = build(runner, &[], entry, false, 2);
-    let after = build(runner, &[("system.dat", &cleared)], entry, false, 2);
+    let after = build(
+        runner,
+        &[(runner.target.system_save_name(), &cleared)],
+        entry,
+        false,
+        2,
+    );
     // Groups match by script, slot and size; a page's other groups may grow with unlocks.
     type Groups = std::collections::BTreeMap<(String, usize, usize), usize>;
     let groups = |graph: &Graph| -> Groups {

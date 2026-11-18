@@ -28,7 +28,6 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 两版的既有 GBK 运行记录均覆盖标题、中文退出对话框、10 个不同消息等待，以及首次剧情存读档后继续播放。图片完整 RGBA 已与各版 BMP 核对。完整路线、原生音频和原版存档互操作尚未验证。新增 UTF-8 输出的验证范围见[工具总览](../README.md#验证范围)。
 
 ```bash
-python3 -m unittest discover -s tools/fan_patch/chronoclock -p 'test_*.py'
-cargo test --offline --locked --manifest-path tools/fan_patch/chronoclock/Cargo.toml \
-  --target-dir target/fan-patch-chronoclock
+python3 -I tools/fan_patch/chronoclock/test_convert_chronoclock_patch.py
+cargo test --offline --locked -p cmvs-patch chronoclock
 ```

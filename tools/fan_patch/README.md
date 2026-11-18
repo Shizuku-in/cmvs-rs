@@ -17,7 +17,13 @@
 
 ## 使用约定
 
-从仓库根目录执行命令。需要 Python 3.10+。除 asukimi 的 GBK 转换外，所有转换均需要本项目要求的 Rust/Cargo 和已缓存的依赖；启动桌面版也需要 Rust/Cargo。
+从仓库根目录执行命令。转换需要 Python 3.10+，除 asukimi 的 GBK 模式外还会调用 `cmvs-patch`。默认通过 Cargo 离线运行。首次使用或从旧版独立转换器升级时，可先联网构建一次。
+
+```sh
+cargo build --locked --release -p cmvs-patch
+```
+
+离线机器也可通过 `CMVS_PATCH_BIN` 指定同版本、适用于本机的可执行文件路径，转换时无需 Cargo 或依赖缓存。例如 `export CMVS_PATCH_BIN="$PWD/target/release/cmvs-patch"`。各游戏说明中的桌面启动命令仍需 Rust/Cargo。
 
 输入只读。输出目录必须不存在，且位于原版游戏目录之外。转换器复制原版资源、程序和配置，再写入转换结果；不安装补丁 exe/DLL 或剧情存档。修改的封包保持原版格式，其他封包原样复制。完成后生成 `conversion.json`，记录编码、输入身份和输出校验值。失败留下的目录不能直接使用，重试时另选新目录。
 
@@ -48,6 +54,16 @@ asukimi 的源补丁为 GBK。UTF-8 模式逐字符转码，并重定位字符�
 
 ## 验证范围
 
-编码选择、字符串引用重定位和资源封包有自动测试。各游戏两种编码的实际验证情况见各游戏说明。完整路线及原版存档互操作尚未验证；各补丁的已知问题见游戏说明。
+编码选择、字符串引用重定位和资源封包均纳入主工作区 `crates/cmvs-patch` 与 Python 合成测试：
+
+```sh
+(
+  set -eu
+  cargo test --offline --locked -p cmvs-patch
+  for t in tools/fan_patch/*/test_*.py; do python3 -I "$t"; done
+)
+```
+
+各游戏两种编码的实际验证情况见各游戏说明。完整路线及原版存档互操作尚未验证；各补丁的已知问题见游戏说明。
 
 封包格式迁移已覆盖 miranosu、hapymaher、chronoclock 1.0/1.05、amatsutsumi 的 UTF-8/GBK 共 10 种组合，与此前 CPZ3 输出逐项解包对照一致；既有运行记录来自迁移前。
