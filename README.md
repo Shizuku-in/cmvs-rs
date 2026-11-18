@@ -12,10 +12,10 @@
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/aki_switch.png" alt="Akiiro Renka on Switch" width="100%">
+      <img src="docs/images/aki_switch.webp" alt="Akiiro Renka on Switch" width="100%">
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/aki_vita.png" alt="Akiiro Renka on PS Vita" width="100%">
+      <img src="docs/images/aki_vita.webp" alt="Akiiro Renka on PS Vita" width="100%">
     </td>
   </tr>
   <tr>
