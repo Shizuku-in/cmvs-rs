@@ -21,8 +21,7 @@ import zipfile
 import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from fan_patch.launcher import cmvs_patch_command
-from ps3_inspect import lzss_decode
+from fan_patch.common import cmvs_patch_command, sha256
 
 LIMIT = 64 * 1024 * 1024
 ROOT = "[绿茶汉化组]アマツツミ/"
@@ -65,14 +64,6 @@ BASE_HASHES = {
 
 
 
-def sha256(path: Path) -> str:
-    with path.open("rb") as stream:
-        digest = hashlib.sha256()
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def unpack_pkp(data: bytes) -> dict[str, bytes]:
     """PKP: 12-byte header, 176-byte records, raw DEFLATE payloads."""
     if len(data) < 12 or data[:8] != b"PKP\0\0\0\0\0":
@@ -109,24 +100,6 @@ def unpack_pkp(data: bytes) -> dict[str, bytes]:
     return result
 
 
-def encode_script(raw: bytes) -> bytes:
-    """Patch scripts contain plain LZSS rather than the engine's encrypted LZSS."""
-    if len(raw) < 48 or raw[:8] != b"PS2A0\0\0\0":
-        raise ValueError("Invalid patch script header")
-    key = struct.unpack_from("<I", raw, 12)[0]
-    labels, code, unknown, text, entry, packed, size = struct.unpack_from("<7I", raw, 16)
-    if packed != len(raw) - 48 or labels * 4 + code + unknown + text != size or size > LIMIT or entry >= code:
-        raise ValueError("Invalid patch script segments")
-    payload = lzss_decode(raw[48:], size)
-    header = bytearray(raw[:48])
-    struct.pack_into("<I", header, 36, 0)
-    xor = ((key >> 3) + (key >> 24)) & 255
-    shift = (key >> 20) % 5 + 1
-    encoded = bytes((((((b << shift) | (b >> (8 - shift))) & 255) ^ xor) + 124) & 255
-                    for b in payload)
-    return bytes(header) + encoded
-
-
 def extract_patch(archive: zipfile.ZipFile, stage: Path) -> dict[str, str]:
     members = {}
     for info in archive.infolist():
@@ -150,11 +123,11 @@ def extract_patch(archive: zipfile.ZipFile, stage: Path) -> dict[str, str]:
     if len(scripts) != 86 or len(update) != 27 or not update.keys() <= scripts.keys():
         raise ValueError("Unexpected script update coverage")
     scripts.update(update)
-    (stage / "sc").mkdir()
+    (stage / "sc-lzss").mkdir()
     for name, raw in scripts.items():
         if not name.endswith(".ps3"):
             raise ValueError("Unexpected script member")
-        (stage / "sc" / name).write_bytes(encode_script(raw))
+        (stage / "sc-lzss" / name).write_bytes(raw)
     pictures = unpack_pkp(selected[BASE + "Pk/Graphic.pk"])
     if len(pictures) != 114:
         raise ValueError("Unexpected image coverage")
@@ -172,10 +145,6 @@ def extract_patch(archive: zipfile.ZipFile, stage: Path) -> dict[str, str]:
     return digests
 
 
-def patch_command(*args: str) -> list[str]:
-    return cmvs_patch_command("amatsutsumi", *args)
-
-
 def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
         raise ValueError("encoding must be utf-8, utf8 or gbk")
@@ -190,7 +159,7 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
         stage = Path(temp)
         with zipfile.ZipFile(patch) as archive:
             digests = extract_patch(archive, stage)
-        subprocess.run(patch_command(str(game), str(stage), encoding), check=True)
+        subprocess.run(cmvs_patch_command("amatsutsumi", str(game), str(stage), encoding), check=True)
         reports = {}
         for name in ("scripts", "images", "videos"):
             with (stage / f"{name}.tsv").open() as stream:
@@ -229,9 +198,6 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
                                 "Map patch glyph A2E1 to U+266A."],
             text_substitutions={"♪": "☆", "・": "·"} if encoding == "gbk" else {},
             output_sha256=outputs, **reports,
-            limitations=["Patch exe/DLL and its embedded font are not installed.",
-                         "Optional graphics and alternate-quality videos are not installed.",
-                         "Full routes and original save interoperability are not verified."],
         )
         (output / "conversion.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Converted Amatsutsumi ({encoding}) to {output}")

@@ -1,6 +1,15 @@
-"""Build the cmvs-patch command used by the Python converters."""
+"""Shared file hashing and command construction for fan patch converters."""
+import hashlib
 import os
 from pathlib import Path
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def cmvs_patch_command(game: str, *args: str) -> list[str]:

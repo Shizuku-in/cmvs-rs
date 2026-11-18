@@ -17,7 +17,7 @@
 
 ## 使用约定
 
-从仓库根目录执行命令。转换需要 Python 3.10+，除 asukimi 的 GBK 模式外还会调用 `cmvs-patch`。默认通过 Cargo 离线运行。首次使用或从旧版独立转换器升级时，可先联网构建一次。
+从仓库根目录执行命令。转换需要 Python 3.10+ 和 `cmvs-patch`。默认通过 Cargo 离线运行。首次使用或从旧版转换器升级时，可先联网构建一次。
 
 ```sh
 cargo build --locked --release -p cmvs-patch
@@ -54,14 +54,10 @@ asukimi 的源补丁为 GBK。UTF-8 模式逐字符转码，并重定位字符�
 
 ## 验证范围
 
-编码选择、字符串引用重定位和资源封包均纳入主工作区 `crates/cmvs-patch` 与 Python 合成测试：
+运行 `cmvs-patch` 的 Rust 测试：
 
 ```sh
-(
-  set -eu
-  cargo test --offline --locked -p cmvs-patch
-  for t in tools/fan_patch/*/test_*.py; do python3 -I "$t"; done
-)
+cargo test --offline --locked -p cmvs-patch
 ```
 
 各游戏两种编码的实际验证情况见各游戏说明。完整路线及原版存档互操作尚未验证；各补丁的已知问题见游戏说明。

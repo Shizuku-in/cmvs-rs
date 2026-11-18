@@ -35,7 +35,7 @@ Commands:
 Aliases are registered game names such as aki. For table, --base creates a
 derived profile with unreviewed commands. CVNS needs a CMVS root as its base.
 
---profiles-dir defaults to the checkout's research/profiles directory.
+--profiles-dir defaults to crates/cmvs-profile-research/profiles in the checkout.
 generate-playback writes to stdout by default. --output replaces the target file.
 Use -h or --help to show this help.
 
@@ -47,11 +47,8 @@ const PVNS_HINTS: [&str; 1] = ["pvns.exe"];
 fn load_research(
     directory: Option<&str>,
 ) -> Result<ResearchRegistry, Box<dyn Error + Send + Sync>> {
-    let directory = Path::new(directory.unwrap_or(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../research/profiles"
-    )));
-    ResearchRegistry::load(directory)
+    let directory = directory.unwrap_or(concat!(env!("CARGO_MANIFEST_DIR"), "/profiles"));
+    ResearchRegistry::load(Path::new(directory))
         .map_err(|err| format!("{err}; use --profiles-dir to locate the research directory").into())
 }
 

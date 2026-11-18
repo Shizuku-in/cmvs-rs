@@ -19,7 +19,7 @@
 ## 新游戏接入
 
 1. 在 `docs/games/<游戏标识>/` 建立档案，参考[模板](games/TEMPLATE.md)，在[游戏目录](games/README.md)登记。游戏标识使用稳定的小写 ASCII 名称。
-2. 记录作品、版本/补丁、平台、架构、编码、二进制与关键输入哈希；不知道的字段写“未确认”。同款不同版本先在档案内分节，证据较多时再按版本建子目录。用 `cmvs-profile identify` 获取哈希、PE 时间戳、链接器版本与 switch 信息；共用已登记构建时只需添加游戏记录，新构建则用 `cmvs-profile table --base` 生成派生档案（命令默认 `unreviewed`），登记到 `research/profiles/`。见[引擎档案层](design/engine-profiles.md)。
+2. 记录作品、版本/补丁、平台、架构、编码、二进制与关键输入哈希；不知道的字段写“未确认”。同款不同版本先在档案内分节，证据较多时再按版本建子目录。用 `cmvs-profile identify` 获取哈希、PE 时间戳、链接器版本与 switch 信息；共用已登记构建时只需添加游戏记录，新构建则用 `cmvs-profile table --base` 生成派生档案（命令默认 `unreviewed`），登记到 `crates/cmvs-profile-research/profiles/`。见[引擎档案层](design/engine-profiles.md)。
 3. 先核对容器签名、格式分支与脚本结构，再测试启动、标题、剧情、选择、片尾和保存/恢复。现有工具支持的格式之外保留明确错误，不跳过未知指令。
 4. 分开报告结构检查、VM 记录重放、画面检查、原生窗口/音轨、存档和平台验证。只保留复现所需的参数和输入状态；失败停点只记录尚未解决的问题。
 5. 把通用实现说明更新到架构、格式或后端文档；游戏专属差异和验证默认集中在一个 README；游戏目录只保留简要索引，不重复维护详细矩阵。
@@ -38,14 +38,12 @@ CMVS_SCRIPT_TEST_REPORT=local/script-sites.tsv \
 
 PowerShell 中用 `$env:变量名 = '值'` 设置同名变量，输入路径间改用分号，运行后用 `Remove-Item Env:变量名` 清除。独立脚本或失败条目可能在报告中带有本机路径，报告留在仓库外或忽略的 `local/`。
 
-需要对照实际分派入口时，再运行合成探针并合并两份报告。输出文件须是新路径。
+需要查看运行时对各命令的处理结果时，可另行生成分派报告。输出文件须是新路径。
 
 ```sh
 CMVS_COMMAND_INVENTORY=local/dispatch.tsv \
   cargo test --offline --release -p cmvs-core --test integration \
   command_inventory::command_inventory -- --ignored --exact
-python3 -I tools/command_inventory.py local/script-sites.tsv local/dispatch.tsv \
-  research/profiles/cmvs-20160201.profile local/joined.tsv
 ```
 
 汇总时分别记录结构、命令入口和执行地址覆盖。路线覆盖只汇总成功结束的路线；条件分支和游戏完成度需要各自的证据。

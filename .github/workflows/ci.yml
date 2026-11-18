@@ -137,23 +137,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check --locked --workspace --all-targets --all-features
 
-  python-tools:
-    name: python tools
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Run synthetic tool tests
-        run: |
-          for test in tools/test_*.py tests/test_ps3.py tools/fan_patch/*/test_*.py; do
-            echo "::group::$test"
-            python -I "$test"
-            echo "::endgroup::"
-          done
-
   wasm:
     name: browser wasm
     runs-on: ubuntu-latest

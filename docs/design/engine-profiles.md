@@ -1,6 +1,6 @@
 # 引擎档案
 
-档案对应具体引擎构建，游戏记录绑定启动脚本、脚本包和可执行文件身份。源数据位于 [`research/profiles`](../../research/profiles/)；核心的 `profile::Registry` 使用生成的静态表识别游戏。
+档案对应具体引擎构建，游戏记录绑定启动脚本、脚本包和可执行文件身份。源数据位于 [`crates/cmvs-profile-research/profiles`](../../crates/cmvs-profile-research/profiles/)；核心的 `profile::Registry` 使用生成的静态表识别游戏。
 
 `cmvs-profile-research::ResearchRegistry` 解析源档案并校验证据和契约，`cmvs-profile` 提供 PE 分派分析及静态表生成。生成数据包含游戏与构建身份、命令状态、变体 ID 和 CVNS 映射。
 
@@ -46,8 +46,8 @@ cargo run --offline -p cmvs-profile-research --bin cmvs-profile -- generate-play
 ```sh
 python3 -I tools/profile_compare.py local/base.json local/derived.json \
   --report local/comparison.tsv \
-  --base-profile research/profiles/cmvs-20160201.profile \
-  --profile research/profiles/cmvs-20150405.profile \
+  --base-profile crates/cmvs-profile-research/profiles/cmvs-20160201.profile \
+  --profile crates/cmvs-profile-research/profiles/cmvs-20150405.profile \
   --output-profile local/derived.profile
 ```
 

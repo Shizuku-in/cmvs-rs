@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import shutil
@@ -19,7 +18,7 @@ import tempfile
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from fan_patch.launcher import cmvs_patch_command
+from fan_patch.common import cmvs_patch_command, sha256
 
 LIMIT = 64 * 1024 * 1024
 PATCH_SHA256 = "24d2872ae77177234b72adcd8b15494cea2dcc8f0c41c4c4eb6467f028ed7550"
@@ -29,14 +28,6 @@ BASE_HASHES = {
     "data/pack/start.ps3": "d4263a32830bb385fabfa7e06c2fde2d70e072722e3ed6c317292e7086fb6dce",
     "data/pack/script.cpz": "aa4bd891cc50fe658cacc050c6b216e8ba0389d17d01163e335f3177d6f14ba3",
 }
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def extract_patch(archive: zipfile.ZipFile, stage: Path, version: str) -> None:
@@ -73,10 +64,6 @@ def extract_patch(archive: zipfile.ZipFile, stage: Path, version: str) -> None:
     (stage / "汉化补丁说明.txt").write_bytes(archive.read(members["补丁使用说明.txt"]))
 
 
-def patch_command(*args: str) -> list[str]:
-    return cmvs_patch_command("chronoclock", *args)
-
-
 def convert(game: Path, patch: Path, output: Path, version: str = "1.0", encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
         raise ValueError("encoding must be utf-8, utf8 or gbk")
@@ -95,7 +82,7 @@ def convert(game: Path, patch: Path, output: Path, version: str = "1.0", encodin
         stage = Path(temp)
         with zipfile.ZipFile(patch) as archive:
             extract_patch(archive, stage, version)
-        subprocess.run(patch_command(str(game), str(stage), encoding), check=True)
+        subprocess.run(cmvs_patch_command("chronoclock", str(game), str(stage), encoding), check=True)
         with (stage / "scripts.tsv").open() as stream:
             scripts = list(csv.DictReader(stream, delimiter="\t"))
         with (stage / "images.tsv").open() as stream:
@@ -124,9 +111,6 @@ def convert(game: Path, patch: Path, output: Path, version: str = "1.0", encodin
             text_substitutions={"♪": "☆", "・": "·", "䇲": "筴"} if encoding == "gbk" else {},
             source_adaptations=["snky21.ps3 text+0xc41a: match the installed source punctuation."],
             output_sha256=outputs, scripts=scripts, images=images,
-            limitations=["Patch 1.0 and 1.05 share translations; dialog_chip.pb3 differs.",
-                         "Patch executable/DLL behavior is not installed.",
-                         "Full routes, native audio and original save interoperability are not verified."],
         )
         (output / "conversion.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Converted patch {version}: 86 scripts / 92 images to {output}")

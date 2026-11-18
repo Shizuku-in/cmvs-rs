@@ -20,7 +20,7 @@ import tempfile
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from fan_patch.launcher import cmvs_patch_command
+from fan_patch.common import cmvs_patch_command, sha256
 
 LIMIT = 64 * 1024 * 1024
 PATCH_SHA256 = "232277b268e17faa084b8e33460166803cb14dfb9499edf22a264c7b7545a60a"
@@ -31,14 +31,6 @@ BASE_HASHES = {
     "data/pack/start.ps2": "2e8c7261ea801f59c9e80b9cdbde89832c0a65f7b622e2fa4551509b1cfe5143",
     "data/pack/script.cpz": "bd70dba1785ec45494e73c451e6d492a91fd2eb0e56787dc60bce96c9b06effe",
 }
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def decode_mirai(raw: bytes) -> bytes:
@@ -125,10 +117,6 @@ def decode_mirai(raw: bytes) -> bytes:
     return bytes(out)
 
 
-def patch_command(*args: str) -> list[str]:
-    return cmvs_patch_command("miranosu", *args)
-
-
 def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
         raise ValueError("encoding must be utf-8, utf8 or gbk")
@@ -153,7 +141,7 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
         stage = Path(temp)
         (stage / "mirai.decoded").write_bytes(decoded)
         subprocess.run(
-            patch_command(str(game), str(stage / "mirai.decoded"), str(stage), encoding),
+            cmvs_patch_command("miranosu", str(game), str(stage / "mirai.decoded"), str(stage), encoding),
             check=True,
         )
         with (stage / "scripts.tsv").open() as stream:
@@ -179,10 +167,6 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
             output_sha256={name: sha256(output / name) for name in
                            ("data/pack/script.cpz", "data/pack/start.ps2")},
             scripts=scripts,
-            limitations=["Original image assets: image-based menus remain Japanese.",
-                         f"Untranslated Japanese strings are retained in {encoding}.",
-                         "No patch DLL/exe/system.dat or full-CG saves installed.",
-                         "Full routes and original save interoperability are not verified."],
         )
         (output / "conversion.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Converted 115 scripts / 95112 strings to {output}")

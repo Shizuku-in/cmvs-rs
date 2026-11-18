@@ -15,7 +15,7 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
   --font "<中文字体文件>" --user-data-dir "<独立用户目录>"
 ```
 
-示例输出 UTF-8（默认，也接受 `utf8`）。如需 GBK，将转换和启动命令中的 `--encoding utf-8` 同时改为 `--encoding gbk`。UTF-8 转换使用 `cmvs-patch`，GBK 转换仅需 Python 标准库。
+示例输出 UTF-8（默认，也接受 `utf8`）。如需 GBK，将转换和启动命令中的 `--encoding utf-8` 同时改为 `--encoding gbk`。两种编码均使用 `cmvs-patch`。
 
 ## 转换内容
 
@@ -25,11 +25,10 @@ UTF-8 模式以原版指令布局校验补丁，仅修改字符串引用，支�
 
 ## 验证
 
-UTF-8 已完成全部 126 个包内脚本及启动脚本的实际转换和格式检查；逐条比对确认文本内容与 GBK 源补丁一致。桌面版以 `--encoding utf-8` 启动并显示中文标题菜单。字符串内部引用、非法字符、精确修复和空表达式均有自动测试。
+UTF-8 已完成全部 126 个包内脚本及启动脚本的实际转换和格式检查；逐条比对确认文本内容与 GBK 源补丁一致。桌面版以 `--encoding utf-8` 启动并显示中文标题菜单。
 
 已有 GBK 运行记录覆盖中文标题、8 个不同消息等待，以及首次剧情存读档后继续播放。补丁说明中的朝日线 7 月 2 日崩溃尚未验证是否解决。完整路线、原生音频和原版存档互操作尚未验证。
 
 ```bash
-python3 -I tools/fan_patch/asukimi/test_convert_asukimi_patch.py
 cargo test --offline --locked -p cmvs-patch asukimi
 ```

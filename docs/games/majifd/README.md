@@ -17,7 +17,7 @@
 
 | 项目 | 结果与范围 |
 |---|---|
-| 封包与脚本 (`S1`–`S4`) | 通过（`--render-frames`）：6 个资源封包共 4,241 项资源头（`pb2` 973、`msk` 43、`mv2` 3,135、`ogg` 90）与全部脚本（`script.cpz` 23 个脚本共 1,843,638 条指令、206 条已去重系统命令全部为 `reviewed`，外加启动脚本 `start.pss` 线性反汇编 260 条指令通过；[cvns-20040730.profile](../../../research/profiles/cvns-20040730.profile) 共 248 `reviewed` / 69 `unreviewed` / 227 `noop`） |
+| 封包与脚本 (`S1`–`S4`) | 通过（`--render-frames`）：6 个资源封包共 4,241 项资源头（`pb2` 973、`msk` 43、`mv2` 3,135、`ogg` 90）与全部脚本（`script.cpz` 23 个脚本共 1,843,638 条指令、206 条已去重系统命令全部为 `reviewed`，外加启动脚本 `start.pss` 线性反汇编 260 条指令通过；[cvns-20040730.profile](../../../crates/cmvs-profile-research/profiles/cvns-20040730.profile) 共 248 `reviewed` / 69 `unreviewed` / 227 `noop`） |
 | 系统存档 (`S5`) | 跳过：样本 `data/save/` 目录为空 |
 | 启动与确定性 (`R1`, `D1`) | 通过（含 `--render-frames`）：冷启动经 `start.pss` → `logo.pss` → `menu.pss` 5 按钮起始页（15,522 步 / 687 帧，状态哈希 `c83041f670a462dbe8921c8ae12261fbfd024f1a217bc8faf5bcbc13a3a889da`），重放 687 帧轨迹与末状态哈希一致 |
 | 交互与回想 (`I1`, `I4`) | 通过（含 `--render-frames`）：进入 `fdnn7.pss` 后通过全部等待点输入动作，滚轮上滑打开 10 条回想记录并右键返回 `fdnn7.pss` `0x92e66` 原等待点 |
@@ -27,7 +27,7 @@
 
 ## 命令映射与复核
 
-- **基础环境与复用**：经 `cvns.exe`（`2bfcb306...`）核对，`sub_401250` 按 `CVNS_SYSTEM_MAIN.WINDOW_SIZE` 选 `0→640×480`、`1→800×600`、`2→1024×768`（本样本为 `0`）；`sub_4117E0` / `sub_435A20`–`sub_435A40` 读写 `CSS0` 与 `[4096, 262144, 0, 256]` 全局变量；`sub_427490` / `sub_427EC0` / `sub_433C10` 读写 600 字节 header `version = 3` 的 `CSP1`（原版体内存块为早期 `0x100..0x900`，本仓库使用自建 `SnapshotLayout::CvnsCsp1`）。另据 `sub_426380` `case 0x413` 与 `sub_425810` 修复 `0x0413` 4 字节解码/按 `LOWORD(4 * result)` 退栈返回（`intproc.pss`）以及顶层空 `0x0200 0x020f` 整数表达式按 `0` 求值（`fdnn1.pss`）。脚本其余 201 条共有命令及 42 个未使用槽位经 switch 与处理函数比对沿用 [cvns-20050216](../../../research/profiles/cvns-20050216.profile)（其中 `0x2006`、`0x202a`、`0x2113` 处理逻辑核对等价或安全，69 个未用槽位保持 `unreviewed`）。
+- **基础环境与复用**：经 `cvns.exe`（`2bfcb306...`）核对，`sub_401250` 按 `CVNS_SYSTEM_MAIN.WINDOW_SIZE` 选 `0→640×480`、`1→800×600`、`2→1024×768`（本样本为 `0`）；`sub_4117E0` / `sub_435A20`–`sub_435A40` 读写 `CSS0` 与 `[4096, 262144, 0, 256]` 全局变量；`sub_427490` / `sub_427EC0` / `sub_433C10` 读写 600 字节 header `version = 3` 的 `CSP1`（原版体内存块为早期 `0x100..0x900`，本仓库使用自建 `SnapshotLayout::CvnsCsp1`）。另据 `sub_426380` `case 0x413` 与 `sub_425810` 修复 `0x0413` 4 字节解码/按 `LOWORD(4 * result)` 退栈返回（`intproc.pss`）以及顶层空 `0x0200 0x020f` 整数表达式按 `0` 求值（`fdnn1.pss`）。脚本其余 201 条共有命令及 42 个未使用槽位经 switch 与处理函数比对沿用 [cvns-20050216](../../../crates/cmvs-profile-research/profiles/cvns-20050216.profile)（其中 `0x2006`、`0x202a`、`0x2113` 处理逻辑核对等价或安全，69 个未用槽位保持 `unreviewed`）。
 
 ### 0x20e8
 

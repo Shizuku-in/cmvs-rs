@@ -22,7 +22,7 @@ python3 -I tools/contract_extract.py BASE.json DERIVED.json \
 
 [`contract_register.py`](../../tools/contract_register.py) 接收上述导出、规则和 exe，并要求 `--base-profile`、`--derived-profile`、`--report` 及显式 opcode。工具重新提取并核对报告，输出证书、档案行和迁移 TSV 候选，不直接修改 Registry，也不覆盖已有继承或人工复核行。完整参数见 `--help`。
 
-档案的 `contract=<SHA-256>` 引用 `research/profiles/contracts.txt` 中规范化 `proof v1` 行的哈希。证明绑定两侧身份、架构、case、opcode、导出、契约及工具/规则依赖；v1 要求 x64、完整覆盖、原二进制绑定、相同契约哈希，并直接对本家族根档案的 `Base` 命令比较。
+档案的 `contract=<SHA-256>` 引用 `crates/cmvs-profile-research/profiles/contracts.txt` 中规范化 `proof v1` 行的哈希。证明绑定两侧身份、架构、case、opcode、导出、契约及工具/规则依赖；v1 要求 x64、完整覆盖、原二进制绑定、相同契约哈希，并直接对本家族根档案的 `Base` 命令比较。
 
 `Registry::parse_with_contracts` 要求明确受信任的证书目录和活动规则；普通 `parse` 不接受契约引用。内置 Registry 只使用编译时登记数据。规则哈希按实际工具及上下文、映射、摘要文件重算，变更后旧证书失效，必须重新提取和复核。
 
@@ -32,11 +32,4 @@ python3 -I tools/contract_extract.py BASE.json DERIVED.json \
 
 ## 检查
 
-```sh
-python3 -I tools/test_command_contract.py
-python3 -I tools/test_contract_extract.py
-python3 -I tools/test_contract_register.py
-python3 -I tools/test_profile_compare.py
-```
-
-变更证明或 Registry 时还需[核心检查](../architecture.md#检查)。保留行为差异、未知依赖、错误身份、规则过期和撤销的拒绝用例。
+变更证明或 Registry 时执行[核心检查](../architecture.md#检查)。

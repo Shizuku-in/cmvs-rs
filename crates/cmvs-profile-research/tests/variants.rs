@@ -6,8 +6,8 @@ use cmvs_core::{
 };
 use cmvs_profile_research::ResearchRegistry as Registry;
 
-const ROOT: &str = include_str!("../../../research/profiles/cmvs-20160201.profile");
-const DERIVED: &str = include_str!("../../../research/profiles/cmvs-20171114.profile");
+const ROOT: &str = include_str!("../profiles/cmvs-20160201.profile");
+const DERIVED: &str = include_str!("../profiles/cmvs-20171114.profile");
 const HASH: &str = "3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0";
 
 #[test]
@@ -122,19 +122,19 @@ fn variant_declarations_reject_unknown_handlers_bad_bindings_and_unsafe_evidence
 
 #[test]
 fn old_text_dialog_variant_rejects_a_mismatched_binary_identity() {
-    let root = include_str!("../../../research/profiles/cmvs-20160201.profile");
+    let root = include_str!("../profiles/cmvs-20160201.profile");
     for (name, source) in [
         (
             "cmvs-20071117",
-            include_str!("../../../research/profiles/cmvs-20071117.profile"),
+            include_str!("../profiles/cmvs-20071117.profile"),
         ),
         (
             "cmvs-20080719",
-            include_str!("../../../research/profiles/cmvs-20080719.profile"),
+            include_str!("../profiles/cmvs-20080719.profile"),
         ),
         (
             "cmvs-20080903",
-            include_str!("../../../research/profiles/cmvs-20080903.profile"),
+            include_str!("../profiles/cmvs-20080903.profile"),
         ),
     ] {
         let research = Registry::parse(&[root, source], "").unwrap();

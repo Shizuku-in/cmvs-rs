@@ -15,21 +15,12 @@ spec = importlib.util.spec_from_file_location("contract_extract", Path(__file__)
 ce = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ce)
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONTRACT_RULES = REPO_ROOT / "research/profiles/contract_rules.txt"
 RULE_KEYS = ("extractor", "context", "mappings", "summaries")
 RULE_FIELDS = (
     ("extractor", "extractor_revision"),
     ("context", "rules_sha256"),
     ("mappings", "mapping_sha256"),
     ("summaries", "summaries_sha256"),
-)
-PROOF_KEYS = (
-    "arch", "opcode", "base-profile", "derived-profile", "base-sha256", "derived-sha256",
-    "base-image", "derived-image", "base-case", "derived-case", "base-export", "derived-export",
-    "extractor", "context", "mappings", "summaries", "base-contract", "derived-contract",
-    "report", "mappings-used", "summaries-used", "model", "export-format", "result",
-    "coverage", "binary",
 )
 
 
@@ -118,10 +109,6 @@ def parse_contract_rules_with_meta(text):
     return parsed, extractor_ast
 
 
-def parse_contract_rules(text):
-    return parse_contract_rules_with_meta(text)[0]
-
-
 def format_contract_rules(rules, extractor_ast=None):
     normalized = {}
     for short_key, report_key in RULE_FIELDS:
@@ -136,45 +123,6 @@ def format_contract_rules(rules, extractor_ast=None):
         lines.append(f"# extractor-ast {extractor_ast}")
     lines.extend(f"{key} {normalized[key]}" for key in RULE_KEYS)
     return "\n".join(lines) + "\n"
-
-
-def parse_catalog(text, active_rules=None):
-    """Parse `contracts.txt` and optionally verify every non-revoked proof matches `active_rules`."""
-    proofs = {}
-    revoked = set()
-    for line_no, raw in enumerate(text.splitlines(), 1):
-        words = raw.split()
-        if not words or words[0].startswith("#"):
-            continue
-        if words[0] == "revoked" and len(words) == 2 and ce.cc.SHA.fullmatch(words[1]):
-            if words[1] in revoked:
-                raise ValueError(f"contracts.txt line {line_no}: duplicate revocation")
-            revoked.add(words[1])
-            continue
-        if words[:2] != ["proof", "v1"] or len(words) != 2 + len(PROOF_KEYS):
-            raise ValueError(f"contracts.txt line {line_no}: malformed proof entry")
-        fields = {}
-        for word, expected_key in zip(words[2:], PROOF_KEYS):
-            prefix = expected_key + "="
-            if not word.startswith(prefix):
-                raise ValueError(f"contracts.txt line {line_no}: expected `{prefix}`")
-            fields[expected_key] = word[len(prefix):]
-        canonical = "proof v1 " + " ".join(f"{key}={fields[key]}" for key in PROOF_KEYS)
-        if canonical != " ".join(words):
-            raise ValueError(f"contracts.txt line {line_no}: noncanonical proof line")
-        ident = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        if ident in proofs:
-            raise ValueError(f"contracts.txt line {line_no}: duplicate certificate")
-        proofs[ident] = fields
-    for ident in revoked:
-        proofs.pop(ident, None)
-    if active_rules is not None:
-        expected = {key: active_rules[key] for key in RULE_KEYS}
-        for ident, fields in proofs.items():
-            actual = {key: fields[key] for key in RULE_KEYS}
-            if actual != expected:
-                raise ValueError(f"certificate {ident} rules do not match active contract_rules.txt")
-    return proofs
 
 
 def certificate(base, derived, row, rules, exports, report_sha):

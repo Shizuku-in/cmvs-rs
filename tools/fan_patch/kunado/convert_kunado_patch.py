@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -20,7 +19,7 @@ import tempfile
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from fan_patch.launcher import cmvs_patch_command
+from fan_patch.common import cmvs_patch_command, sha256
 
 LIMIT = 64 * 1024 * 1024
 ROOT = "Release1.2/"
@@ -32,14 +31,6 @@ BASE_HASHES = {
     "data/pack/script.cpz": "d3e2309180801dcff74abf2597e2d07b21c29c1b7afd0ab51b5c9a13fbd81ea9",
 }
 GBK_SUBSTITUTIONS = {"♪": "☆", "・": "·"}
-
-
-def sha256(path: Path) -> str:
-    with path.open("rb") as stream:
-        digest = hashlib.sha256()
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def extract_patch(archive: zipfile.ZipFile, stage: Path) -> tuple[dict[str, str], list[str]]:
@@ -77,10 +68,6 @@ def extract_patch(archive: zipfile.ZipFile, stage: Path) -> tuple[dict[str, str]
     return pictures, ["ed_bg.pb3"]
 
 
-def patch_command(*args: str) -> list[str]:
-    return cmvs_patch_command("kunado", *args)
-
-
 def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
         raise ValueError("encoding must be utf-8, utf8 or gbk")
@@ -97,7 +84,7 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
         stage = Path(temp)
         with zipfile.ZipFile(patch) as archive:
             aliases, ignored = extract_patch(archive, stage)
-        subprocess.run(patch_command(str(game), str(stage), encoding), check=True)
+        subprocess.run(cmvs_patch_command("kunado", str(game), str(stage), encoding), check=True)
         reports = {}
         for name in ("scripts", "images"):
             with (stage / f"{name}.tsv").open() as stream:
@@ -128,9 +115,6 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
                                 "Convert PNG images to PB3B type 1; preserve CPZ7 keys."],
             picture_sources=aliases, unused_pictures=ignored,
             output_sha256=outputs, **reports,
-            limitations=["No patch exe/DLL, settings or saves installed.",
-                         "Untranslated scripts retain their original Japanese text.",
-                         "Full routes and original save interoperability are not verified."],
         )
         (output / "conversion.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Converted Kunado ({encoding}) to {output}")

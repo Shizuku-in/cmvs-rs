@@ -17,6 +17,7 @@ pub const USAGE: &str = "\
 Usage:
   cmvs-patch <game> <original-game> <stage-dir> <encoding>
   cmvs-patch asukimi <original-game> <normalized-gbk-patch> <empty-output>
+  cmvs-patch asukimi --check-gbk <normalized-gbk-patch>
   cmvs-patch miranosu <original-game> <decoded-mirai> <empty-output> <encoding>
 
 For the first form, <game> is amatsutsumi, aoitori, chronoclock, hapymaher,
@@ -59,6 +60,11 @@ pub fn run_cli<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
             )
         }
         "asukimi" => {
+            if let [flag, input] = rest
+                && flag == "--check-gbk"
+            {
+                return asukimi::check_gbk(Path::new(input));
+            }
             let [game_dir, input, output] = three_args(
                 rest,
                 "<original-game> <normalized-gbk-patch> <empty-output>",

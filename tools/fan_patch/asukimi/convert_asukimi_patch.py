@@ -21,8 +21,7 @@ import tempfile
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from fan_patch.launcher import cmvs_patch_command
-from ps3_inspect import FormatError, decode_script
+from fan_patch.common import cmvs_patch_command, sha256
 
 MASK = 0xFFFFFFFF
 LIMIT = 64 * 1024 * 1024
@@ -38,14 +37,6 @@ TABLE = (
     0x067FA4B5, 0xED0AE742, 0xB19450CC, 0xE7204A5A,
     0xD9AF04F5, 0x5D3B687F, 0xC1C7A6FD, 0xFC502289,
 )
-
-
-def sha256(path: Path) -> str:
-    with path.open("rb") as stream:
-        digest = hashlib.sha256()
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-        return digest.hexdigest()
 
 
 def checksum(data: bytes) -> int:
@@ -93,33 +84,33 @@ class Cpz3:
         with path.open("rb") as stream:
             header = stream.read(20)
             if len(header) != 20 or header[:4] != b"CPZ3":
-                raise FormatError("Expected CPZ3")
+                raise ValueError("Expected CPZ3")
             count, size, check, key = struct.unpack_from("<4I", header, 4)
             count ^= 0x5E9C4F37
             size ^= 0xF32AED17
             if size > LIMIT or count * 25 > size or size + 20 > path.stat().st_size:
-                raise FormatError("CPZ3 index exceeds bounds")
+                raise ValueError("CPZ3 index exceeds bounds")
             packed = stream.read(size)
         if checksum(packed) != check:
-            raise FormatError("CPZ3 index checksum mismatch")
+            raise ValueError("CPZ3 index checksum mismatch")
         index = cipher(packed, key ^ 0xDDDDDDDD ^ 0x7BF4A539)
         self.entries = {}
         at = 0
         for _ in range(count):
             if at + 25 > len(index):
-                raise FormatError("Truncated CPZ3 record")
+                raise ValueError("Truncated CPZ3 record")
             length, size, offset, _unused, check, key = struct.unpack_from("<6I", index, at)
             if length < 25 or at + length > len(index):
-                raise FormatError("Unsupported CPZ3 record")
+                raise ValueError("Unsupported CPZ3 record")
             field = index[at + 24:at + length]
             if b"\0" not in field:
-                raise FormatError("Unterminated CPZ3 name")
+                raise ValueError("Unterminated CPZ3 name")
             name = field.split(b"\0", 1)[0].decode("ascii")
             if not name or any(c in name for c in "/\\:") or name in self.entries:
-                raise FormatError("Unsafe or duplicate CPZ3 name")
+                raise ValueError("Unsafe or duplicate CPZ3 name")
             absolute = 20 + len(packed) + offset
             if absolute + size > path.stat().st_size or size > LIMIT:
-                raise FormatError("CPZ3 resource exceeds bounds")
+                raise ValueError("CPZ3 resource exceeds bounds")
             self.entries[name] = (size, absolute, check, key ^ 0xC7F5DA63)
             at += length
 
@@ -129,7 +120,7 @@ class Cpz3:
             stream.seek(offset)
             data = stream.read(size)
         if len(data) != size or checksum(data) != check:
-            raise FormatError(f"CPZ3 resource checksum mismatch: {name}")
+            raise ValueError(f"CPZ3 resource checksum mismatch: {name}")
         return data
 
     def read(self, name: str) -> bytes:
@@ -138,7 +129,7 @@ class Cpz3:
 
 def write_cpz3(path: Path, source: Cpz3, replacements: dict[str, bytes]) -> None:
     if not replacements.keys() <= source.entries.keys():
-        raise FormatError("Replacement names missing from original archive")
+        raise ValueError("Replacement names missing from original archive")
     # Stream encrypted resources into a temporary sibling, then write the small index.
     index = bytearray()
     offset = 0
@@ -155,7 +146,7 @@ def write_cpz3(path: Path, source: Cpz3, replacements: dict[str, bytes]) -> None
             stream.write(data)
             offset += len(data)
             if offset > MASK:
-                raise FormatError("CPZ3 output exceeds 32-bit offsets")
+                raise ValueError("CPZ3 output exceeds 32-bit offsets")
         packed = cipher(bytes(index), 0, encrypt=True)
         stream.seek(0)
         stream.write(b"CPZ3" + struct.pack("<4I", len(source.entries) ^ 0x5E9C4F37,
@@ -167,16 +158,16 @@ def write_cpz3(path: Path, source: Cpz3, replacements: dict[str, bytes]) -> None
 def bmp_to_pb3(raw: bytes, target_bpp: int = 32) -> tuple[bytes, dict]:
     """Preserve the original resource's alpha semantics, not the BMP storage depth."""
     if target_bpp not in (24, 32):
-        raise FormatError("Unsupported target PB3 bit depth")
+        raise ValueError("Unsupported target PB3 bit depth")
     if len(raw) < 54 or raw[:2] != b"BM":
-        raise FormatError("Expected BMP")
+        raise ValueError("Expected BMP")
     size, _, _, at = struct.unpack_from("<IHHI", raw, 2)
     dib, width, height, planes, bpp, compression = struct.unpack_from("<IiiHHI", raw, 14)
     if (size != len(raw) or dib != 40 or planes != 1 or bpp != 32 or compression != 0
             or not 0 < width <= 65535 or not 0 < abs(height) <= 65535
             or width * abs(height) * 4 > LIMIT or at < 54
             or not 0 <= len(raw) - at - width * abs(height) * 4 <= 3):
-        raise FormatError("Expected bounded 32-bit BI_RGB BMP")
+        raise ValueError("Expected bounded 32-bit BI_RGB BMP")
     pixels = raw[at:at + width * abs(height) * 4]
     if height > 0:
         stride = width * 4
@@ -212,12 +203,11 @@ def normalize_start(raw: bytes) -> bytes:
     # Only called after verifying the entire supported ZIP. These exact three fields
     # are stale; no general truncated-input recovery is enabled in the engine.
     if len(raw) != 956 or struct.unpack_from("<3I", raw, 28) != (60, 0, 915):
-        raise FormatError("Unexpected CK-GAL startup layout")
+        raise ValueError("Unexpected CK-GAL startup layout")
     out = bytearray(raw)
     struct.pack_into("<I", out, 28, 382)
     struct.pack_into("<I", out, 36, 908)
     struct.pack_into("<I", out, 40, 3756)
-    decode_script(bytes(out))
     return bytes(out)
 
 
@@ -225,22 +215,22 @@ def normalize_script_archive(raw: bytes) -> tuple[bytes, int]:
     """Known patch retains old index/resource checksums; rebuild them offline.
 
     Caller MUST pin the complete input ZIP before using this conversion rule.
-    The strict Cpz3 reader then verifies the resulting index and all scripts.
+    The Cpz3 reader checks the new index, and cmvs-patch validates the scripts.
     """
     count, size, _, key = struct.unpack_from("<4I", raw, 4)
     count ^= 0x5E9C4F37
     size ^= 0xF32AED17
     if raw[:4] != b"CPZ3" or size > LIMIT or size + 20 > len(raw):
-        raise FormatError("Unexpected patch CPZ3 layout")
+        raise ValueError("Unexpected patch CPZ3 layout")
     key ^= 0xDDDDDDDD ^ 0x7BF4A539
     index = bytearray(cipher(raw[20:20 + size], key))
     at, repaired = 0, 0
     for _ in range(count):
         if at + 25 > len(index):
-            raise FormatError("Truncated patch record")
+            raise ValueError("Truncated patch record")
         length, length_data, offset, _unused, old = struct.unpack_from("<5I", index, at)
         if length < 25 or at + length > size or 20 + size + offset + length_data > len(raw):
-            raise FormatError("Patch resource exceeds bounds")
+            raise ValueError("Patch resource exceeds bounds")
         new = checksum(raw[20 + size + offset:20 + size + offset + length_data])
         repaired += old != new
         struct.pack_into("<I", index, at + 16, new)
@@ -252,23 +242,19 @@ def normalize_script_archive(raw: bytes) -> tuple[bytes, int]:
     return bytes(out), repaired
 
 
-def patch_command(*args: str) -> list[str]:
-    return cmvs_patch_command("asukimi", *args)
-
-
 def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
     if encoding not in ("utf-8", "utf8", "gbk"):
-        raise FormatError("encoding must be utf-8, utf8 or gbk")
+        raise ValueError("encoding must be utf-8, utf8 or gbk")
     encoding = "utf-8" if encoding == "utf8" else encoding
     recoded_scripts = []
     game, patch, output = game.resolve(), patch.resolve(), output.resolve()
     if output.exists() or output.is_relative_to(game):
-        raise FormatError("Output must be a new directory outside the game")
+        raise ValueError("Output must be a new directory outside the game")
     for name, expected in BASE_HASHES.items():
         if sha256(game / name) != expected:
-            raise FormatError(f"Unsupported original game: {name}")
+            raise ValueError(f"Unsupported original game: {name}")
     if sha256(patch) != PATCH_SHA256:
-        raise FormatError("Unsupported patch ZIP (SHA-256 mismatch)")
+        raise ValueError("Unsupported patch ZIP (SHA-256 mismatch)")
     with zipfile.ZipFile(patch) as archive:
         files = {}
         for entry in archive.infolist():
@@ -276,31 +262,31 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
                 continue
             relative = PurePosixPath(*PurePosixPath(entry.filename).parts[1:])
             if relative.is_absolute() or ".." in relative.parts or relative.as_posix() in files:
-                raise FormatError("Unsafe or duplicate patch path")
+                raise ValueError("Unsafe or duplicate patch path")
             if entry.file_size > LIMIT:
-                raise FormatError("Patch file too large")
+                raise ValueError("Patch file too large")
             files[relative.as_posix()] = archive.read(entry)
     start = normalize_start(files["data/pack/start.ps2"])
     script_archive, repaired = normalize_script_archive(files["data/pack/script.cpz"])
     # Validate all scripts strictly before creating the output directory.
-    # The ZIP archive is trusted by digest; the temporary CPZ still uses bounded readers.
     with tempfile.TemporaryDirectory(prefix="asukimi-patch-") as temp:
-        script_path = Path(temp) / "script.cpz"
+        stage = Path(temp)
+        script_path = stage / "script.cpz"
         script_path.write_bytes(script_archive)
+        (stage / "start.ps2").write_bytes(start)
         scripts = Cpz3(script_path)
         if len(scripts.entries) != 126:
-            raise FormatError("Unexpected script count")
-        for name in scripts.entries:
-            decode_script(scripts.read(name))
+            raise ValueError("Unexpected script count")
         if encoding == "utf-8":
-            (Path(temp) / "start.ps2").write_bytes(start)
-            recoded = Path(temp) / "utf8"
+            recoded = stage / "utf8"
             recoded.mkdir()
-            subprocess.run(patch_command(str(game), temp, str(recoded)), check=True)
+            subprocess.run(cmvs_patch_command("asukimi", str(game), temp, str(recoded)), check=True)
             start = (recoded / "start.ps2").read_bytes()
             script_archive = (recoded / "script.cpz").read_bytes()
             with (recoded / "scripts.tsv").open(encoding="utf-8") as stream:
                 recoded_scripts = list(csv.DictReader(stream, delimiter="\t"))
+        else:
+            subprocess.run(cmvs_patch_command("asukimi", "--check-gbk", temp), check=True)
     chip = Cpz3(game / "data/pack/chip.cpz")
     images, details = {}, {}
     for name, raw in files.items():
@@ -314,9 +300,9 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
             _, width, height, bpp = struct.unpack_from("<4H", header, 28)
             images[target], details[target] = bmp_to_pb3(raw, bpp)
             if (width, height) != (details[target]["width"], details[target]["height"]):
-                raise FormatError(f"Replacement dimensions differ from original: {target}")
+                raise ValueError(f"Replacement dimensions differ from original: {target}")
     if len(images) != 28 or not images.keys() <= chip.entries.keys():
-        raise FormatError("Unexpected image replacement set")
+        raise ValueError("Unexpected image replacement set")
     print("Validated 126 scripts, startup repair and 28 images; copying original data", flush=True)
     output.mkdir(parents=True)
     # On failure leave the partial directory for diagnosis, without a success manifest.
@@ -348,11 +334,7 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
                   startup_repair={"text_size": [60, 382], "compressed_size": [915, 908],
                                   "decoded_size": [7130, 3756]},
                   outputs={name: sha256(output / name) for name in
-                           (*BASE_HASHES, "data/pack/chip.cpz")},
-                  limitations=["Patch's documented Asahi July 2 crash is not repaired",
-                               "Patch save125.dat not installed; use separate user data",
-                               "Original EXE retained for engine identity; use cmvs-rs",
-                               "No guarantee of complete routes or GDI layout equivalence"])
+                           (*BASE_HASHES, "data/pack/chip.cpz")})
     (output / "conversion.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                                              encoding="utf-8")
     print(f"Converted to {output}", flush=True)

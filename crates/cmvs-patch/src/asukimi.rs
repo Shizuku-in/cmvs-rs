@@ -1,9 +1,10 @@
-//! UTF-8 conversion of the digest-pinned CK-GAL Asukimi patch. GBK output bypasses this helper.
+//! Script validation and UTF-8 conversion for the digest-pinned CK-GAL Asukimi patch.
 
 use crate::common::{Result, pack_cpz3, rebuild_script, validate_utf8, write_new};
 use cmvs_core::{
-    format::cpz::ArchiveIndex, format::ps3::Script, vm::bytecode, vm::bytecode::Expression,
-    vm::bytecode::InstructionKind, vm::bytecode::Term,
+    format::cpz::{ArchiveIndex, Cpz3Index},
+    format::ps3::Script,
+    vm::bytecode::{self, Expression, InstructionKind, Term},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -142,6 +143,18 @@ fn recode(name: &[u8], original: &[u8], patched: &[u8]) -> Result<(Vec<u8>, usiz
         return Err("converted instruction layout changed".into());
     }
     Ok((rebuild_script(patched, &code, &text)?, positions.len()))
+}
+
+pub(crate) fn check_gbk(input: &Path) -> Result<()> {
+    Script::decode(&fs::read(input.join("start.ps2"))?)?;
+    let mut file = File::open(input.join("script.cpz"))?;
+    let index = Cpz3Index::read(&mut file)?;
+    for (i, entry) in index.entries().iter().enumerate() {
+        let raw = index.read_entry_verified(&mut file, i)?;
+        Script::decode(&raw)
+            .map_err(|e| format!("{}: {e}", String::from_utf8_lossy(&entry.name)))?;
+    }
+    Ok(())
 }
 
 pub fn run(game: &Path, input: &Path, output: &Path) -> Result<()> {

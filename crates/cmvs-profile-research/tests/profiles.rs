@@ -1216,7 +1216,7 @@ fn contract_rules_roundtrip_and_reject_invalid_lines() {
 
 #[test]
 fn checked_in_playback_tables_match_the_validated_research_registry() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../research/profiles");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("profiles");
     let source = Registry::load(&root).unwrap();
     assert_eq!(source.playback(), cmvs_core::profile::Registry::builtin());
 }

@@ -1,6 +1,5 @@
 //! Dispatch inventory: feeds every system command through the runner's full dispatch chain
-//! with synthetic arguments and records whether any host recognizes it. The output is joined
-//! with static script sites by `tools/command_inventory.py`; see the Amatsutsumi script audit.
+//! with synthetic arguments and records whether any host recognizes it.
 use crate::support::{bytecode as commands, profile::synthetic_profile};
 use cmvs_core::{
     host::platform::RecordingBackend, profile::Registry, runtime::Runtime, runtime::RuntimeEvent,

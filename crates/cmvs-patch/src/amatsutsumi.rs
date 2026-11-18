@@ -5,13 +5,33 @@ use crate::common::{
     write_archive, write_new,
 };
 use cmvs_core::{
-    format::cmv::CmvIndex, format::cpz::ArchiveIndex, format::ps3::Script, vm::bytecode,
+    format::cmv::CmvIndex,
+    format::cpz::ArchiveIndex,
+    format::lzss,
+    format::ps3::{self, HEADER_SIZE, Header, Script},
+    vm::bytecode,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     path::Path,
 };
+
+fn normalize_patch_script(raw: &[u8]) -> Result<Vec<u8>> {
+    if !raw.starts_with(b"PS2A0\0\0\0") {
+        return Err("invalid patch script header".into());
+    }
+    let header = Header::parse(raw)?;
+    let packed = &raw[HEADER_SIZE..];
+    if packed.len() != header.compressed_size as usize {
+        return Err("invalid patch script compressed length".into());
+    }
+    // This patch stores LZSS bytes before applying the normal PS2A byte transform.
+    let plain = lzss::decode(packed, header.decoded_size as usize)?;
+    let mut image = raw[..HEADER_SIZE].to_vec();
+    image.extend(plain);
+    Ok(ps3::encode_memory_image(&image)?)
+}
 
 fn decode_translation(bytes: &[u8]) -> Result<Vec<u8>> {
     let mut result = String::new();
@@ -73,20 +93,35 @@ fn patch_rows(original: &Script, patched: &Script) -> Result<BTreeMap<u32, Vec<u
 }
 
 pub fn run(game: &Path, stage: &Path, encoding: OutputEncoding) -> Result<()> {
+    let raw_scripts = stage.join("sc-lzss");
+    let plain_lzss = raw_scripts.try_exists()?;
+    let scripts = if plain_lzss {
+        raw_scripts
+    } else {
+        stage.join("sc")
+    };
+    let read_patch = |path: &Path| {
+        let raw = fs::read(path)?;
+        if plain_lzss {
+            normalize_patch_script(&raw)
+        } else {
+            Ok(raw)
+        }
+    };
     let output = stage.join("pack");
     fs::create_dir(&output)?;
     let mut seen = BTreeSet::new();
     let mut report = String::from("name\tpatched\tstrings\tremapped_references\tbytes\n");
     let mut convert = |name: &[u8], raw: Vec<u8>| -> Result<Vec<u8>> {
         let name = std::str::from_utf8(name)?;
-        let path = stage.join("sc").join(name);
+        let path = scripts.join(name);
         let original = Script::decode(&raw)?;
         let patched = path.is_file();
         let source = if patched && name != "start.ps3" {
             if !seen.insert(name.to_owned()) {
                 return Err("duplicate patched script".into());
             }
-            fs::read(&path)?
+            read_patch(&path)?
         } else {
             raw
         };
@@ -94,7 +129,7 @@ pub fn run(game: &Path, stage: &Path, encoding: OutputEncoding) -> Result<()> {
         if name == "start.ps3" {
             // The patch startup belongs to v1.03 and mounts absent update.cpz twice.
             // Retain the installed startup's mounts/initialization and translate its title.
-            let patch = Script::decode(&fs::read(&path)?)?;
+            let patch = Script::decode(&read_patch(&path)?)?;
             let title = patch
                 .strings()?
                 .last()
@@ -266,8 +301,14 @@ mod tests {
     fn mixed_source_encodings_restore_notes_and_relocate_references() -> Result<()> {
         let base = fixture(b"\0\x82\xa0\0", 1); // Japanese あ
         let patch = fixture(b"\0\x82\xa0\0\xd6\xd0\xa2\xe1\0Z\0", 9);
+        let packed = lzss::encode(Script::decode(&patch)?.payload());
+        let mut raw_patch = patch[..HEADER_SIZE].to_vec();
+        raw_patch[36..40].copy_from_slice(&(packed.len() as u32).to_le_bytes());
+        raw_patch.extend(packed);
+        let normalized = normalize_patch_script(&raw_patch)?;
+        assert_eq!(normalized, patch);
         let original = Script::decode(&base)?;
-        let source = Script::decode(&patch)?;
+        let source = Script::decode(&normalized)?;
         let rows = patch_rows(&original, &source)?;
         assert_eq!(rows[&4], "中♪".as_bytes());
         for (encoding, expected, offset) in [
@@ -282,7 +323,8 @@ mod tests {
                 9,
             ),
         ] {
-            let (out, _) = rewrite_encoded(&patch, &rows, encoding, &[('♪', "☆"), ('・', "·")])?;
+            let (out, _) =
+                rewrite_encoded(&normalized, &rows, encoding, &[('♪', "☆"), ('・', "·")])?;
             let out = Script::decode(&out)?;
             assert_eq!(out.text(), expected);
             assert_eq!(out.labels(), source.labels());

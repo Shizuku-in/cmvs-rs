@@ -26,7 +26,7 @@
 
 ## 命令映射与复核
 
-- **基础环境与复用**：经 `cvns.exe`（`1e0d17db...`）核对，`sub_401270` 按 `CVNS_SYSTEM_MAIN.WINDOW_SIZE` 选 `0→640×480`、`1→800×600`、`2→1024×768`（本样本为 `1`）；`sub_412980`/`sub_411F00` 读写 `CSS0`，全局容量 `[4096, 262144, 0, 256]`；`sub_428490`/`sub_439670` 读写 `CSP1`–`CSP9`；`sub_42C850`（`0x20c0 -> map=0x24c0`）按 `master * video / 100` 缩放音量播放 `op.cmv`。脚本使用的 205 条共有命令及未使用的 46 条非空槽位经 switch 与处理函数对比沿用 [cvns-20050727](../../../research/profiles/cvns-20050727.profile) 映射；其余 73 个未使用槽位保持 `unreviewed`。
+- **基础环境与复用**：经 `cvns.exe`（`1e0d17db...`）核对，`sub_401270` 按 `CVNS_SYSTEM_MAIN.WINDOW_SIZE` 选 `0→640×480`、`1→800×600`、`2→1024×768`（本样本为 `1`）；`sub_412980`/`sub_411F00` 读写 `CSS0`，全局容量 `[4096, 262144, 0, 256]`；`sub_428490`/`sub_439670` 读写 `CSP1`–`CSP9`；`sub_42C850`（`0x20c0 -> map=0x24c0`）按 `master * video / 100` 缩放音量播放 `op.cmv`。脚本使用的 205 条共有命令及未使用的 46 条非空槽位经 switch 与处理函数对比沿用 [cvns-20050727](../../../crates/cmvs-profile-research/profiles/cvns-20050727.profile) 映射；其余 73 个未使用槽位保持 `unreviewed`。
 
 ### 0x20ef
 
