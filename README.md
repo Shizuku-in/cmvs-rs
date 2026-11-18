@@ -2,7 +2,7 @@
 
 简体中文 | [English](README.en.md)
 
-用 **Rust** 研究并重实现 Purple SOFTWARE 的 CMVS 引擎。
+用 **Rust** 重实现 Purple SOFTWARE 的 CMVS/CVNS 引擎。
 
 ## 演示
 

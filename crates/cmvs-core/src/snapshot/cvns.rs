@@ -1,5 +1,7 @@
 //! Engine snapshot serialization for CVNS (`cvns-20090203` / `CSP1`).
 
+pub(crate) mod native;
+
 /// Explicit schema version stored at the start of the `0xa00` CVNS snapshot header record.
 /// Increment whenever `0xa00..=0xa09` record layouts change.
 pub const CVNS_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
@@ -711,6 +713,7 @@ impl CvnsSnapshot {
         Ok(out.0)
     }
 
+    /// Decodes the `cmvs-rs` schema. Original CSP1 imports use the game-bound runtime loader.
     pub fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
         let records = parse_records(bytes)?;
         let vm_body = unique_body(bytes, &records, 0xa00).map_err(|err| {

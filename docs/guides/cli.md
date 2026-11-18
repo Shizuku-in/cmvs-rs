@@ -1,8 +1,8 @@
 # CLI 检查指南
 
-所有命令从项目根目录执行。这里使用 `<游戏目录>` 和 `<新输出文件>` 作为占位符，请替换后运行。工具只支持已核对的格式分支，不能据解析成功推断整款游戏可运行。当前真实样本验证来自[《アマツツミ》](../games/amatsutsumi/README.md)。
+从项目根目录执行，用实际路径替换占位符。路径含空格时加引号。导出文件和 `cmvs-probe --out` 目录必须是新路径。
 
-每个工具均支持 `-h` / `--help`，帮助输出到标准输出并以0退出；参数错误输出到标准错误并以非零状态退出，同时提示帮助入口。路径含空格时使用引号。导出文件必须不存在，`cmvs-probe --out` 也必须指定新目录；桌面端独立用户目录中的存档和配置则会正常更新。
+各工具支持 `-h` 和 `--help`。
 
 ```bash
 cargo run --offline --bin cmvs-cpz -- --help
@@ -10,7 +10,7 @@ cargo run --offline --features desktop --bin cmvs-desktop -- --help
 cargo run --offline --features audio-output --bin cmvs-audio -- --help
 ```
 
-`cargo run` 的 `--` 用于分隔Cargo选项与工具参数。CLI 工具位于 `cmvs-cli` 包（属于默认成员，可直接用 `--bin` 运行，或用 `-p cmvs-cli` 默认运行 `cmvs-inspect`）；`cmvs-desktop` 需要 `desktop` feature，`cmvs-audio` 需要 `audio-output`，`cmvs-mgv` 使用无窗口 `cmvs-video` 解码器而无需 `desktop`；`cmvs-probe` 使用 `-p cmvs-probe` 运行。
+`cargo run` 的 `--` 后传工具参数。`cmvs-cli` 是默认成员，直接用 `--bin` 选工具。`-p cmvs-cli` 默认运行 `cmvs-inspect`。 [工具与构建特性](../../crates/cmvs-cli/README.md#binaries)
 
 ## 脚本与执行跟踪
 
@@ -21,7 +21,7 @@ cargo run --offline --bin cmvs-disasm -- "<游戏目录>/data/pack/start.ps3"
 cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --steps 10000
 ```
 
-默认 `cmvs-inspect` 检查 PS2A 头部、分段和解码结果，文本保留原始字节并以十六进制显示。`--payload` 输出不含原始头部，拒绝覆盖。线性反汇编不跟随分支；trace 有步数上限，未知状态和未实现命令显式停止。
+`cmvs-inspect` 检查 PS2A/PSS0 的头部与分段，以十六进制显示原始文本字节。`--payload` 导出解码负载。反汇编按指令顺序展开，trace 按步数上限执行。
 
 完整启动研究示例：
 
@@ -29,9 +29,9 @@ cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --s
 cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --bootstrap --save-dir "<游戏目录>/save" --system-save "<游戏目录>/save/system.dat" --script-archive "<游戏目录>/data/pack/script.cpz" --record-platform "<游戏目录>" --continue-without-snapshot --frame-ms 16 --steps 1000000
 ```
 
-trace先识别引擎档案：输入脚本（或`--script`归档）、`--script-archive`及`--record-platform`根目录exe参与哈希比对，以`# engine profile`和`# profile evidence`打印。未登记的游戏或合成脚本需显式`--profile <id>`。命令先经闸门：Base、Inherited、Reviewed与带有效登记证明的ContractEquivalent进入现有分派，Absent/NoOp总是报错。Presumed、Unreviewed默认放行，分别用`--block-presumed`、`--block-unreviewed`显式阻止；未复核命令记录首次使用。派生档案在退出时打印各来源已放行分派尝试数、契约/研究命令列表及策略（含等待重试和未实现处理器的尝试，不等于完成或覆盖率），闸门错误以非零退出码结束。证明登记与失效规则见[契约比较](../design/command-contracts-m1.md)。
+trace 会报告识别到的档案及证据。未登记的游戏或合成脚本需指定 `--profile <id>`。派生档案会报告分派尝试次数，含等待重试和未实现的处理器。闸门错误以非零状态退出。 [档案与闸门](../design/engine-profiles.md#选择与闸门)
 
-`--bootstrap` 应用已核对的初始化；`--save-dir` 只读扫描剧情槽，不会自动推断 `--system-save`。记录平台请求不创建窗口，帧时间必须显式提供；省略 `--frame-ms` 时冻结时间并在等待处停止。增加步数不能绕过未知命令、快照或完整恢复屏障。VM 地址及语义见[本作证据](../games/amatsutsumi/vm-semantics.md)。
+`--bootstrap` 初始化已核对的状态。`--save-dir` 扫描槽头部，系统存档另用 `--system-save` 指定。记录模式下用 `--frame-ms` 推进帧时钟，省略时会停在等待处。
 
 ## 引擎档案
 
@@ -46,7 +46,7 @@ cargo run --offline --release --bin cmvs-profile -- table "<游戏目录>" --id 
 cargo run --offline --release --bin cmvs-profile -- show cmvs-20150405
 ```
 
-`identify` 只读哈希启动脚本、脚本包和 exe，打印封包/脚本签名、每个 exe 的 PE 时间戳、链接器版本、switch 位置与处理函数/空操作数量；exe 已登记时与内嵌表逐项比对，不一致即报错。最后报告档案选择结果；未登记的游戏以非零退出码结束，PVNS 特征另行提示为"不支持的家族"。CVNS 的 `cvns.exe` 与 `start.pss` 按 CVNS 家族识别。`table` 从游戏根目录的 exe 生成新档案表到标准输出：不带 `--base` 时有处理函数的命令记为 `base`，带 `--base` 时记为 `unreviewed`；目录里只有 `cvns.exe` 时生成 CVNS 档案，必须用 `--base` 指定 CMVS 根档案；生成的表要放进 `crates/cmvs-core/profiles/`、登记游戏记录并重新构建才会生效。`show` 汇总内嵌档案的状态统计和非基准命令列表，CVNS 档案另外列出命令映射。设计与普查见[引擎档案层](../design/engine-profiles.md)。
+`identify` 根据启动脚本、脚本包及 exe 识别档案，校验已登记的分派表。`table` 将候选档案输出到标准输出，带 `--base` 时命令标为 `unreviewed`，CVNS 构建须指定 CMVS 基准。`show` 列出内嵌档案的状态与命令映射。 [档案登记与复核](../design/engine-profiles.md)
 
 ## 归档与资源
 
@@ -60,9 +60,11 @@ cargo run --offline --bin cmvs-cmv -- "<游戏目录>/data/video/op.cmv"
 cargo run --offline --release --bin cmvs-mgv -- "<游戏目录>/data/video/op.mgv" --check-frames
 ```
 
-`cmvs-cpz` 支持 CPZ3、CPZ5（打包模式 5～9）、CPZ6 模式 1 和 CPZ7（资源模式 0/1）。默认检查头部，`--list` 列目录，`--extract` 提取资源，`--script` 解码 PS2A 容器；CPZ3 不需要启动参数，列目录和提取前始终验证索引密文校验值。
+`cmvs-cpz` 支持 CPZ1/2/3、CPZ5 模式 5～9、CPZ6 模式 1 和 CPZ7 资源模式 0/1。`--list` 列目录，`--extract` 提取资源，`--script` 解码脚本。
 
-读取 CPZ5/7 时自动查找封包同目录的 `start.ps3`（CPZ5 也查找 `start.ps2`），可用 `--start-script <路径>` 覆盖；CPZ7 另支持 `--keys <k0,k1,k2,k3>`。CPZ5 可用 `--packing-mode <5..9>` 指定模式，无启动设置时按索引结构自动识别；CPZ7 未找到设置时使用零参数。CPZ5/7 始终验证头部及索引，CLI 提取不验证资源校验值。PB3 的导出为顶向下 RGBA；CUR 支持单图 8/24/32 位 BI_RGB，`--planes <新文件>` 导出 AND/RGB 平面（不含 alpha），`--rgba <新文件>` 导出 straight RGBA，遇到旧式反色像素显式报错。具体布局和限制见[格式目录](../README.md)。
+CPZ5/7 默认从同目录的启动脚本取参数，可用 `--start-script`、CPZ5 的 `--packing-mode` 或 CPZ7 的 `--keys` 指定。缺少设置时，CPZ5 根据索引识别模式，CPZ7 使用零参数。 [CPZ 格式](../formats/cpz-format.md)
+
+PB3 导出顶向下 RGBA。CUR 支持单图 4/8/24/32 位 BI_RGB，带反色像素的光标可用 `--planes` 导出。 [光标格式](../backends/platform-host.md#标题图标与光标)
 
 ## 存档
 
@@ -75,9 +77,7 @@ cargo run --offline --bin cmvs-save -- --section 0 "<游戏目录>/save/save000.
 cargo run --offline --bin cmvs-system-save -- "<游戏目录>/save/system.dat"
 ```
 
-CSV2 检查与解压不会恢复 VM，段导出拒绝覆盖；运行时存读档由 `Startup`/桌面在 `--user-data-dir` 下完成，`cmvs-trace` 不构建快照镜像。CSS1 的模板编码、可选输出与独立用户目录策略见[系统存档](../formats/system-save-format.md)，剧情恢复边界见[快照](../formats/snapshot-format.md)。
-`--vm-state` 检查保存的脚本名称、PC/栈、局部变量和主脚本内存布局，并逐项列出未安装的对象/宿主记录；活动公共脚本的PC没有提供对应图像时明确标为未验证。这是离线检查模型，工具不改写游戏或存档。
-`--visual-state` 检查已支持版本的文字、消息窗口、场景树、图像引用与绘制/帧动画负载，列出顶层资源名和窗口未解释状态字；不读取图像资源、不恢复引擎。已有显示字形、旋转轨道、复合/特殊图像或效果分支显式报错。核心 `VisualSnapshot::preview` 可另行通过调用者的图像源生成独立场景/消息宿主供离线渲染，完整限制见[快照格式](../formats/snapshot-format.md)。
+`cmvs-save` 检查 CSV2，`cmvs-system-save` 检查 CSS1。前者的 `--vm-state` 校验 VM 元数据、局部变量和主脚本 PC，活动公共脚本的 PC 标为未验证。`--visual-state` 检查支持的文字、窗口和场景记录，不读取图像资源。桌面从游戏菜单载入剧情档。 [快照格式](../formats/snapshot-format.md) · [运行指南](running.md#剧情存档)
 
 ## 通用探针
 

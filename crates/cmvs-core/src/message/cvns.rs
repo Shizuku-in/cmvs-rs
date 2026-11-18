@@ -93,6 +93,42 @@ impl CvnsWindow {
         self.cursor = [self.area[0], self.area[1]];
     }
 
+    pub(crate) fn new_text(&self, default_face: &[u8], screen_size: [i32; 2]) -> TextObject {
+        let mut text = TextObject {
+            font_face: default_face.to_vec(),
+            face: Arc::from(default_face),
+            bold: false,
+            revision_alpha: false,
+            scale_bits: 1.0f32.to_bits(),
+            logical_size: screen_size,
+            position: [0, 0],
+            area: [0; 4],
+            cursor: [0, 0],
+            ruby_lines: [0; 32],
+            layout_scratch: [0; 2],
+            glyphs: Vec::new(),
+            glyph_size: 0,
+            spacing: [0, 0],
+            color: 0xff_ffff,
+            decoration_color: 0xff_ffff,
+            outline_mode: 2,
+            glyph_parameter: 0,
+            decoration: 0,
+            reveal: [0, 0],
+            char_delay: 30,
+            layer: 1,
+            visible: true,
+            ruby: false,
+            ruby_every_line: false,
+            ruby_size: 12,
+            ruby_spacing: 0,
+            line_break: None,
+            glyph_capacity: 4096,
+        };
+        self.sync_metadata_to_text(&mut text, false, default_face);
+        text
+    }
+
     fn sync_metadata_to_text(&self, text: &mut TextObject, paused: bool, default_face: &[u8]) {
         text.position = self.position;
         text.area = self.area;
@@ -687,38 +723,7 @@ impl CvnsMessageHost {
         screen_size: [i32; 2],
     ) {
         let win = CvnsWindow::default();
-        let mut text = TextObject {
-            font_face: default_face.to_vec(),
-            face: Arc::from(default_face),
-            bold: false,
-            revision_alpha: false,
-            scale_bits: 1.0f32.to_bits(),
-            logical_size: screen_size,
-            position: [0, 0],
-            area: [0; 4],
-            cursor: [0, 0],
-            ruby_lines: [0; 32],
-            layout_scratch: [0; 2],
-            glyphs: Vec::new(),
-            glyph_size: 0,
-            spacing: [0, 0],
-            color: 0xff_ffff,
-            decoration_color: 0xff_ffff,
-            outline_mode: 2,
-            glyph_parameter: 0,
-            decoration: 0,
-            reveal: [0, 0],
-            char_delay: 30,
-            layer: 1,
-            visible: true,
-            ruby: false,
-            ruby_every_line: false,
-            ruby_size: 12,
-            ruby_spacing: 0,
-            line_break: None,
-            glyph_capacity: 4096,
-        };
-        win.sync_metadata_to_text(&mut text, false, default_face);
+        let text = win.new_text(default_face, screen_size);
         self.windows[win_idx] = Some(win);
         texts[win_idx] = Some(text);
     }

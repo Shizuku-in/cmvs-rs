@@ -3,10 +3,13 @@
 //! Synthetic save tests live in tests/runner.rs.
 use crate::support::command_trace;
 use cmvs_core::{
-    format::save::Csv2Save, format::snapshot::EngineSnapshot, format::snapshot::SavedScene,
-    host::input::CodeInput, host::input::KeyBindings, host::platform::RecordingBackend,
-    profile::Registry, render::message::AuxiliaryText, runtime::HistoryEntry, runtime::Runtime,
-    runtime::RuntimeEvent, runtime::SnapshotPolicy, runtime::load_start,
+    format::save::Csv2Save,
+    format::snapshot::{CvnsSnapshot, EngineSnapshot, SavedScene},
+    host::input::{CodeInput, KeyBindings},
+    host::platform::RecordingBackend,
+    profile::Registry,
+    render::message::AuxiliaryText,
+    runtime::{HistoryEntry, Runtime, RuntimeEvent, SnapshotPolicy, load_start},
 };
 use std::{fs, path::PathBuf};
 
@@ -1903,4 +1906,68 @@ fn external_rotation_snapshot_resumes_on_original_resources() {
     println!("rotation on real image slot {slot}: {angles:?}");
     drop(run);
     fs::remove_dir_all(user).unwrap();
+}
+
+#[test]
+#[ignore = "requires CMVS_CVNS_GAME_ROOT pointing to Miharu with original slots 1–3"]
+fn external_cvns_original_slots_resume() {
+    let root = PathBuf::from(std::env::var_os("CMVS_CVNS_GAME_ROOT").expect("CMVS_CVNS_GAME_ROOT"));
+    let user = user_directory("original-cvns");
+    for slot in 0..=3 {
+        let name = format!("save{slot:03}.dat");
+        fs::copy(root.join("save").join(&name), user.join(&name)).unwrap();
+    }
+    let game = Registry::builtin().identify_game(&root, None).unwrap();
+    let script = load_start(&root, &game.files).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    let mut backend = RecordingBackend::default();
+    for _ in 0..2_000_000 {
+        if run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
+            run.advance_frame(16).unwrap();
+            if run.machine().current_name() == b"menu.pss" {
+                break;
+            }
+        }
+    }
+    assert_eq!(run.machine().current_name(), b"menu.pss");
+    run.set_record_text(true);
+    for (slot, history_count) in [(1, 0), (2, 8), (3, 8)] {
+        run.load_slot(slot, &mut backend)
+            .unwrap_or_else(|error| panic!("slot {slot}: {error}"));
+        assert_eq!(run.history().entries().len(), history_count);
+        assert_eq!(
+            run.audio().bgm().primary.as_slice(),
+            if slot == 1 {
+                b"".as_slice()
+            } else {
+                b"bgm011.ogg"
+            }
+        );
+        let frame = run.render_frame().unwrap();
+        if slot != 1 {
+            let pixels = frame.pixels().as_chunks::<4>().0;
+            assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
+        }
+        run.input_mut().set(7, true, false, false).unwrap();
+        let mut reached_next_save_point = false;
+        for _ in 0..2_000_000 {
+            match run.tick(&mut backend).unwrap() {
+                RuntimeEvent::SnapshotCaptured => {
+                    reached_next_save_point = true;
+                    break;
+                }
+                RuntimeEvent::Yield => run.advance_frame(16).unwrap(),
+                RuntimeEvent::Progress => {}
+                event => panic!("slot {slot}: {event:?}"),
+            }
+        }
+        assert!(reached_next_save_point, "slot {slot} did not resume");
+        assert_eq!(run.machine().current_name(), b"smop.pss");
+        run.input_mut().set(7, false, false, false).unwrap();
+    }
+    assert!(run.save_slot(4).unwrap());
+    let (_, resaved) = Csv2Save::decode_any(&fs::read(user.join("save004.dat")).unwrap()).unwrap();
+    assert!(CvnsSnapshot::has_cmvs_rs_records(&resaved.snapshot));
+    run.load_slot(4, &mut backend).unwrap();
 }

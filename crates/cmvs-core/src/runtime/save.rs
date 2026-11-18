@@ -15,7 +15,7 @@ use crate::{
     scene::{ClearState, ObjectImage, SceneObject},
     snapshot::{
         CapturedSave, CvnsLocalVariables, CvnsSnapshot, EngineSnapshot, LocalVariables, SaveImage,
-        SavedScene, SavedWindow, SnapshotLayout,
+        SavedScene, SavedWindow, SnapshotLayout, cvns::native,
     },
 };
 use std::{collections::BTreeMap, error::Error, io::Write, path::Path, sync::Arc};
@@ -829,7 +829,32 @@ impl Runtime {
         let family = self.save_family();
         let save = Csv2Save::decode_family(&bytes, family)?;
         if layout == SnapshotLayout::CvnsCsp1 {
-            let snapshot = CvnsSnapshot::decode(&save.snapshot)?;
+            let snapshot = if save.snapshot.starts_with(&0x100u16.to_le_bytes()) {
+                if self.gate.profile().inspected_build()
+                    != Some(crate::profile::InspectedBuild::Cvns20090203)
+                    || &bytes[..4] != b"CSP1"
+                    || bytes[544..546] != 3u16.to_le_bytes()
+                {
+                    return Err("unsupported original CVNS save build or container version".into());
+                }
+                let snapshot = native::decode(
+                    &save,
+                    self.bootstrap.cvns_persistent_starts(),
+                    self.messages
+                        .cvns()
+                        .ok_or("CVNS message host is unavailable")?,
+                    self.messages.screen_size().map(|value| value as i32),
+                )?;
+                let common_size = self.machine.loaded_script(1).map_or(0, |script| {
+                    crate::ps3::HEADER_SIZE + script.header().decoded_size as usize
+                });
+                if snapshot.script_sizes[1] as usize != common_size {
+                    return Err("original CVNS save uses a different common script size".into());
+                }
+                snapshot
+            } else {
+                CvnsSnapshot::decode(&save.snapshot)?
+            };
             return self.restore_cvns_snapshot(
                 slot,
                 &save,
@@ -884,9 +909,6 @@ impl Runtime {
         snapshot
             .variables
             .apply_to_state(&mut vm.state, self.bootstrap.cvns_persistent_starts())?;
-        if slot < 950 && matches!(self.save_image, SaveImage::Captured(_)) {
-            self.write_slot(LOAD_BACKUP_SLOT, true)?;
-        }
         let mut budget = crate::snapshot::RESTORE_PIXELS;
         let mut image_src = self.images.with_paths(self.bootstrap.paths());
         let mut scene_images = vec![None; crate::scene::cvns::CVNS_IMAGES];
@@ -937,6 +959,9 @@ impl Runtime {
         history.restore(&snapshot.history)?;
         self.platform
             .restored_title(&snapshot.scene_title, self.machine.text_encoding())?;
+        if slot < 950 && matches!(self.save_image, SaveImage::Captured(_)) {
+            self.write_slot(LOAD_BACKUP_SLOT, true)?;
+        }
         self.machine.install_restore(vm);
         self.history = history;
         self.sequence = Default::default();

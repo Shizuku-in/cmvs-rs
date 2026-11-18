@@ -437,11 +437,15 @@ impl<'a> Reader<'a> {
         self.take(len as usize)
     }
     pub(super) fn finish(&self) -> Result<(), FormatError> {
-        if self.at == self.bytes.len() {
+        if self.is_empty() {
             Ok(())
         } else {
             Err(FormatError("trailing snapshot visual bytes"))
         }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.at == self.bytes.len()
     }
 }
 

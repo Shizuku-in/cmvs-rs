@@ -21,7 +21,7 @@
 
 平台资源通过 `DirectoryAssets` 只读读取，单个文件最多 4 MiB。路径须为有限长 ASCII 相对路径，支持正 / 反斜杠及内部重复分隔符；拒绝根路径、盘符、`.`、`..` 和解析到游戏根之外的目标。
 
-CUR 支持单目录项、40 字节位图头、8 / 32 bpp 未压缩 DIB；PNG、多条目、动画及其他位深未支持。32 位像素任一 alpha 非零时使用 straight-alpha，否则保留 AND/XOR 合成和反色语义。格式来源见[参考与许可](../references.md)。
+CUR 支持单目录项、40 字节位图头及 4/8/24/32 bpp 未压缩 DIB。32 位像素任一 alpha 非零时使用 straight-alpha，否则保留 AND/XOR 合成和反色语义。 [参考与许可](../references.md)
 
 ## 即时设备帧读取
 

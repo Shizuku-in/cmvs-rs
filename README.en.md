@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-A **Rust** reimplementation of Purple SOFTWARE's CMVS engine.
+A **Rust** reimplementation of Purple SOFTWARE's CMVS/CVNS engine.
 
 ## Demos
 

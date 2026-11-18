@@ -1,6 +1,6 @@
 # 《クロノクロック》测试档案
 
-当前运行参数见[运行指南](../../guides/running.md#chronoclock运行)；命令依据见[VM 语义](vm-semantics.md)。契约字段依据见[契约表](contract-m2.md)。
+命令依据见[VM 语义](vm-semantics.md)和[契约表](contract-m2.md)。
 
 ## 样本身份
 
@@ -38,7 +38,7 @@
 
 ## 重现与限制
 
-使用[运行指南](../../guides/running.md#chronoclock运行)的桌面命令，或[CLI 指南](../../guides/cli.md)中的通用探针入口。游戏目录只读，输出使用全新独立目录；自动路线采用固定种子和虚拟帧时间。
+桌面运行使用默认快照，鉴赏缩略图列表使用鼠标。自动路线使用全新独立用户目录。见[桌面运行](../../guides/running.md#桌面运行)和[通用探针](../../guides/cli.md#通用探针)。
 
 命令号相同不代表构建语义相同；命令映射和已核对差异以[引擎档案](../../../crates/cmvs-core/profiles/cmvs-20150405.profile)及[VM 语义](vm-semantics.md)为准。运行结果不提高未复核命令的证据等级。
 
