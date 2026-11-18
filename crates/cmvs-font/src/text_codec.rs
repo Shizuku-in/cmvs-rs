@@ -131,6 +131,7 @@ impl From<FormatError> for DetectError {
 /// Try startup text first, then at most 32 archived scripts in archive order.
 /// Fallback reads and decoded payloads each share a 16 MiB budget; uncertain
 /// samples never select a default encoding. Archive and script errors propagate.
+#[cfg(feature = "std-fs")]
 pub fn detect_game(
     root: &std::path::Path,
     files: &cmvs_core::profile::GameFiles,
@@ -139,7 +140,7 @@ pub fn detect_game(
     detect_game_with_fs(&cmvs_core::host::filesystem::StdFs, root, files, startup)
 }
 
-/// Like [`detect_game`], reading the script archive through `fs`.
+/// Detect the encoding by reading the script archive through `fs`.
 pub fn detect_game_with_fs(
     fs: &dyn cmvs_core::host::filesystem::HostFs,
     root: &std::path::Path,
@@ -207,6 +208,31 @@ pub fn detect_game_with_fs(
     Err(DetectError::Uncertain)
 }
 
+/// Reads `root/encoding.txt` via `fs` when present, stripping an optional UTF-8 BOM and
+/// validating the declared encoding name within a 64-byte limit.
+pub fn encoding_txt_with_fs(
+    fs: &dyn cmvs_core::host::filesystem::HostFs,
+    root: &std::path::Path,
+) -> Result<Option<TextEncoding>, Box<dyn std::error::Error + Send + Sync>> {
+    use std::io::{ErrorKind, Read as _};
+    match fs.open_read(&root.join("encoding.txt")) {
+        Ok(file) => {
+            let mut raw = Vec::new();
+            file.take(65).read_to_end(&mut raw)?;
+            if raw.len() > 64 {
+                return Err("encoding.txt exceeds 64 bytes".into());
+            }
+            let setting = std::str::from_utf8(&raw)?;
+            let name = setting.strip_prefix('\u{feff}').unwrap_or(setting).trim();
+            parse(name).map(Some).map_err(|_| {
+                format!("encoding.txt must be shift-jis, gbk or utf-8, not {name:?}").into()
+            })
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Box::new(error)),
+    }
+}
+
 /// Resolves `root/encoding.txt` when present, otherwise runs [`detect_game_with_fs`] and
 /// falls back to [`TextEncoding::ShiftJis`] only when script text is purely ASCII/uncertain.
 pub fn select_or_default_with_fs(
@@ -215,23 +241,12 @@ pub fn select_or_default_with_fs(
     files: &cmvs_core::profile::GameFiles,
     startup: &cmvs_core::format::ps3::Script,
 ) -> Result<TextEncoding, Box<dyn std::error::Error + Send + Sync>> {
-    use std::io::{ErrorKind, Read as _};
-    match fs.open_read(&root.join("encoding.txt")) {
-        Ok(file) => {
-            let mut setting = String::new();
-            file.take(65).read_to_string(&mut setting)?;
-            let name = setting.trim();
-            parse(name).map_err(|_| {
-                format!("encoding.txt must be shift-jis, gbk or utf-8, not {name:?}").into()
-            })
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            match detect_game_with_fs(fs, root, files, startup) {
-                Ok(encoding) => Ok(encoding),
-                Err(DetectError::Uncertain) => Ok(TextEncoding::ShiftJis),
-                Err(error) => Err(Box::new(error)),
-            }
-        }
+    if let Some(encoding) = encoding_txt_with_fs(fs, root)? {
+        return Ok(encoding);
+    }
+    match detect_game_with_fs(fs, root, files, startup) {
+        Ok(encoding) => Ok(encoding),
+        Err(DetectError::Uncertain) => Ok(TextEncoding::ShiftJis),
         Err(error) => Err(Box::new(error)),
     }
 }
@@ -356,6 +371,7 @@ mod tests {
         assert_eq!(detect(&over_limit), Err(UNCERTAIN));
     }
 
+    #[cfg(feature = "std-fs")]
     fn script_bytes(text: &[u8]) -> Vec<u8> {
         let size = text.len() as u32;
         let mut raw = b"PS2A".to_vec();
@@ -371,6 +387,7 @@ mod tests {
         raw
     }
 
+    #[cfg(feature = "std-fs")]
     #[test]
     fn fallback_reads_archived_scripts_without_guessing_ascii_or_binary() {
         use cmvs_core::{

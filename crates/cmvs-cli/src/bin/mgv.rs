@@ -25,40 +25,52 @@ Build: cargo build --bin cmvs-mgv
 Example: cmvs-mgv op.mgv --frame 0 frame.png";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut args: Vec<_> = std::env::args_os().skip(1).collect();
-    if cmvs_cli::wants_help(&args) {
+    let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&raw_args) {
         println!("{USAGE}");
         return Ok(());
     }
-    let positional_first = if args.first().is_some_and(|a| a == "--") && args.len() >= 2 {
-        args.remove(0);
-        true
-    } else {
-        false
-    };
-    if args.is_empty() {
-        return Err("missing movie path".into());
+    let mut path: Option<std::ffi::OsString> = None;
+    let mut check_frames = false;
+    let mut frame_spec: Option<(u32, std::ffi::OsString)> = None;
+    let mut positional_only = false;
+    let mut args = raw_args.into_iter();
+    while let Some(arg) = args.next() {
+        if !positional_only && arg == "--" {
+            positional_only = true;
+            continue;
+        }
+        if !positional_only && arg == "--check-frames" {
+            if check_frames || frame_spec.is_some() {
+                return Err("expected --check-frames or --frame <index> <new-file>".into());
+            }
+            check_frames = true;
+            continue;
+        }
+        if !positional_only && arg == "--frame" {
+            if check_frames || frame_spec.is_some() {
+                return Err("expected --check-frames or --frame <index> <new-file>".into());
+            }
+            let index = args
+                .next()
+                .and_then(|s| s.to_str().and_then(|s| s.parse::<u32>().ok()))
+                .ok_or("--frame index must be a non-negative decimal integer")?;
+            let out_path = args
+                .next()
+                .ok_or("expected --check-frames or --frame <index> <new-file>")?;
+            frame_spec = Some((index, out_path));
+            continue;
+        }
+        if !positional_only && arg.to_string_lossy().starts_with('-') {
+            return Err(format!("unknown option {}", arg.to_string_lossy()).into());
+        }
+        if path.is_some() {
+            return Err("expected --check-frames or --frame <index> <new-file>".into());
+        }
+        path = Some(arg);
     }
-    if !positional_first && args[0].to_string_lossy().starts_with('-') {
-        return Err(format!("unknown option {}", args[0].to_string_lossy()).into());
-    }
-    if !(args.len() == 1
-        || (args.len() == 2 && args[1] == "--check-frames")
-        || (args.len() == 4 && args[1] == "--frame"))
-    {
-        return Err("expected --check-frames or --frame <index> <new-file>".into());
-    }
-    let frame = if args.len() == 4 {
-        Some(
-            args[2]
-                .to_str()
-                .and_then(|s| s.parse::<u32>().ok())
-                .ok_or("--frame index must be a non-negative decimal integer")?,
-        )
-    } else {
-        None
-    };
-    let mut file = File::open(&args[0])?;
+    let path = path.ok_or("missing movie path")?;
+    let mut file = File::open(&path)?;
     let index = MgvIndex::read_io(&mut file)?;
     println!(
         "MGV1 {}x{} frames={} packets={} rate={}/{} audio={} video={}",
@@ -71,11 +83,11 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         index.audio_size,
         index.video_size
     );
-    if args.len() == 1 {
+    if !check_frames && frame_spec.is_none() {
         return Ok(());
     }
     let mut decoder = TheoraStream::open(Box::new(file), &index)?;
-    if args.len() == 2 && args[1] == "--check-frames" {
+    if check_frames {
         let mut last = None;
         for (i, entry) in index.frames.iter().enumerate() {
             if last == Some(entry.packet) {
@@ -95,9 +107,9 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             index.frames.len(),
             index.packet_count()
         );
-    } else if let Some(frame) = frame {
+    } else if let Some((frame, out_path)) = frame_spec {
         let image = decoder.frame(frame)?;
-        let bytes = if std::path::Path::new(&args[3])
+        let bytes = if std::path::Path::new(&out_path)
             .extension()
             .is_some_and(|e| e == "rgba")
         {
@@ -108,10 +120,8 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&args[3])?
+            .open(&out_path)?
             .write_all(&bytes)?;
-    } else {
-        return Err("invalid MGV options; use --help".into());
     }
     Ok(())
 }

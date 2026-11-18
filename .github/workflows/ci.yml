@@ -64,6 +64,8 @@ jobs:
           cargo check --locked -p cmvs-desktop --no-default-features
           cargo check --locked -p cmvs-cli --no-default-features
           cargo check --locked -p cmvs-host --no-default-features
+          core_features=$(cargo tree --locked -p cmvs-host --no-default-features --target all -i cmvs-core --depth 0 -f '{f}')
+          [[ ",$core_features," != *,std-fs,* ]]
           cargo check --locked -p cmvs-core --no-default-features
 
   full:

@@ -7,6 +7,36 @@ use cmvs_core::{
 use support::bytecode::{command, pending, script};
 
 #[test]
+fn mapped_cvns_command_reports_its_script_opcode_for_helper_errors() {
+    let profile = Registry::builtin().profile("cvns-20090203").unwrap();
+    for (args, reason) in [
+        ([999, 0], "resource path slot outside supported range"),
+        ([0, 99], "string reference out of bounds"),
+    ] {
+        let mut code = Vec::new();
+        command(&mut code, 0x2021, &args);
+        let mut vm = Machine::new(script(&code)).unwrap();
+        vm.set_command_map(profile.command_map());
+        pending(&mut vm);
+        assert_eq!(vm.pending_system(), Some((16, 0x11)));
+        let err = dispatch::run(
+            profile.semantics(0x21),
+            &mut vm,
+            &mut Hosts {
+                bootstrap: Some(&mut Default::default()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("code+0x10 opcode=0x2021: {reason}")
+        );
+        assert_eq!(err.as_decode().unwrap().reason, reason);
+    }
+}
+
+#[test]
 fn missing_capabilities_preserve_pending_commands_and_arguments() {
     for entry in dispatch::ROOT.iter().chain(dispatch::CVNS) {
         let mut code = vec![];

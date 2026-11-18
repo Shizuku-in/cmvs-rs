@@ -10,7 +10,7 @@ Platform-independent core of the CMVS engine reimplementation. Every host and to
 | `vm` | `bytecode`, `machine` (bounded `'static + Send` multi-slot stepping), `dispatch` (system-command routing), `evaluate`, `cvns`, plus `ParameterStack`, `StackWord`, `StringRef`, `SystemResult` |
 | `profile` | Engine build registry, game identification, and `CommandGate` authorization |
 | `render` | `scene`, `camera`, `message` (and `GlyphRasterizer`), `fade`, `capture`, `raster`, `scene_render` (software compositor and GPU draw queue), `viewport` |
-| `host` | `filesystem` (`HostFs`, `PathError`, `resolve_under*`), `resources`, `image`, `audio`, `movie`, `platform`, `input`, `gesture`, `random`, `settings`, `text`, `text_encoding` |
+| `host` | `filesystem` (`HostFs`, `PathError`, `resolve_under*`), `resources`, `image`, `audio`, `movie`, `platform`, `input`, `gesture`, `random`, `settings`, `text_encoding` |
 | `runtime` | `Runtime` (`'static + Send` session and frame loop), `bootstrap`, `script_control`, `save_menu`, and session-owned state types |
 
 Engine builds are described by the files in [`profiles/`](profiles); see [engine profiles](../../docs/design/engine-profiles.md). Unknown games, unimplemented commands and unsupported codecs return errors instead of being guessed.

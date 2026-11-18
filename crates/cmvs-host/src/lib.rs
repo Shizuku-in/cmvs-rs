@@ -1080,6 +1080,54 @@ mod tests {
     }
 
     #[test]
+    fn fontless_gpu_frame_includes_visible_cvns_window() {
+        use cmvs_core::format::pb3::{EncodeDepth, encode_rgba};
+        let fs = MockHostFs::new();
+        mount_synthetic_game(&fs, b"");
+        let pixel = [23, 42, 61, 255];
+        fs.write_file(
+            "/game/img/window.pb3",
+            encode_rgba(&pixel, 1, 1, EncodeDepth::Rgba32).unwrap(),
+        );
+        let mut code = Vec::new();
+        push_command(&mut code, 0x2021, &[0, 0]); // register image directory
+        push_command(&mut code, 0x2110, &[0, 0, 0, 0, 1, 1]); // create window
+        push_command(&mut code, 0x2130, &[0, 0, 5, 1]); // load window.pb3
+        push_command(&mut code, 0x2138, &[0, 0]); // create local sprite
+        push_command(&mut code, 0x213a, &[0, 0, 0, 0, 0, 1, 1]);
+        push_command(&mut code, 0x2111, &[0, 1]); // show window
+        push_command(&mut code, 0x2000, &[]);
+        fs.write_file(
+            "/game/data/pack/start.ps3",
+            encode_ps2a(&code, b"img\\\0window.pb3\0"),
+        );
+        let (mut runtime, _) = GameBootstrap::load(
+            Arc::new(fs),
+            Path::new("/game"),
+            Some("cvns-20090203"),
+            EncodingPolicy::Explicit(TextEncoding::ShiftJis),
+        )
+        .unwrap()
+        .open_runtime(None, SessionConfig::single_threaded())
+        .unwrap();
+        let mut backend = HostBackend::new(runtime.screen_size());
+        let outcome = cmvs_core::runtime::FrameDriver::default()
+            .run_slice(&mut runtime, &mut FrameBudget::steps(100), |rt| {
+                rt.tick(&mut backend)
+            })
+            .unwrap();
+        assert_eq!(outcome, FrameOutcome::Yield);
+        let cpu = compose_cpu_frame(&runtime, None, false).unwrap();
+        assert_eq!(&cpu.pixels()[..4], &pixel);
+        let gpu = with_gpu_target(&runtime, None, false, |target| match target {
+            GpuTarget::Scene(frame) => frame.render_cpu(),
+            GpuTarget::Movie { .. } => panic!("expected scene"),
+        })
+        .unwrap();
+        assert_eq!(gpu, cpu);
+    }
+
+    #[test]
     fn fontless_composition_and_deferred_capture_work_through_shared_helpers() {
         let fs = MockHostFs::new();
         // Deferred capture (0x2304), yield, assign captured frame to slot 3 (0x203c), quit.
@@ -1176,5 +1224,44 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn encoding_txt_and_conversion_json_strip_bom_and_check_size_before_utf8() {
+        let fs = MockHostFs::new();
+        let root = Path::new("/game");
+
+        fs.write_file(root.join("encoding.txt"), "\u{feff}utf-8\r\n");
+        assert_eq!(
+            cmvs_font::text_codec::encoding_txt_with_fs(&fs, root).unwrap(),
+            Some(TextEncoding::Utf8)
+        );
+
+        let mut split_encoding = vec![b' '; 63];
+        split_encoding.extend_from_slice("あ".as_bytes());
+        assert_eq!(split_encoding.len(), 66);
+        fs.write_file(root.join("encoding.txt"), split_encoding);
+        let encoding_err = cmvs_font::text_codec::encoding_txt_with_fs(&fs, root)
+            .unwrap_err()
+            .to_string();
+        assert!(encoding_err.contains("64 bytes"), "{encoding_err}");
+
+        fs.write_file(
+            root.join("conversion.json"),
+            "\u{feff}{\"encoding\":\"gbk\"}",
+        );
+        assert_eq!(
+            conversion_encoding_with_fs(&fs, root).unwrap(),
+            Some(TextEncoding::Gbk)
+        );
+
+        let mut split_json = vec![b' '; 256 * 1024 - 1];
+        split_json.extend_from_slice("あ".as_bytes());
+        assert_eq!(split_json.len(), 256 * 1024 + 2);
+        fs.write_file(root.join("conversion.json"), split_json);
+        let json_err = conversion_encoding_with_fs(&fs, root)
+            .unwrap_err()
+            .to_string();
+        assert!(json_err.contains("256 KiB"), "{json_err}");
     }
 }

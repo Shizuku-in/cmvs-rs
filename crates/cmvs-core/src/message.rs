@@ -2476,20 +2476,21 @@ impl MessageHost {
         images: &mut dyn ImageSource,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
+        let op = call.opcode();
         if call.command == 0x397 {
             let slot = call.argument(4, window_argument_names(call.command)[0])? as usize;
             let raw = call.argument(8, window_argument_names(call.command)[1])?;
             if slot >= AUXILIARY_TEXTS || self.auxiliary_texts[slot].is_none() {
                 return Err(error(
                     pc,
-                    0x2397,
+                    op,
                     "auxiliary text group is not created or outside 0..7",
                 )
                 .into());
             }
             let name = call.vm.resolve_string(raw)?;
-            let image = scene::load_image(images, name, pc, 0x2397)?
-                .ok_or_else(|| error(pc, 0x2397, "auxiliary second texture is missing"))?;
+            let image = scene::load_image(images, name, pc, op)?
+                .ok_or_else(|| error(pc, op, "auxiliary second texture is missing"))?;
             call.complete(0x4008)?;
             // 0x14002e4e0: 0x14003b170 sets the atlas draw state's +88 to 4 before the load.
             let group = self.auxiliary_texts[slot]
@@ -2513,18 +2514,13 @@ impl MessageHost {
         if self.windows[slot].is_none() {
             return Err(error(
                 pc,
-                0x2170,
+                op,
                 "message window slot without a window sets an unmodeled flag",
             )
             .into());
         }
-        let image = scene::load_image(images, name, pc, 0x2170)?.ok_or_else(|| {
-            error(
-                pc,
-                0x2170,
-                "window image decode failure sets an unmodeled flag",
-            )
-        })?;
+        let image = scene::load_image(images, name, pc, op)?
+            .ok_or_else(|| error(pc, op, "window image decode failure sets an unmodeled flag"))?;
         call.complete(0x4008)?;
         self.windows[slot]
             .as_mut()
@@ -2543,6 +2539,7 @@ impl MessageHost {
         images: &mut dyn ImageSource,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
+        let op = call.opcode();
         let slot = call.argument(4, "window slot")?;
         let child = call.argument(8, "child slot")? as i32;
         let raw = call.argument(12, "image name")?;
@@ -2553,10 +2550,10 @@ impl MessageHost {
                 .and_then(|window| window_target(&window.object, child, children))
                 .is_none()
         {
-            return Err(error(pc, 0x2176, "message window or window child does not exist").into());
+            return Err(error(pc, op, "message window or window child does not exist").into());
         }
         let name = call.vm.resolve_string(raw)?;
-        let image = scene::load_image(images, name, pc, 0x2176)?;
+        let image = scene::load_image(images, name, pc, op)?;
         call.complete(0x400c)?;
         let window = self.windows[slot as usize].as_mut().expect("checked above");
         window_target_mut(&mut window.object, child, children)

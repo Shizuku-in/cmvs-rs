@@ -314,3 +314,45 @@ fn to_rgba(
     }
     RgbaImage::new(u32::from(index.width), u32::from(index.height), rgba)
 }
+
+/// Converts planar YUV 4:2:0 buffers (top-down row order, BT.601 limited range) into RGBA.
+///
+/// Dimensions must be even, positive, and fit within [`cmvs_core::MAX_PAYLOAD`].
+pub fn convert_yuv420_planar(
+    width: u32,
+    height: u32,
+    y: &[u8],
+    u: &[u8],
+    v: &[u8],
+) -> Result<RgbaImage, FormatError> {
+    let w = usize::try_from(width).map_err(|_| FormatError("YUV420 width overflow"))?;
+    let h = usize::try_from(height).map_err(|_| FormatError("YUV420 height overflow"))?;
+    if w == 0 || h == 0 || !w.is_multiple_of(2) || !h.is_multiple_of(2) {
+        return Err(FormatError(
+            "YUV420 dimensions must be positive even integers",
+        ));
+    }
+    let rgba_len = w
+        .checked_mul(h)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .filter(|&len| len <= MAX_PAYLOAD)
+        .ok_or(FormatError("YUV420 frame exceeds payload limit"))?;
+    let cw = w / 2;
+    let ch = h / 2;
+    if y.len() != w * h || u.len() != cw * ch || v.len() != cw * ch {
+        return Err(FormatError("YUV420 plane length does not match dimensions"));
+    }
+    let mut rgba = vec![0; rgba_len];
+    let row_stride = w * 4;
+    for pair in 0..ch {
+        let y_row = pair * 2;
+        let luma0 = &y[y_row * w..(y_row + 1) * w];
+        let luma1 = &y[(y_row + 1) * w..(y_row + 2) * w];
+        let cb = &u[pair * cw..(pair + 1) * cw];
+        let cr = &v[pair * cw..(pair + 1) * cw];
+        let (out0, out1) =
+            rgba[y_row * row_stride..(y_row + 2) * row_stride].split_at_mut(row_stride);
+        yuv::convert_row_pair(luma0, luma1, cb, cr, out0, out1, false);
+    }
+    RgbaImage::new(width, height, rgba)
+}

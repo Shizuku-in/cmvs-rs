@@ -332,7 +332,7 @@ impl Runtime {
         // 20070119 0x408b00 / 20071117 0x40bdf0 / 20080719 0x40bea0 zero the CSS1
         // header and never write offset 68: a format constant, not a game identifier.
         if matches!(
-            self.gate.selection().profile.inspected_build(),
+            self.gate.profile().inspected_build(),
             Some(
                 InspectedBuild::Cmvs20070119
                     | InspectedBuild::Cmvs20071117
@@ -363,7 +363,7 @@ impl Runtime {
                 return Err(format!("old snapshot record {tag:#x} is not implemented").into());
             }
         }
-        if let Some(capacity) = match self.gate.selection().profile.inspected_build() {
+        if let Some(capacity) = match self.gate.profile().inspected_build() {
             Some(InspectedBuild::Cmvs20101211) => Some(256),
             Some(
                 InspectedBuild::Cmvs20110525
@@ -385,7 +385,7 @@ impl Runtime {
         Ok(())
     }
     fn require_snapshot_layout(&self) -> Result<SnapshotLayout, Box<dyn Error + Send + Sync>> {
-        let profile = self.gate.selection().profile;
+        let profile = self.gate.profile();
         snapshot_layout(profile).ok_or_else(|| {
             format!(
                 "gameplay snapshot layout is not implemented for engine profile {}",
@@ -420,7 +420,7 @@ impl Runtime {
     ) -> Result<(EngineSnapshot, Vec<u8>), Box<dyn Error + Send + Sync>> {
         let layout = self.require_snapshot_layout()?;
         if self.scene.has_effect_pools()
-            && !effect_state_supported(self.gate.selection().profile, &self.scene)
+            && !effect_state_supported(self.gate.profile(), &self.scene)
         {
             return Err("saving active particle effects is not implemented".into());
         }
@@ -449,7 +449,7 @@ impl Runtime {
             .scene
             .saved_effect_pools_with_legacy(layout == SnapshotLayout::TextV1SceneLegacy)?
         {
-            if !effect_record_supported(self.gate.selection().profile, &record) {
+            if !effect_record_supported(self.gate.profile(), &record) {
                 return Err(
                     "saved particle effect type is not implemented for this profile".into(),
                 );
@@ -531,7 +531,7 @@ impl Runtime {
     }
 
     pub(super) fn save_family(&self) -> SaveFamily {
-        self.gate.selection().profile.save_family()
+        self.gate.profile().save_family()
     }
 
     /// The 600-byte header 0x140069270 (or CVNS 0x44ebf0) prepares at +11204 / +22816.
@@ -815,7 +815,7 @@ impl Runtime {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let layout = self.require_snapshot_layout()?;
         if self.scene.has_effect_pools()
-            && !effect_state_supported(self.gate.selection().profile, &self.scene)
+            && !effect_state_supported(self.gate.profile(), &self.scene)
         {
             return Err("loading over active particle effects is not implemented".into());
         }
@@ -1069,7 +1069,7 @@ impl Runtime {
             .collect();
         if effect_records
             .iter()
-            .any(|(_, body)| !effect_record_supported(self.gate.selection().profile, body))
+            .any(|(_, body)| !effect_record_supported(self.gate.profile(), body))
         {
             return Err("saved particle record layout is not implemented for this profile".into());
         }
@@ -1103,7 +1103,7 @@ impl Runtime {
             &mut restored_random,
             &mut budget,
             matches!(
-                self.gate.selection().profile.inspected_build(),
+                self.gate.profile().inspected_build(),
                 Some(
                     crate::profile::InspectedBuild::Cmvs20080719
                         | crate::profile::InspectedBuild::Cmvs20090815

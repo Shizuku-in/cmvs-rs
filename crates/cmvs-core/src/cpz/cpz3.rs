@@ -159,7 +159,7 @@ impl Cpz3Index {
         }
         // The original stops at file_count. Real indexes can have a large
         // encrypted padding region; data_offset includes that whole region.
-        let lookup = LookupTable::from_entries(&entries);
+        let lookup = LookupTable::from_entries(&entries, <[u8]>::to_vec);
         Ok(Self {
             layout,
             entries,

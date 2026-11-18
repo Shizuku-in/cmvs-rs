@@ -388,7 +388,7 @@ fn image_errors_keep_typed_cause_and_leave_window_targets_retryable() {
         assert_eq!(
             error.to_string(),
             format!(
-                "system command 0x{opcode:04x} at 0x{pc:x}: PC=0x{pc:x} 0x{opcode:04x}: image unavailable",
+                "PC=0x{pc:x} 0x{opcode:04x}: image unavailable",
                 pc = before.0
             )
         );

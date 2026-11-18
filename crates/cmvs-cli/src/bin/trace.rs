@@ -76,7 +76,7 @@ impl std::ops::DerefMut for TraceGate {
 }
 impl Drop for TraceGate {
     fn drop(&mut self) {
-        if self.0.selection().profile.base.is_some() {
+        if self.0.profile().base.is_some() {
             use std::io::Write;
             let mut stdout = std::io::stdout().lock();
             for line in self.0.diagnostic_lines() {
@@ -103,23 +103,8 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         return Ok(());
     }
     let mut args = raw_args.into_iter();
-    let first = args
-        .next()
-        .ok_or("usage: cmvs-trace <script-or-archive> [options]; see --help")?;
-    let (path, positional_only) = if first == "--" {
-        let p = args
-            .next()
-            .ok_or("usage: cmvs-trace <script-or-archive> [options]; see --help")?;
-        (p, true)
-    } else {
-        if first.to_string_lossy().starts_with('-') {
-            return Err(format!("unknown option {}", first.to_string_lossy()).into());
-        }
-        (first, false)
-    };
-    if positional_only && args.next().is_some() {
-        return Err("unexpected argument after --".into());
-    }
+    let mut positional_only = false;
+    let mut path: Option<std::ffi::OsString> = None;
     let mut entry = None;
     let mut budget = 10000u32;
     let mut bootstrap = None;
@@ -136,11 +121,16 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut block_unreviewed = false;
     let mut block_presumed = false;
     while let Some(flag) = args.next() {
-        if flag == "--" {
-            if args.next().is_some() {
-                return Err("unexpected argument after --".into());
+        if !positional_only && flag == "--" {
+            positional_only = true;
+            continue;
+        }
+        if positional_only || !flag.to_string_lossy().starts_with('-') {
+            if path.is_some() {
+                return Err("too many arguments".into());
             }
-            break;
+            path = Some(flag);
+            continue;
         }
         if flag == "--block-presumed" {
             block_presumed = true;
@@ -214,6 +204,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             return Err("unknown option".into());
         }
     }
+    let path = path.ok_or("usage: cmvs-trace <script-or-archive> [options]; see --help")?;
     if budget == 0 || budget > 1000000 {
         return Err("step budget must be 1..1000000".into());
     }
@@ -273,18 +264,19 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         return Err("input exceeds research allocation limit".into());
     }
     let script = Script::decode(&raw)?;
-    let mut machine = Machine::at(&script, entry.unwrap_or(script.header().entry_pc))?;
+    let entry_pc = entry.unwrap_or(script.header().entry_pc);
+    let mut machine = Machine::at(script, entry_pc)?;
     machine.set_current_name(initial_name);
-    machine.set_command_map(gate.selection().profile.command_map());
+    machine.set_command_map(gate.profile().command_map());
     machine
         .state_mut()
-        .set_string_slots(gate.selection().profile.string_slots());
+        .set_string_slots(gate.profile().string_slots());
     let mut script_source = script_archive
         .map(|path| -> Result<_, Box<dyn Error + Send + Sync>> {
             ArchiveScripts::new(File::open(path)?)
         })
         .transpose()?;
-    let profile = gate.selection().profile;
+    let profile = gate.profile();
     let mut control = ScriptControl::for_profile(profile, virtual_tick);
     let mut saves = save_dir.map(DirectorySaves::new).transpose()?;
     let mut save_menu = SaveMenuHost::for_profile(profile);
@@ -395,7 +387,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
                 println!(
                     "# UNREVIEWED system command 0x{:04x} allowed with {} (default policy, first use)",
                     0x2000 + first,
-                    cmvs_core::vm::dispatch::semantics_name(gate.selection().profile, first)
+                    cmvs_core::vm::dispatch::semantics_name(gate.profile(), first)
                 );
             }
             let wait_gate = SkipGate {

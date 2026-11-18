@@ -842,32 +842,28 @@ impl Runtime {
     /// Prefer [`Self::movie_frame`] or [`Self::render_scene_frame`]
     /// when the host needs to distinguish the two output paths.
     /// Movie frames keep their decoded dimensions; scene output uses [`Self::screen_size`].
-    /// To include message windows and glyphs, pass them to
-    /// [`crate::scene_render::render_scene`] as additional objects. Unsupported scene
-    /// state returns an error.
+    /// Unsupported scene state returns an error.
     pub fn render_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
         match self.movie_frame() {
             Some(image) => Ok(image.clone()),
             None => self.render_scene_frame(),
         }
     }
-    /// Render scene objects in software at the logical screen size.
-    ///
-    /// Message windows, glyphs, and full-screen movies are composed by the host.
+    /// Render the scene in software, including visible CVNS message windows.
     pub fn render_scene_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
+        self.prepare_scene_frame()?.render_cpu()
+    }
+    /// Prepare the scene at the logical screen size without rasterizing glyphs.
+    pub fn prepare_scene_frame(
+        &self,
+    ) -> Result<crate::scene_render::RenderFrame<'_>, crate::FormatError> {
         let [width, height] = self.screen_size();
-        if self.scene.cvns().is_some() {
-            let windows: Vec<_> = self.messages.visible_window_objects().collect();
-            crate::scene_render::render_scene(
-                &self.scene,
-                Some(&self.camera),
-                &windows,
-                width,
-                height,
-            )
+        let windows = if self.scene.cvns().is_some() {
+            self.messages.visible_window_objects().collect()
         } else {
-            crate::scene_render::render_scene(&self.scene, Some(&self.camera), &[], width, height)
-        }
+            Vec::new()
+        };
+        crate::scene_render::prepare_scene(&self.scene, Some(&self.camera), &windows, width, height)
     }
     /// Service audio and advance movies and scene state by `delta_ms` milliseconds.
     ///
@@ -1185,11 +1181,7 @@ impl Runtime {
         path: impl AsRef<Path>,
         fs: Arc<dyn HostFs>,
     ) -> crate::system_save::FileSystemSave {
-        crate::system_save::FileSystemSave::for_profile_with_fs(
-            self.gate.selection().profile,
-            path,
-            fs,
-        )
+        crate::system_save::FileSystemSave::for_profile_with_fs(self.gate.profile(), path, fs)
     }
 
     fn sync_cvns_persistent_starts(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -1210,7 +1202,7 @@ impl Runtime {
         if self.steps != 0 || self.system_output.is_some() {
             return Err("select one system-save output mode before VM execution".into());
         }
-        let engine_profile = self.gate.selection().profile;
+        let engine_profile = self.gate.profile();
         if engine_profile.is_cvns() {
             profile.set_css0(Some(self.bootstrap.cvns_persistent_starts()))?;
         }
@@ -1489,7 +1481,7 @@ impl Runtime {
                 hosts.bootstrap = Some(&mut self.bootstrap);
             }
             let flow = entry.run(&mut self.machine, &mut hosts)?;
-            if self.gate.selection().profile.is_cvns() {
+            if self.gate.profile().is_cvns() {
                 self.sync_cvns_persistent_starts()?;
             }
             if let Some(&interval) = self
@@ -1640,7 +1632,7 @@ impl Runtime {
         }
         let mut image_source = self.images.with_paths(self.bootstrap.paths());
         let input_clock = self.timers.clock();
-        let movie_settings = if self.gate.selection().profile.is_cvns() {
+        let movie_settings = if self.gate.profile().is_cvns() {
             let mut settings = self.audio.settings();
             settings.master = self.audio.cvns_movie_volume();
             settings.movie = 256;

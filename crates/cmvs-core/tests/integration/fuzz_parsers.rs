@@ -39,7 +39,7 @@ impl SplitMix64 {
         if upper_exclusive <= 1 {
             0
         } else {
-            (self.next_u64() as usize) % upper_exclusive
+            (self.next_u64() % (upper_exclusive as u64)) as usize
         }
     }
 
@@ -103,7 +103,8 @@ impl Seek for SparseReader<'_> {
         if next < 0 {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "negative seek"));
         }
-        self.pos = next as u64;
+        self.pos = u64::try_from(next)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "seek overflow"))?;
         Ok(self.pos)
     }
 }
@@ -188,7 +189,7 @@ fn mutate(rng: &mut SplitMix64, seed: &[u8]) -> Vec<u8> {
     buf
 }
 
-fn feed_all_decoders(bytes: &[u8]) {
+fn feed_all_decoders(bytes: &[u8], query_rng: &mut SplitMix64) {
     // 1. PS2 / PS3 / PSS0 script & memory-image decoders + VM bytecode layout & bounded step
     let _ = ps3::Header::parse(bytes);
     if let Ok(script) = ps3::Script::decode(bytes) {
@@ -219,12 +220,19 @@ fn feed_all_decoders(bytes: &[u8]) {
     let _ = cpz::ArchiveVersion::detect(bytes);
     let _ = cpz::ArchiveLayout::read(&mut Cursor::new(bytes));
     if let Ok(index) = cpz::ArchiveIndex::read(&mut Cursor::new(bytes)) {
+        let mut query = vec![0; query_rng.next_usize(257)];
+        query_rng.fill_bytes(&mut query);
         let _ = index.lookup(b"fixture.bin");
         let _ = index.find(b"fixture.bin");
-        if !index.entries().is_empty()
-            && let Ok(entry_bytes) = index.read_entry_verified(&mut Cursor::new(bytes), 0)
-        {
-            assert!(entry_bytes.len() <= MAX_PAYLOAD);
+        let _ = index.lookup(&query);
+        let _ = index.find(&query);
+        if !index.entries().is_empty() {
+            if let Ok(entry_bytes) = index.read_entry(&mut Cursor::new(bytes), 0) {
+                assert!(entry_bytes.len() <= MAX_PAYLOAD);
+            }
+            if let Ok(entry_bytes) = index.read_entry_verified(&mut Cursor::new(bytes), 0) {
+                assert!(entry_bytes.len() <= MAX_PAYLOAD);
+            }
         }
     }
 
@@ -437,12 +445,13 @@ fn seed_corpus() -> Vec<Vec<u8>> {
 #[test]
 fn structured_mutations_and_random_inputs_never_panic_or_exceed_max_payload() {
     let seeds = seed_corpus();
+    let mut query_rng = SplitMix64::new(0x0063_707a);
     for seed in &seeds {
-        feed_all_decoders(seed);
+        feed_all_decoders(seed, &mut query_rng);
         // Deterministic prefix truncations along header boundaries.
         for cut in [0, 1, 3, 4, 8, 15, 16, 20, 32, 44, 48, 63, 64, 72] {
             if cut < seed.len() {
-                feed_all_decoders(&seed[..cut]);
+                feed_all_decoders(&seed[..cut], &mut query_rng);
             }
         }
     }
@@ -452,7 +461,7 @@ fn structured_mutations_and_random_inputs_never_panic_or_exceed_max_payload() {
     for seed in &seeds {
         for _ in 0..32 {
             let mutated = mutate(&mut rng, seed);
-            feed_all_decoders(&mutated);
+            feed_all_decoders(&mutated, &mut query_rng);
         }
     }
 
@@ -461,7 +470,7 @@ fn structured_mutations_and_random_inputs_never_panic_or_exceed_max_payload() {
         let len = rng.next_usize(257);
         let mut random = vec![0u8; len];
         rng.fill_bytes(&mut random);
-        feed_all_decoders(&random);
+        feed_all_decoders(&random, &mut query_rng);
     }
 }
 

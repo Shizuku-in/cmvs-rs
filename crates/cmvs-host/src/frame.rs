@@ -3,7 +3,7 @@ use cmvs_core::{
     FormatError,
     render::{
         raster::{RgbaImage, movie_canvas},
-        scene_render::{RenderFrame, prepare_scene},
+        scene_render::RenderFrame,
     },
     runtime::Runtime,
 };
@@ -51,16 +51,7 @@ impl GpuFrameSource<'_> {
                 linear: *linear,
             }),
             Self::WithFont(composition) => Ok(GpuTarget::Scene(composition.prepare()?)),
-            Self::WithoutFont(runtime) => {
-                let [width, height] = runtime.screen_size();
-                Ok(GpuTarget::Scene(prepare_scene(
-                    runtime.scene(),
-                    Some(runtime.camera()),
-                    &[],
-                    width,
-                    height,
-                )?))
-            }
+            Self::WithoutFont(runtime) => Ok(GpuTarget::Scene(runtime.prepare_scene_frame()?)),
         }
     }
 }

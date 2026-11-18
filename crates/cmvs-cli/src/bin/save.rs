@@ -32,54 +32,67 @@ Read only: these commands never install engine state.
 Example: cmvs-save --section 0 save/save000.dat snapshot.bin";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut args: Vec<_> = env::args_os().skip(1).collect();
-    if cmvs_cli::wants_help(&args) {
+    let raw_args: Vec<_> = env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&raw_args) {
         println!("{USAGE}");
         return Ok(());
     }
-    let positional_first = if args.first().is_some_and(|a| a == "--") && args.len() == 2 {
-        args.remove(0);
-        true
-    } else {
-        false
-    };
-    if !positional_first
-        && let Some(flag) = args.first()
-        && flag.to_string_lossy().starts_with('-')
-        && !["--section", "--records", "--vm-state", "--visual-state"]
-            .iter()
-            .any(|name| flag == *name)
-    {
-        return Err(format!("unknown option {}", flag.to_string_lossy()).into());
-    }
-    let records = args.len() == 2 && !positional_first && args[0] == "--records";
-    let vm_state = args.len() == 2 && !positional_first && args[0] == "--vm-state";
-    let visual_state = args.len() == 2 && !positional_first && args[0] == "--visual-state";
-    let section = if args.len() == 4 && !positional_first && args[0] == "--section" {
-        let index = args[1]
-            .to_str()
-            .ok_or("section must be 0, 1 or 2")?
-            .parse::<usize>()?;
-        if index > 2 {
-            return Err("section must be 0, 1 or 2".into());
+    let mut records = false;
+    let mut vm_state = false;
+    let mut visual_state = false;
+    let mut section = None;
+    let mut positionals: Vec<std::ffi::OsString> = Vec::new();
+    let mut positional_only = false;
+    let mut iter = raw_args.into_iter();
+    while let Some(arg) = iter.next() {
+        if !positional_only && arg == "--" {
+            positional_only = true;
+            continue;
         }
-        Some(index)
-    } else if records
-        || vm_state
-        || visual_state
-        || (args.len() == 1 && (positional_first || !args[0].to_string_lossy().starts_with('-')))
-    {
-        None
-    } else {
+        if !positional_only && arg.to_string_lossy().starts_with('-') {
+            let has_mode = records || vm_state || visual_state || section.is_some();
+            if arg == "--records" {
+                if has_mode {
+                    return Err("wrong argument count; use --help".into());
+                }
+                records = true;
+            } else if arg == "--vm-state" {
+                if has_mode {
+                    return Err("wrong argument count; use --help".into());
+                }
+                vm_state = true;
+            } else if arg == "--visual-state" {
+                if has_mode {
+                    return Err("wrong argument count; use --help".into());
+                }
+                visual_state = true;
+            } else if arg == "--section" {
+                if has_mode {
+                    return Err("wrong argument count; use --help".into());
+                }
+                let index = iter
+                    .next()
+                    .ok_or("wrong argument count; use --help")?
+                    .to_str()
+                    .ok_or("section must be 0, 1 or 2")?
+                    .parse::<usize>()?;
+                if index > 2 {
+                    return Err("section must be 0, 1 or 2".into());
+                }
+                section = Some(index);
+            } else {
+                return Err(format!("unknown option {}", arg.to_string_lossy()).into());
+            }
+            continue;
+        }
+        positionals.push(arg);
+    }
+    let expected_positionals = if section.is_some() { 2 } else { 1 };
+    if positionals.len() != expected_positionals {
         return Err("wrong argument count; use --help".into());
-    };
-    let input = if section.is_some() {
-        &args[2]
-    } else if records || vm_state || visual_state {
-        &args[1]
-    } else {
-        &args[0]
-    };
+    }
+    let input = &positionals[0];
+    let section_output = positionals.get(1);
     let mut file = File::open(input)?;
     let length = file.metadata()?.len();
     let mut header = [0; HEADER_SIZE];
@@ -193,13 +206,14 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     }
     if let Some(index) = section {
+        let out_path = section_output.expect("validated positionals length");
         let bytes = [&save.snapshot, &save.auxiliary, &save.script_image][index];
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&args[3])?;
+            .open(out_path)?;
         output.write_all(bytes)?;
-        println!("Wrote {} decoded bytes to {:?}", bytes.len(), args[3]);
+        println!("Wrote {} decoded bytes to {out_path:?}", bytes.len());
     }
     Ok(())
 }

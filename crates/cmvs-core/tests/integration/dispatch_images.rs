@@ -144,10 +144,7 @@ fn read_errors_keep_typed_source_scene_and_pending_command_for_retry() {
         assert_eq!((error.pc, error.command), (before.0, opcode - 0x2000));
         assert_eq!(
             error.to_string(),
-            format!(
-                "system command 0x{opcode:04x} at 0x{pc:x}: PC=0x{pc:x} 0x{opcode:04x}: read rejected",
-                pc = before.0
-            )
+            format!("PC=0x{pc:x} 0x{opcode:04x}: read rejected", pc = before.0)
         );
         assert_eq!(
             error.as_io().unwrap().kind(),

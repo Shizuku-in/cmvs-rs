@@ -617,7 +617,7 @@ impl ApplicationHandler for App {
                         "# UNREVIEWED system command 0x{:04x} allowed with {} (default policy, first use)",
                         0x2000 + command,
                         cmvs_core::vm::dispatch::semantics_name(
-                            startup.gate().selection().profile,
+                            startup.gate().profile(),
                             command
                         )
                     );
@@ -646,7 +646,7 @@ impl ApplicationHandler for App {
                 Ok(FrameOutcome::BudgetExhausted) => {}
                 Ok(FrameOutcome::Stopped(event)) => {
                     self.halted = true;
-                    if self.startup.gate().selection().profile.base.is_some() {
+                    if self.startup.gate().profile().base.is_some() {
                         for line in self.startup.gate().diagnostic_lines() {
                             println!("{line}");
                         }
@@ -783,17 +783,17 @@ fn halt_title(event: RuntimeEvent, script: &[u8], pc: usize) -> String {
     }
 }
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut args = env::args_os().skip(1);
-    let root = args.next().ok_or(
-        "usage: cmvs-desktop <game-root> --encoding <auto|shift-jis|gbk|utf-8> [options]; see --help",
-    )?;
-    if root == "--help" || root == "-h" {
+    let raw_args: Vec<_> = env::args_os().skip(1).collect();
+    if raw_args
+        .iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| *arg == "-h" || *arg == "--help")
+    {
         println!("{USAGE}");
         return Ok(());
     }
-    if root.to_string_lossy().starts_with('-') {
-        return Err(format!("unknown option {}", root.to_string_lossy()).into());
-    }
+    let mut root: Option<std::ffi::OsString> = None;
+    let mut positional_only = false;
     let mut encoding = None;
     let mut exit_after = None;
     let mut preview_name = None;
@@ -813,10 +813,18 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut record_text = false;
     let mut font_path = None;
     let mut font_face = None;
+    let mut args = raw_args.into_iter();
     while let Some(flag) = args.next() {
-        if flag == "--help" || flag == "-h" {
-            println!("{USAGE}");
-            return Ok(());
+        if !positional_only && flag == "--" {
+            positional_only = true;
+            continue;
+        }
+        if positional_only || !flag.to_string_lossy().starts_with('-') {
+            if root.is_some() {
+                return Err("too many arguments".into());
+            }
+            root = Some(flag);
+            continue;
         }
         if flag == "--skip-auto-resume" {
             skip_auto_resume = true;
@@ -920,6 +928,9 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             return Err("unknown option".into());
         }
     }
+    let root = root.ok_or(
+        "usage: cmvs-desktop <game-root> --encoding <auto|shift-jis|gbk|utf-8> [options]; see --help",
+    )?;
     let choice =
         encoding.ok_or("select text encoding with --encoding auto, shift-jis, gbk or utf-8")?;
     if font_face.is_some() && font_path.is_none() {
@@ -1111,7 +1122,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     };
     let event_loop = EventLoop::new()?;
     let outcome = event_loop.run_app(&mut app);
-    if app.startup.gate().selection().profile.base.is_some() {
+    if app.startup.gate().profile().base.is_some() {
         for line in app.startup.gate().diagnostic_lines() {
             println!("{line}");
         }

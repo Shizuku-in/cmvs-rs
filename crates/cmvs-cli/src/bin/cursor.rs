@@ -22,28 +22,47 @@ Exports are raw pixels without a header. Output files must not already exist.
 Example: cmvs-cursor 01.cur --rgba cursor.rgba";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut args: Vec<_> = env::args_os().skip(1).collect();
+    let args: Vec<_> = env::args_os().skip(1).collect();
     if cmvs_cli::wants_help(&args) {
         println!("{USAGE}");
         return Ok(());
     }
-    let positional_first = if args.first().is_some_and(|a| a == "--") && args.len() >= 2 {
-        args.remove(0);
-        true
-    } else {
-        false
-    };
-    if !positional_first
-        && let Some(flag) = args.first()
-        && flag.to_string_lossy().starts_with('-')
-    {
-        return Err(format!("unknown option {}", flag.to_string_lossy()).into());
+    enum OutputMode {
+        Rgba(std::ffi::OsString),
+        Planes(std::ffi::OsString),
     }
-    if args.len() != 1 && !(args.len() == 3 && (args[1] == "--planes" || args[1] == "--rgba")) {
-        return Err("wrong arguments; use --help".into());
+    let mut input: Option<std::ffi::OsString> = None;
+    let mut output: Option<OutputMode> = None;
+    let mut positional_only = false;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        if !positional_only && arg == "--" {
+            positional_only = true;
+            continue;
+        }
+        if !positional_only && (arg == "--rgba" || arg == "--planes") {
+            if output.is_some() {
+                return Err("wrong arguments; use --help".into());
+            }
+            let out_path = iter.next().ok_or("wrong arguments; use --help")?;
+            output = Some(if arg == "--rgba" {
+                OutputMode::Rgba(out_path)
+            } else {
+                OutputMode::Planes(out_path)
+            });
+            continue;
+        }
+        if !positional_only && arg.to_string_lossy().starts_with('-') {
+            return Err(format!("unknown option {}", arg.to_string_lossy()).into());
+        }
+        if input.is_some() {
+            return Err("wrong arguments; use --help".into());
+        }
+        input = Some(arg);
     }
+    let input = input.ok_or("wrong arguments; use --help")?;
     let mut raw = Vec::new();
-    File::open(&args[0])?
+    File::open(&input)?
         .take(MAX_PLATFORM_ASSET as u64 + 1)
         .read_to_end(&mut raw)?;
     if raw.len() > MAX_PLATFORM_ASSET {
@@ -58,16 +77,15 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         cursor.xor_rgb().len(),
         cursor.alpha().is_some()
     );
-    if args.len() == 3 {
-        let rgba = if args[1] == "--rgba" {
-            Some(cursor.rgba()?)
-        } else {
-            None
+    if let Some(output) = output {
+        let (out_path, rgba) = match output {
+            OutputMode::Rgba(out_path) => (out_path, Some(cursor.rgba()?)),
+            OutputMode::Planes(out_path) => (out_path, None),
         };
         let mut out = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&args[2])?;
+            .open(&out_path)?;
         if let Some(rgba) = rgba {
             out.write_all(&rgba)?;
         } else {

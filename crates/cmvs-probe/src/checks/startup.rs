@@ -9,7 +9,7 @@ use crate::{
     target::{Target, cap},
 };
 use cmvs_core::{format::digest::to_hex, format::ps3::Script, runtime::load_start};
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 pub const RUN_CAPABILITIES: [&str; 3] = [cap::PROFILE, cap::ARCHIVE, cap::KEY_CONFIG];
 pub const CVNS_RUN_CAPABILITIES: [&str; 2] = [cap::PROFILE, cap::ARCHIVE];
@@ -38,15 +38,17 @@ pub struct StartRun {
     pub events: Vec<Json>,
 }
 
-pub fn load_script(target: &Target) -> Result<Script, String> {
+pub fn load_script(target: &Target) -> Result<Arc<Script>, String> {
     let files = target.files.as_ref().ok_or("game files not found")?;
-    load_start(&target.root, files).map_err(|e| e.to_string())
+    load_start(&target.root, files)
+        .map(Arc::new)
+        .map_err(|e| e.to_string())
 }
 
 /// Drives a new session in a fresh user directory to the start page and records the run.
 pub fn run_to_start(
     target: &Target,
-    script: &Script,
+    script: impl cmvs_core::vm::machine::IntoSharedScript,
     user: &Path,
     options: &Options,
     font: Option<&cmvs_font::font::FontRenderer>,

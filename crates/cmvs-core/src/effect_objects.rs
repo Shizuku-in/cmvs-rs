@@ -15,7 +15,14 @@ mod legacy;
 mod magic;
 mod sprites;
 mod vortex;
-pub use legacy::{LegacyEffect, SnowField, Walk, WorldQuad};
+pub use curtain::Curtain;
+pub use legacy::{
+    Circle, FloatingPlanes, LegacyEffect, LegacyMesh, MeshScene, SnowField, Walk, WalkOutput,
+    WorldQuad,
+};
+pub use magic::{Magic, Spark};
+pub use sprites::Sprites;
+pub use vortex::Vortex;
 mod legacy_flakes;
 pub(crate) use legacy_flakes::LegacyFlakes;
 mod rain;

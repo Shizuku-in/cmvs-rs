@@ -54,7 +54,7 @@ struct Branch {
 /// Creates sessions with fresh user directories under the output directory.
 pub struct Runner<'t> {
     pub target: &'t Target,
-    pub script: &'t Script,
+    pub script: &'t std::sync::Arc<Script>,
     pub options: &'t Options,
     pub font: Option<&'t cmvs_font::font::FontRenderer>,
     pub out: &'t Path,
@@ -66,7 +66,7 @@ pub struct Runner<'t> {
 impl<'t> Runner<'t> {
     pub fn new(
         target: &'t Target,
-        script: &'t Script,
+        script: &'t std::sync::Arc<Script>,
         options: &'t Options,
         font: Option<&'t cmvs_font::font::FontRenderer>,
         out: &'t Path,

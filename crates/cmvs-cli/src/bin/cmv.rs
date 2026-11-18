@@ -23,41 +23,54 @@ Ogg audio is located but not decoded; use cmvs-audio to inspect it.
 Example: cmvs-cmv op.cmv --frame 0 frame.png";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut all_args: Vec<_> = env::args_os().skip(1).collect();
+    let all_args: Vec<_> = env::args_os().skip(1).collect();
     if cmvs_cli::wants_help(&all_args) {
         println!("{USAGE}");
         return Ok(());
     }
-    let positional_first = if all_args.first().is_some_and(|a| a == "--") && all_args.len() >= 2 {
-        all_args.remove(0);
-        true
-    } else {
-        false
-    };
-    let Some(path) = all_args.first().cloned() else {
-        return Err("usage: cmvs-cmv <movie.cmv>".into());
-    };
-    if !positional_first && path.to_string_lossy().starts_with('-') {
-        return Err(format!("unknown option {}", path.to_string_lossy()).into());
+    let mut path: Option<std::ffi::OsString> = None;
+    let mut check_frames = false;
+    let mut frame_spec: Option<(u32, std::ffi::OsString)> = None;
+    let mut positional_only = false;
+    let mut args = all_args.into_iter();
+    while let Some(arg) = args.next() {
+        if !positional_only && arg == "--" {
+            positional_only = true;
+            continue;
+        }
+        if !positional_only && arg == "--check-frames" {
+            if check_frames || frame_spec.is_some() {
+                return Err("expected --check-frames or --frame <index> <new-file>".into());
+            }
+            check_frames = true;
+            continue;
+        }
+        if !positional_only && arg == "--frame" {
+            if check_frames || frame_spec.is_some() {
+                return Err("expected --check-frames or --frame <index> <new-file>".into());
+            }
+            let index = args
+                .next()
+                .and_then(|s| s.to_str().and_then(|s| s.parse::<u32>().ok()))
+                .ok_or("--frame index must be a non-negative decimal integer")?;
+            let out_path = args
+                .next()
+                .ok_or("expected --check-frames or --frame <index> <new-file>")?;
+            frame_spec = Some((index, out_path));
+            continue;
+        }
+        if !positional_only && arg.to_string_lossy().starts_with('-') {
+            return Err(format!("unknown option {}", arg.to_string_lossy()).into());
+        }
+        if path.is_some() {
+            return Err("expected --check-frames or --frame <index> <new-file>".into());
+        }
+        path = Some(arg);
     }
-    let args = &all_args[1..];
-    if !(args.is_empty() || args == ["--check-frames"] || (args.len() == 3 && args[0] == "--frame"))
-    {
-        return Err("expected --check-frames or --frame <index> <new-file>".into());
-    }
-    let frame = if args.len() == 3 {
-        Some(
-            args[1]
-                .to_str()
-                .and_then(|s| s.parse::<u32>().ok())
-                .ok_or("--frame index must be a non-negative decimal integer")?,
-        )
-    } else {
-        None
-    };
+    let path = path.ok_or("usage: cmvs-cmv <movie.cmv>")?;
     let mut file = File::open(path)?;
     let index = CmvIndex::read_io(&mut file)?;
-    if args == ["--check-frames"] {
+    if check_frames {
         let start = std::time::Instant::now();
         let mut count = 0;
         for i in 0..index.header.max_sequence {
@@ -72,9 +85,9 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         );
         return Ok(());
     }
-    if let Some(frame) = frame {
+    if let Some((frame, out_path)) = frame_spec {
         let image = index.decode_frame(&mut file, frame)?;
-        let bytes = if std::path::Path::new(&args[2])
+        let bytes = if std::path::Path::new(&out_path)
             .extension()
             .is_some_and(|s| s == "rgba")
         {
@@ -85,7 +98,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&args[2])?
+            .open(&out_path)?
             .write_all(&bytes)?;
         println!(
             "decoded frame {frame}: {}x{}",

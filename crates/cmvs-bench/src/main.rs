@@ -4,7 +4,6 @@ use cmvs_core::{
     format::{
         cpz::{ArchiveDirectory, ArchiveFile, ArchiveIndex, Cpz5Index, Cpz5Mode},
         lzss,
-        mgv::{Decoder, MgvIndex},
         pb3::{self, EncodeDepth},
         ps3::Script,
     },
@@ -24,7 +23,6 @@ use cmvs_core::{
     },
 };
 use cmvs_font::font::FontRenderer;
-use cmvs_video::TheoraStream;
 use std::{
     error::Error,
     hint::black_box,
@@ -139,17 +137,6 @@ fn build_cpz5_archive(entry_count: usize) -> Vec<u8> {
     let mut cursor = Cursor::new(Vec::new());
     Cpz5Index::write(&mut cursor, Cpz5Mode::Mode9, &dirs).expect("valid CPZ5 archive");
     cursor.into_inner()
-}
-
-fn mgv1_fixture() -> Vec<u8> {
-    include_str!("../../cmvs-video/tests/fixtures/mgv1.hex")
-        .trim()
-        .as_bytes()
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-        .collect()
 }
 
 fn minimal_bench_ttf() -> Vec<u8> {
@@ -294,7 +281,7 @@ fn push_call(code: &mut Vec<u8>, command: u16, words: &[u32]) {
 fn build_vm_loop_script() -> Script {
     // Loop at pc = 0:
     //   var[8] = var[8] + 3
-    //   var[12] = var[8] ^ 0x55aa
+    //   var[12] = var[8]
     //   jump 0
     let int_lit = |val: i32| -> Vec<u8> {
         let mut out = Vec::new();
@@ -447,24 +434,32 @@ fn run_suite(
         ));
     }
 
-    // 4. YUV 4:2:0 -> RGBA conversion (`cmvs-video` Theora decode + SIMD/scalar YUV420 kernel)
+    // 4. YUV 4:2:0 -> RGBA conversion (`cmvs-video` SIMD/scalar BT.601 kernel)
     if matches("yuv420_to_rgba") {
-        let mgv_bytes = mgv1_fixture();
-        let mgv_index = MgvIndex::read(&mut Cursor::new(&mgv_bytes))?;
-        let mut stream = TheoraStream::open(Box::new(Cursor::new(mgv_bytes)), &mgv_index)?;
-        let first = stream.frame(0)?;
-        let frame_bytes = u64::from(first.width()) * u64::from(first.height()) * 4;
-        let iters = if mode == BenchMode::Smoke { 4 } else { 120 };
+        let (w, h) = (640u32, 360u32);
+        let plane_w = w as usize;
+        let plane_h = h as usize;
+        let y_plane: Vec<u8> = (0..plane_w * plane_h)
+            .map(|i| ((i.wrapping_mul(37)) & 0xff) as u8)
+            .collect();
+        let u_plane = vec![96u8; (plane_w / 2) * (plane_h / 2)];
+        let v_plane = vec![160u8; (plane_w / 2) * (plane_h / 2)];
+        let frame_bytes = u64::from(w) * u64::from(h) * 4;
+        let iters = if mode == BenchMode::Smoke { 8 } else { 400 };
         results.push(measure(
             "yuv420_to_rgba",
             iters,
-            Some((frame_bytes * 3, "B")),
+            Some((frame_bytes, "B")),
             || {
-                // Decode frames 0, 1, and 3 across stream cycles, exercising YUV 4:2:0 -> RGBA.
-                for f in [0u32, 1, 3] {
-                    let img = stream.frame(black_box(f)).expect("valid MGV1 frame");
-                    black_box(img);
-                }
+                let img = cmvs_video::convert_yuv420_planar(
+                    black_box(w),
+                    black_box(h),
+                    black_box(&y_plane),
+                    black_box(&u_plane),
+                    black_box(&v_plane),
+                )
+                .expect("valid YUV420 buffers");
+                black_box(img);
             },
         ));
     }

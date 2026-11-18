@@ -56,6 +56,8 @@ pub struct DispatchError {
     pub pc: usize,
     /// VM command number (opcode minus 0x2000), including for backend failures.
     pub command: u16,
+    /// Raw script opcode (`0x2000 + pending_source`), before any CVNS command mapping.
+    pub opcode: u16,
     cause: Box<dyn Error + Send + Sync>,
 }
 
@@ -75,13 +77,22 @@ impl DispatchError {
 
 impl fmt::Display for DispatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "system command 0x{:04x} at 0x{:x}: {}",
-            0x2000 + self.command,
-            self.pc,
-            self.cause
-        )
+        if let Some(err) = self.cause.downcast_ref::<DecodeError>() {
+            DecodeError {
+                pc: self.pc,
+                opcode: Some(self.opcode),
+                reason: err.reason,
+            }
+            .fmt(f)
+        } else if let Some(err) = self.cause.downcast_ref::<crate::scene::ImageLoadError>() {
+            err.fmt_at(f, self.pc, self.opcode)
+        } else {
+            write!(
+                f,
+                "system command 0x{:04x} at 0x{:x}: {}",
+                self.opcode, self.pc, self.cause
+            )
+        }
     }
 }
 
@@ -212,9 +223,16 @@ impl Entry {
         if !hosts.has(self.capability) {
             return Ok(Some(Flow::Unavailable));
         }
-        (self.handler)(hosts, &mut Call::new(vm, pc, command))
+        let mut call = Call::new(vm, pc, command);
+        let opcode = call.opcode();
+        (self.handler)(hosts, &mut call)
             .map(Some)
-            .map_err(|cause| DispatchError { pc, command, cause })
+            .map_err(|cause| DispatchError {
+                pc,
+                command,
+                opcode,
+                cause,
+            })
     }
 }
 
@@ -241,10 +259,11 @@ mod tests {
     use std::error::Error;
 
     #[test]
-    fn dispatch_error_display_includes_opcode_and_pc() {
+    fn dispatch_error_display_uses_source_opcode_and_avoids_duplicate_prefixes() {
         let err = DispatchError {
             pc: 0x1a4,
             command: 0x0152,
+            opcode: 0x2152,
             cause: "bad operand".into(),
         };
         assert_eq!(
@@ -252,5 +271,27 @@ mod tests {
             "system command 0x2152 at 0x1a4: bad operand"
         );
         assert!(err.source().is_some());
+
+        // CVNS commands format their raw script opcode rather than internal 0x24xx/mapped values.
+        let cvns = DispatchError {
+            pc: 0x80,
+            command: 0x04c0,
+            opcode: 0x20c0,
+            cause: "movie unavailable".into(),
+        };
+        assert_eq!(
+            cvns.to_string(),
+            "system command 0x20c0 at 0x80: movie unavailable"
+        );
+
+        let decode = crate::evaluate::error(0x44, 0x20a7, "missing operand");
+        let expected = decode.to_string();
+        let wrapped = DispatchError {
+            pc: 0x44,
+            command: 0x04a7,
+            opcode: 0x20a7,
+            cause: Box::new(decode),
+        };
+        assert_eq!(wrapped.to_string(), expected);
     }
 }

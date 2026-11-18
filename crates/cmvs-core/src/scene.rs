@@ -22,8 +22,9 @@ mod scale_motion;
 mod strip;
 mod world_motion;
 pub use crate::effect_objects::{
-    CollisionEffect, CollisionParticle, FallingEffect, FallingParticle, Fragment, FragmentEffect,
-    LegacyEffect, Particle, ParticleEffect, ParticleFade, SnowField, Walk, WorldQuad,
+    Circle, CollisionEffect, CollisionParticle, Curtain, FallingEffect, FallingParticle,
+    FloatingPlanes, Fragment, FragmentEffect, LegacyEffect, LegacyMesh, Magic, MeshScene, Particle,
+    ParticleEffect, ParticleFade, SnowField, Spark, Sprites, Vortex, Walk, WalkOutput, WorldQuad,
 };
 pub use animation::{ANIMATION_FRAMES, Animation, AnimationFrame};
 pub use change::ImageChange;
@@ -1048,7 +1049,7 @@ impl SceneHost {
         if !matches!(command, 0x2cb | 0x250 | 0x20 | 0x21) {
             return Err(call.error("unregistered command"));
         }
-        let op = command + 0x2000;
+        let op = call.opcode();
         let value = call.argument(4, argument_names(call.command)[0])?;
         let slot = if matches!(command, 0x20 | 0x21) {
             // 0x14006bb00/0x14006bbc0 compare signed against 256: larger values only set
@@ -1137,7 +1138,7 @@ impl SceneHost {
     ///   same occupied slot the original stores the pointer it just freed, which Rust rejects.
     fn query_or_move(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
-        let op = command + 0x2000;
+        let op = call.opcode();
         let mut word = |distance| {
             call.argument(distance, argument_names(command)[distance / 4 - 1])
                 .map(|value| value as i32)
@@ -1379,7 +1380,8 @@ impl SceneHost {
 
     fn handle_object(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
-        let fail = |why| error(pc, command + 0x2000, why);
+        let op = call.opcode();
+        let fail = |why| error(pc, op, why);
         let count = match command {
             0x40 => 1,
             0x22 | 0x25 | 0x2d | 0x2e | 0x42 | 0x50 => 2,
@@ -1592,7 +1594,8 @@ impl SceneHost {
             return Ok(());
         }
         let (pc, command) = (call.pc, call.command);
-        let fail = |why| error(pc, command + 0x2000, why);
+        let op = call.opcode();
+        let fail = |why| error(pc, op, why);
         let raw_slot = call.argument(4, "object slot")?;
         let raw_name = call.argument(if command == 0x38 { 12 } else { 8 }, "image name")?;
         // Slots >= 256 or without an object only set +12056 bit 0x10 (unmodeled);
@@ -1639,7 +1642,7 @@ impl SceneHost {
             if first != 0 || second != 0 {
                 return Err(fail("second texture nonzero load flags are not verified").into());
             }
-            let decoded = load_image(images, name, pc, 0x2035)?;
+            let decoded = load_image(images, name, pc, op)?;
             call.complete(0x4010)?;
             call.vm
                 .state_mut()
@@ -1651,7 +1654,7 @@ impl SceneHost {
                 .secondary_image = decoded;
             return Ok(());
         }
-        let mut decoded = load_image(images, name, pc, command + 0x2000)?;
+        let mut decoded = load_image(images, name, pc, op)?;
         if let Some(filter) = filter
             && let Some(image) = decoded.as_mut()
         {
@@ -1677,18 +1680,24 @@ impl SceneHost {
 }
 
 #[derive(Debug)]
-struct ImageLoadError {
+pub(crate) struct ImageLoadError {
     pc: usize,
     opcode: u16,
     cause: Box<dyn Error + Send + Sync>,
 }
+impl ImageLoadError {
+    pub(crate) fn fmt_at(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        pc: usize,
+        opcode: u16,
+    ) -> std::fmt::Result {
+        write!(f, "PC=0x{pc:x} 0x{opcode:04x}: {}", self.cause)
+    }
+}
 impl std::fmt::Display for ImageLoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "PC=0x{:x} 0x{:04x}: {}",
-            self.pc, self.opcode, self.cause
-        )
+        self.fmt_at(f, self.pc, self.opcode)
     }
 }
 impl Error for ImageLoadError {

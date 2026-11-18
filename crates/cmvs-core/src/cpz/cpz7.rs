@@ -223,7 +223,7 @@ impl Cpz7Index {
                 return Err(FormatError("CPZ7 file count/length mismatch").into());
             }
         }
-        let lookup = LookupTable::from_entries(&entries);
+        let lookup = LookupTable::from_entries(&entries, <[u8]>::to_vec);
         Ok(Self {
             layout,
             entries,

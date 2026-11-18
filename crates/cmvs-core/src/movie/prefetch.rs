@@ -124,6 +124,22 @@ impl ScenePrefetch {
         }
     }
 
+    fn cancel_locked(shared: &mut Shared, id: u64) {
+        shared.wanted.remove(&id);
+        shared.pending.remove(&id);
+        shared.ready.remove(&id);
+        shared.queue.retain(|queued| *queued != id);
+    }
+
+    /// Drops any pending or ready prefetch work for player `id`.
+    pub(crate) fn cancel(&mut self, id: u64) {
+        let Some((sync, _)) = &self.worker else {
+            return;
+        };
+        let mut shared = sync.shared.lock().unwrap_or_else(|e| e.into_inner());
+        Self::cancel_locked(&mut shared, id);
+    }
+
     /// Drops requests and decoded frames of players that no longer exist.
     pub(crate) fn retain_players(&mut self, live: &[u64]) {
         let Some((sync, _)) = &self.worker else {
@@ -190,8 +206,8 @@ impl ScenePrefetch {
         }
     }
 
-    /// The requested frame, waiting for the worker if it is still decoding; `None` when
-    /// that frame was not requested, so the caller decodes it itself.
+    /// The requested frame when already decoded or actively in flight on the worker; `None`
+    /// when not requested or still queued behind another player so the caller decodes immediately.
     pub(crate) fn take(
         &mut self,
         id: u64,
@@ -199,19 +215,24 @@ impl ScenePrefetch {
     ) -> Option<Result<RgbaImage, Box<dyn Error + Send + Sync>>> {
         let (sync, _) = self.worker.as_ref()?;
         let sync = Arc::clone(sync);
+        let mut worker_died = false;
         let outcome = {
             let mut shared = sync.shared.lock().unwrap_or_else(|e| e.into_inner());
             if shared.wanted.get(&id) != Some(&frame) {
                 return None;
             }
             loop {
-                if let Some(reply) = shared.ready.remove(&id)
-                    && reply.frame == frame
-                {
+                if shared.ready.get(&id).is_some_and(|r| r.frame == frame) {
+                    let reply = shared.ready.remove(&id).expect("checked above");
                     shared.wanted.remove(&id);
                     break Some(reply.result.map_err(Into::into));
                 }
-                if shared.worker_exited || shared.wanted.get(&id) != Some(&frame) {
+                if shared.worker_exited {
+                    worker_died = true;
+                    break None;
+                }
+                if shared.in_flight != Some((id, frame)) {
+                    Self::cancel_locked(&mut shared, id);
                     break None;
                 }
                 shared = sync
@@ -220,7 +241,7 @@ impl ScenePrefetch {
                     .unwrap_or_else(|e| e.into_inner());
             }
         };
-        if outcome.is_none() {
+        if worker_died {
             self.stop();
         }
         outcome
@@ -300,8 +321,8 @@ impl ScenePrefetch {
                                 result,
                             },
                         );
-                        worker_sync.reply_cv.notify_all();
                     }
+                    worker_sync.reply_cv.notify_all();
                 }
             })
             .ok()?;
@@ -340,6 +361,16 @@ mod tests {
         RgbaImage::new(1, 1, vec![id as u8, frame as u8, 0xaa, 0xff]).unwrap()
     }
 
+    fn wait_worker_idle(prefetch: &ScenePrefetch) {
+        let Some((sync, _)) = &prefetch.worker else {
+            return;
+        };
+        let mut shared = sync.shared.lock().unwrap();
+        while !shared.worker_exited && (!shared.pending.is_empty() || shared.in_flight.is_some()) {
+            shared = sync.reply_cv.wait(shared).unwrap();
+        }
+    }
+
     #[test]
     fn fast_forward_overwrites_stale_pending_frames_per_slot_in_place() {
         let entered_first = Arc::new(Barrier::new(2));
@@ -376,8 +407,10 @@ mod tests {
             prefetch.request(2, frame, &index, &data, &None);
         }
 
-        // Release frame 0; obsolete queued frames 1..=4 and 10..=11 must never decode.
+        // Release frame 0 and wait for the worker to drain coalesced requests; obsolete
+        // queued frames 1..=4 and 10..=11 must never decode.
         release_first.wait();
+        wait_worker_idle(&prefetch);
 
         // Superseded frames return None so callers never consume stale replies.
         assert!(prefetch.take(1, 0).is_none());
@@ -424,6 +457,7 @@ mod tests {
         prefetch.retain_players(&[1, 3]);
 
         release.wait();
+        wait_worker_idle(&prefetch);
 
         assert!(prefetch.take(2, 7).is_none());
         assert_eq!(
@@ -435,5 +469,56 @@ mod tests {
         // Dropping while idle or after queueing work joins the worker thread cleanly.
         prefetch.request(3, 10, &index, &data, &None);
         drop(prefetch);
+    }
+
+    #[test]
+    fn take_does_not_block_behind_unrelated_in_flight_decode_and_keeps_worker_alive() {
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let decoded = Arc::new(Mutex::new(Vec::<(u64, u32)>::new()));
+
+        let entered_w = Arc::clone(&entered);
+        let release_w = Arc::clone(&release);
+        let decoded_w = Arc::clone(&decoded);
+        let mut prefetch = ScenePrefetch::with_decoder(
+            || {},
+            Arc::new(move |job| {
+                if (job.id, job.frame) == (1, 0) {
+                    entered_w.wait();
+                    release_w.wait();
+                }
+                decoded_w.lock().unwrap().push((job.id, job.frame));
+                Ok(frame_pixel(job.id, job.frame))
+            }),
+        );
+
+        let (index, data) = dummy_index_and_data();
+        prefetch.request(1, 0, &index, &data, &None);
+        entered.wait();
+
+        // Slot 2's request is queued behind slow in-flight slot 1.
+        prefetch.request(2, 12, &index, &data, &None);
+
+        // Taking slot 2 before releasing slot 1 must return immediately and cancel (2, 12)
+        // without shutting down the worker thread.
+        assert!(prefetch.take(2, 12).is_none());
+        assert!(!prefetch.stopped);
+        {
+            let shared = prefetch.worker.as_ref().unwrap().0.shared.lock().unwrap();
+            assert!(!shared.pending.contains_key(&2));
+            assert!(!shared.wanted.contains_key(&2));
+        }
+
+        release.wait();
+        wait_worker_idle(&prefetch);
+        assert_eq!(*decoded.lock().unwrap(), vec![(1, 0)]);
+
+        // Worker remains active for subsequent frames.
+        prefetch.request(2, 13, &index, &data, &None);
+        wait_worker_idle(&prefetch);
+        assert_eq!(
+            prefetch.take(2, 13).expect("worker stays alive").unwrap(),
+            frame_pixel(2, 13)
+        );
     }
 }

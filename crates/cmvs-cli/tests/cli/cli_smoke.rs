@@ -127,6 +127,7 @@ fn assert_not_help(exe: &str, cwd: &Path, args: &[&str]) {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !out.status.success(),
         "{exe} {args:?} unexpectedly succeeded:\n{stdout}"
@@ -134,6 +135,13 @@ fn assert_not_help(exe: &str, cwd: &Path, args: &[&str]) {
     assert!(
         !stdout.starts_with("Usage:"),
         "{exe} {args:?} treated argument after `--` as help:\n{stdout}"
+    );
+    assert!(
+        !stderr
+            .lines()
+            .any(|line| line.ends_with("unknown option --")
+                || line.ends_with("unknown subcommand --")),
+        "{exe} {args:?} treated `--` itself as an unknown option or subcommand:\n{stderr}"
     );
 }
 
@@ -234,32 +242,52 @@ fn all_cli_binaries_honor_help_in_any_position_and_respect_double_dash() {
         for case in extra_cases {
             assert_help_ok(exe, &empty_dir, case);
         }
+        assert_not_help(exe, &empty_dir, &["--"]);
         assert_not_help(exe, &empty_dir, &["--", "--help"]);
         assert_not_help(exe, &empty_dir, &["--", "-h"]);
     }
 
-    // Verify `--` allows inspecting a real file literally named `--help`.
+    // Verify `--` allows inspecting real files/directories literally named `--help`.
     let literal_dir = TempDir::new("literal-help-file");
     let mut code = Vec::new();
     command(&mut code, 0x2003, &[]);
     fs::write(literal_dir.join("--help"), synthetic_ps2a(&code)).unwrap();
-    for exe in [
-        env!("CARGO_BIN_EXE_cmvs-inspect"),
-        env!("CARGO_BIN_EXE_cmvs-disasm"),
+    for (exe, args) in [
+        (env!("CARGO_BIN_EXE_cmvs-inspect"), &["--", "--help"][..]),
+        (env!("CARGO_BIN_EXE_cmvs-disasm"), &["--", "--help"][..]),
+        (
+            env!("CARGO_BIN_EXE_cmvs-trace"),
+            &["--profile", "cmvs-20160201", "--", "--help"][..],
+        ),
     ] {
         let out = Command::new(exe)
             .current_dir(&literal_dir)
-            .args(["--", "--help"])
+            .args(args)
             .output()
             .unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(
             out.status.success(),
-            "{}",
+            "{exe} {args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
         assert!(!stdout.starts_with("Usage:"), "{stdout}");
     }
+
+    let profile_dir = TempDir::new("literal-profile-dir");
+    fs::create_dir(profile_dir.join("--help")).unwrap();
+    let profile_out = Command::new(env!("CARGO_BIN_EXE_cmvs-profile"))
+        .current_dir(&profile_dir)
+        .args(["identify", "--", "--help"])
+        .output()
+        .unwrap();
+    let profile_stdout = String::from_utf8_lossy(&profile_out.stdout);
+    let profile_stderr = String::from_utf8_lossy(&profile_out.stderr);
+    assert!(!profile_stdout.starts_with("Usage:"), "{profile_stdout}");
+    assert!(
+        !profile_stderr.contains("unknown option"),
+        "{profile_stderr}"
+    );
 }
 
 #[test]
@@ -527,6 +555,16 @@ fn audio_cli_inspects_ogg_and_cmv_and_exports_pcm_without_device() {
         "{stdout}"
     );
 
+    let extra = Command::new(exe)
+        .arg("--")
+        .arg(&ogg)
+        .arg("--pcm")
+        .arg(&pcm)
+        .output()
+        .unwrap();
+    assert!(!extra.status.success());
+    assert!(!pcm.exists());
+
     let export = Command::new(exe)
         .arg(&cmv)
         .arg("--pcm")
@@ -541,6 +579,20 @@ fn audio_cli_inspects_ogg_and_cmv_and_exports_pcm_without_device() {
     );
     assert!(stdout.contains("samples=768"), "{stdout}");
     assert_eq!(fs::read(&pcm).unwrap().len(), 768 * 4);
+
+    let pcm_before = dir.join("tone_before.f32");
+    let flag_first = Command::new(exe)
+        .arg("--pcm")
+        .arg(&pcm_before)
+        .arg(&ogg)
+        .output()
+        .unwrap();
+    assert!(
+        flag_first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&flag_first.stderr)
+    );
+    assert_eq!(fs::read(&pcm_before).unwrap().len(), 768 * 4);
 
     // Refuses to overwrite existing PCM file.
     assert!(

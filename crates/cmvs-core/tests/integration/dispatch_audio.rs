@@ -472,10 +472,7 @@ fn errors_keep_location_typed_source_and_retry_state() {
     let decode = error.as_decode().unwrap();
     assert_eq!(decode.reason, "value");
     assert_eq!(decode.opcode, Some(0x2238));
-    assert_eq!(
-        error.to_string(),
-        format!("system command 0x2238 at 0x0: {decode}")
-    );
+    assert_eq!(error.to_string(), decode.to_string());
     assert_eq!(error.source().unwrap().downcast_ref(), Some(decode));
     assert_eq!(audio.voice_ducking().percent, 50);
 }

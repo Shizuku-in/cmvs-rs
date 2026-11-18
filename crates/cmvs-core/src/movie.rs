@@ -14,7 +14,6 @@
 use crate::filesystem::{File, HostFs, resolve_under_with_fs};
 use crate::{
     audio::MovieAudioClock, bytecode::DecodeError, cmv::CmvIndex, dispatch::Call, evaluate::error,
-    machine::Machine,
 };
 use std::{error::Error, io, path::Path, sync::Arc};
 
@@ -269,12 +268,16 @@ impl SceneMovie {
     }
     /// Asks the worker for the frame playback most likely shows next.
     fn prefetch_next(&self, prefetch: Option<&mut prefetch::ScenePrefetch>) {
-        if let Some(prefetch) = prefetch
-            && let Some(next) = self
-                .playback
-                .predicted_next(self.frame, self.index.max_sequence())
+        let Some(prefetch) = prefetch else {
+            return;
+        };
+        if let Some(next) = self
+            .playback
+            .predicted_next(self.frame, self.index.max_sequence())
         {
             prefetch.request(self.id, next, &self.index, &self.data, &self.base);
+        } else {
+            prefetch.cancel(self.id);
         }
     }
 }
@@ -443,19 +446,6 @@ impl MovieHost {
     /// committing so an I/O/format error retains the pending command and old objects.
     /// 0x230e additionally consumes SP-24 as the load mode and returns 0x4018.
     /// Archive modes 2/3 are supported; loose-file modes 0/1 stay explicit barriers.
-    pub fn try_create_scene(
-        &mut self,
-        vm: &mut Machine,
-        scene: &mut crate::scene::SceneHost,
-        source: &mut dyn crate::resources::ResourceSource,
-    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
-        let Some((pc, command @ (0x308 | 0x30e))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_create_scene(&mut Call::new(vm, pc, command), scene, source)?;
-        Ok(true)
-    }
-
     pub(crate) fn handle_create_scene(
         &mut self,
         call: &mut Call<'_>,
@@ -521,6 +511,11 @@ impl MovieHost {
             0x4014
         })?;
         scene.replace_movie_object(object_slot, object);
+        if let Some(old) = &self.slots[slot as usize]
+            && let Some(prefetch) = &mut self.prefetch
+        {
+            prefetch.cancel(old.id);
+        }
         self.slots[slot as usize] = Some(SceneMovie::new(
             object_slot,
             name,
@@ -546,7 +541,11 @@ impl MovieHost {
         }
         call.complete(0x4004)?;
         if command == 0x30a {
-            self.slots[slot] = None;
+            if let Some(old) = self.slots[slot].take()
+                && let Some(prefetch) = &mut self.prefetch
+            {
+                prefetch.cancel(old.id);
+            }
         } else if matches!(command, 0x30b | 0x30c) {
             if let Some(movie) = &mut self.slots[slot] {
                 if command == 0x30b {
@@ -557,6 +556,9 @@ impl MovieHost {
                     movie.playback.paused = false;
                 } else {
                     movie.playback.paused = true;
+                    if let Some(prefetch) = &mut self.prefetch {
+                        prefetch.cancel(movie.id);
+                    }
                 }
             }
         } else if command == 0x31e {

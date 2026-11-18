@@ -46,10 +46,10 @@ impl Runtime {
         self.thumbnail = None;
         let screen_size =
             crate::viewport::ScreenSize::new(self.screen_size()).expect("validated at startup");
-        self.scene = crate::scene::SceneHost::for_profile(self.gate.selection().profile);
+        self.scene = crate::scene::SceneHost::for_profile(self.gate.profile());
         self.scene.set_screen_size(screen_size);
         self.camera.reset();
-        self.buttons = crate::buttons::ButtonHost::for_profile(self.gate.selection().profile);
+        self.buttons = crate::buttons::ButtonHost::for_profile(self.gate.profile());
         self.buttons.set_screen_size(screen_size);
         self.movies.restore(Default::default());
         self.messages.reset_objects();

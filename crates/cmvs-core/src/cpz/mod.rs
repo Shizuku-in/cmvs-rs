@@ -69,7 +69,8 @@ pub(super) struct LookupTable {
 }
 
 impl LookupTable {
-    pub(super) fn from_entries(entries: &[Entry]) -> Self {
+    /// Only CPZ1/2 fold stored names. All versions fold the query at lookup.
+    pub(super) fn from_entries(entries: &[Entry], lookup_key: fn(&[u8]) -> Vec<u8>) -> Self {
         let mut exact = HashMap::with_capacity(entries.len());
         let mut folded = HashMap::with_capacity(entries.len());
         for (i, entry) in entries.iter().enumerate() {
@@ -78,7 +79,7 @@ impl LookupTable {
                 .and_modify(|slot| *slot = None)
                 .or_insert(Some(i));
             folded
-                .entry(fold_vec(&entry.name).into_boxed_slice())
+                .entry(lookup_key(&entry.name).into_boxed_slice())
                 .or_insert(i);
         }
         Self { exact, folded }
@@ -417,7 +418,7 @@ mod tests {
             dummy_entry(b"dup.bin"),
             dummy_entry(&long_mixed),
         ];
-        let table = LookupTable::from_entries(&entries);
+        let table = LookupTable::from_entries(&entries, fold_vec);
 
         // Case-insensitive lookup returns the FIRST matching index in archive order.
         assert_eq!(table.lookup(b"start.ps3"), Some(0));
@@ -452,16 +453,17 @@ mod tests {
             &mut cpz3_buf,
             &[
                 (b"FirstOnly.ps3".to_vec(), b"one".to_vec()),
-                (b"FIRSTONLY.PS3".to_vec(), b"two".to_vec()),
+                (b"firstonly.ps3".to_vec(), b"two".to_vec()),
                 (b"ExactDup.bin".to_vec(), b"a".to_vec()),
                 (b"ExactDup.bin".to_vec(), b"b".to_vec()),
             ],
         )
         .unwrap();
         let cpz3 = ArchiveIndex::read(&mut Cursor::new(cpz3_buf.into_inner())).unwrap();
-        assert_eq!(cpz3.lookup(b"firstonly.ps3").unwrap(), Some(0));
-        assert_eq!(cpz3.find(b"FIRSTONLY.PS3").unwrap(), 1);
+        assert_eq!(cpz3.lookup(b"FIRSTONLY.PS3").unwrap(), Some(1));
+        assert_eq!(cpz3.find(b"firstonly.ps3").unwrap(), 1);
         assert!(cpz3.find(b"ExactDup.bin").is_err());
+        assert_eq!(cpz3.lookup(b"ExactDup.bin").unwrap(), None);
 
         let dirs = [
             ArchiveDirectory {
@@ -474,7 +476,7 @@ mod tests {
             ArchiveDirectory {
                 name: b"dir_b".to_vec(),
                 files: vec![ArchiveFile {
-                    name: b"SCENE01.PS3".to_vec(),
+                    name: b"scene01.ps3".to_vec(),
                     data: b"dir_b_payload".to_vec(),
                 }],
             },
@@ -488,10 +490,10 @@ mod tests {
             }
             let bytes = out.into_inner();
             let index = ArchiveIndex::read(&mut Cursor::new(&bytes)).unwrap();
-            assert_eq!(index.lookup(b"scene01.ps3").unwrap(), Some(0));
-            assert_eq!(index.lookup(b"SCENE01.PS3").unwrap(), Some(0));
+            assert_eq!(index.lookup(b"scene01.ps3").unwrap(), Some(1));
+            assert_eq!(index.lookup(b"SCENE01.PS3").unwrap(), Some(1));
             assert_eq!(index.find(b"Scene01.ps3").unwrap(), 0);
-            assert_eq!(index.find(b"SCENE01.PS3").unwrap(), 1);
+            assert_eq!(index.find(b"scene01.ps3").unwrap(), 1);
         }
     }
 }

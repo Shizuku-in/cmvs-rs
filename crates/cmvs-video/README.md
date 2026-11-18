@@ -18,8 +18,8 @@ Install a factory with `Runtime::set_mgv_factory`. Both factories produce the sa
 
 - Supports Theora 3.2 YUV420. Container dimensions must match the picture or coded surface; picture dimensions crop the visible region, while coded dimensions retain padding.
 - Validates frame rate, packet sizes and pixel limits. Invalid streams return errors.
-- Reuses frame buffers and caches the current/next RGBA frames. Repeated nominal frames keep the current packet cached; backward seeks replay from the headers.
-- Default lookahead retains at most 16 RGBA frames / 64 MiB (minimum two for large frames). `with_lookahead(bytes, frames)` stores YUV instead and converts only displayed frames; cache hits do not wait for the decoding worker.
+- Reuses frame buffers and retains the current packet's decoded RGBA frame on the decoder. Repeated nominal frames keep the current packet without rewinding even at zero lookahead budget; backward seeks replay from the headers.
+- Default lookahead retains up to 16 future RGBA frames / 64 MiB. `with_lookahead(bytes, frames)` bounds future packets by byte and frame count. Near-future frames are converted to RGBA when the budget permits. Deeper lookahead stays in YUV420. If playback reaches a packet during conversion, it reuses the worker's result.
 - Converts YUV to RGBA using BT.601 limited range.
 
 ## Testing

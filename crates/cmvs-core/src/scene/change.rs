@@ -271,7 +271,8 @@ impl SceneHost {
             // ResourceKind::Image) with its next-read cache armed (0x414030).
             images.cache_next_read()?;
         }
-        let prepared = self.prepare_image_change(slot, &name, args[2], images, pc, 0x22c4)?;
+        let prepared =
+            self.prepare_image_change(slot, &name, args[2], images, pc, call.opcode())?;
         call.complete(0x4010)?;
         call.vm
             .state_mut()

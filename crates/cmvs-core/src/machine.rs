@@ -96,8 +96,8 @@ fn append_slot(
 struct Image {
     script: Arc<Script>,
     data: Vec<u8>,
-    /// Shared contiguous decoded slice so `step()` clones one Arc pointer without B-Tree lookups.
-    instructions: Arc<[Instruction]>,
+    /// Contiguous decoded instruction slice indexed directly by `step()`.
+    instructions: Box<[Instruction]>,
     labels: Vec<u32>,
     name: Vec<u8>,
 }
@@ -107,8 +107,8 @@ pub(crate) struct PreparedMain(Image);
 impl Image {
     fn prepare(script: Arc<Script>, name: Vec<u8>, entry: u32) -> Result<Self, DecodeError> {
         let labels = script.labels();
-        let instructions: Arc<[Instruction]> =
-            bytecode::decode_layout(script.code(), entry, &labels)?.into();
+        let instructions =
+            bytecode::decode_layout(script.code(), entry, &labels)?.into_boxed_slice();
         Ok(Self {
             data: script.data().to_vec(),
             script,
@@ -120,11 +120,6 @@ impl Image {
 
     fn instruction_index(&self, pc: usize) -> Option<usize> {
         self.instructions.binary_search_by_key(&pc, |i| i.pc).ok()
-    }
-
-    fn instruction_at(&self, pc: usize) -> Option<&Instruction> {
-        self.instruction_index(pc)
-            .map(|idx| &self.instructions[idx])
     }
 }
 
@@ -514,7 +509,10 @@ impl Machine {
     /// The pending command as the script encodes it, before any command map applies.
     pub fn pending_source(&self) -> Option<u16> {
         let (pc, _) = self.pending?;
-        match self.image().instruction_at(pc)?.kind {
+        // step() pins pc_hint to the issuing instruction until pending is cleared.
+        let instruction = &self.image().instructions[self.pc_hint];
+        debug_assert_eq!(instruction.pc, pc);
+        match instruction.kind {
             InstructionKind::System { command } => Some(command),
             _ => None,
         }
@@ -545,6 +543,25 @@ impl Machine {
         };
         Ok(c_string(bytes, offset, self.pc, 0x201)?.to_vec())
     }
+}
+
+struct EvalContext<'a> {
+    script: &'a Script,
+    labels: &'a [u32],
+    data: &'a mut Vec<u8>,
+    state: &'a mut State,
+    stack: &'a mut ParameterStack,
+    frames: &'a [usize],
+    journal: &'a mut Journal,
+    eval_scratch: &'a mut EvalScratch,
+    string_entries: &'a mut Vec<(u16, u32, usize)>,
+}
+
+impl EvalContext<'_> {
+    /// frame[depth]: 0x140080530 zeroes entry 0 with SP, and 0x0410 writes only depth >= 1.
+    fn frame_base(&self) -> usize {
+        self.frames.last().copied().unwrap_or(0)
+    }
 
     /// Word at the current call frame minus `distance`, as tag 0x122/0x103 operands read it.
     fn frame_word(&self, distance: u32, pc: usize, tag: u16) -> Result<u32, DecodeError> {
@@ -558,22 +575,20 @@ impl Machine {
     /// Operand reader 0x1400652e0 for string tags: appends to the accumulator.
     fn append_operand(
         &self,
-        state: &State,
         buffer: &mut Vec<u8>,
         (tag, value, pc): (u16, u32, usize),
     ) -> Result<(), DecodeError> {
-        let script = &self.image().script;
         let bytes = match tag {
             // Placeholder left by a previous operator: the original reader returns 0.
             0 => return Ok(()),
-            0x120 => c_string(script.text(), value, pc, tag)?,
-            0x125 => c_string(self.script_data(), value, pc, tag)?,
-            0x121 => return append_slot(state, buffer, value & 0x3fff_ffff, pc, tag),
+            0x120 => c_string(self.script.text(), value, pc, tag)?,
+            0x125 => c_string(self.data, value, pc, tag)?,
+            0x121 => return append_slot(self.state, buffer, value & 0x3fff_ffff, pc, tag),
             0x122 => match StringRef::decode(self.frame_word(value, pc, tag)?) {
-                StringRef::Text(offset) => c_string(script.text(), offset, pc, tag)?,
-                StringRef::ScriptData(offset) => c_string(self.script_data(), offset, pc, tag)?,
+                StringRef::Text(offset) => c_string(self.script.text(), offset, pc, tag)?,
+                StringRef::ScriptData(offset) => c_string(self.data, offset, pc, tag)?,
                 StringRef::StringBank(index) => {
-                    return append_slot(state, buffer, index, pc, tag);
+                    return append_slot(self.state, buffer, index, pc, tag);
                 }
                 StringRef::Frame(_) => {
                     return Err(error(pc, tag, "frame-local string not implemented"));
@@ -587,35 +602,23 @@ impl Machine {
     /// 0x0201 / 0x140066b00: clears the accumulator, appends operands as operators read them,
     /// and sets the result only from the tag of the bottom entry. Commits all writes or none.
     fn string_expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {
-        let mut journal = std::mem::take(&mut self.journal);
-        let mut scratch = std::mem::take(&mut self.eval_scratch);
-        let mut entries = std::mem::take(&mut self.string_entries);
-        entries.clear();
-        let mut buffer = scratch.take_string_buffer();
-        let outcome =
-            self.string_expression_in(expr, &mut entries, &mut buffer, &mut scratch, &mut journal);
+        self.string_entries.clear();
+        let mut buffer = self.eval_scratch.take_string_buffer();
+        let outcome = self.string_expression_in(expr, &mut buffer);
         if outcome.is_err() {
-            scratch.put_string_buffer(buffer);
-            self.state.rollback(
-                &mut journal,
-                Some(&mut self.stack),
-                Some(&mut self.images.get_mut(&self.slot).expect("active image").data),
-            );
+            self.eval_scratch.put_string_buffer(buffer);
+            self.state
+                .rollback(self.journal, Some(self.stack), Some(self.data));
         } else {
-            journal.clear(&mut scratch);
+            self.journal.clear(self.eval_scratch);
         }
-        self.string_entries = entries;
-        self.eval_scratch = scratch;
-        self.journal = journal;
         outcome
     }
+
     fn string_expression_in(
         &mut self,
         expr: &Expression,
-        entries: &mut Vec<(u16, u32, usize)>,
         buffer: &mut Vec<u8>,
-        scratch: &mut EvalScratch,
-        journal: &mut Journal,
     ) -> Result<(), DecodeError> {
         for term in &expr.terms {
             match term {
@@ -626,36 +629,41 @@ impl Machine {
                 } => {
                     // The nested integer evaluator also updates result, condition and integer 4096.
                     let base = self.frame_base();
-                    let image = self.images.get_mut(&self.slot).expect("active image");
                     let mut env = Env {
-                        labels: &image.labels,
-                        data: Some(&mut image.data),
+                        labels: self.labels,
+                        data: Some(self.data),
                         frame: Some(Frame {
-                            stack: &mut self.stack,
+                            stack: self.stack,
                             base,
                         }),
                     };
-                    let index = self
-                        .state
-                        .evaluate_in(expression, &mut env, scratch, journal)?;
-                    entries.push((0x121, index as u32 | 0x8000_0000, *pc));
+                    let index = self.state.evaluate_in(
+                        expression,
+                        &mut env,
+                        self.eval_scratch,
+                        self.journal,
+                    )?;
+                    self.string_entries
+                        .push((0x121, index as u32 | 0x8000_0000, *pc));
                 }
-                Term::Scalar { pc, tag, raw } => entries.push((*tag, *raw, *pc)),
+                Term::Scalar { pc, tag, raw } => self.string_entries.push((*tag, *raw, *pc)),
                 Term::Operator { pc, opcode } if (0x160..=0x172).contains(opcode) => {
-                    let top = entries
+                    let top = self
+                        .string_entries
                         .pop()
                         .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
-                    let second = *entries
+                    let second = *self
+                        .string_entries
                         .last()
                         .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
                     if *opcode == 0x170 {
-                        self.append_operand(&self.state, buffer, top)?;
+                        self.append_operand(buffer, top)?;
                         match second {
                             (0x121, value, _)
                                 if value & 0x3fff_ffff >= self.state.string_slots() => {}
                             (0x121, value, at) => self
                                 .state
-                                .set_string_journaled(value & 0x3fff_ffff, buffer, journal)
+                                .set_string_journaled(value & 0x3fff_ffff, buffer, self.journal)
                                 .map_err(|why| error(at, 0x121, why))?,
                             (tag, _, at) => {
                                 return Err(error(
@@ -667,10 +675,10 @@ impl Machine {
                         }
                     } else {
                         // Binary operators only read both operands, so strings concatenate.
-                        self.append_operand(&self.state, buffer, second)?;
-                        self.append_operand(&self.state, buffer, top)?;
+                        self.append_operand(buffer, second)?;
+                        self.append_operand(buffer, top)?;
                     }
-                    *entries.last_mut().expect("checked above") = (0, 0, *pc);
+                    *self.string_entries.last_mut().expect("checked above") = (0, 0, *pc);
                 }
                 Term::Nested { pc, tag, .. }
                 | Term::Indexed { pc, tag, .. }
@@ -679,12 +687,13 @@ impl Machine {
                 }
             }
         }
-        let &(tag, value, pc) = entries
+        let &(tag, value, pc) = self
+            .string_entries
             .first()
             .ok_or_else(|| error(expr.pc, expr.kind, "empty string expression"))?;
         let result = match tag {
             0x120 => {
-                c_string(self.image().script.text(), value, pc, tag)?;
+                c_string(self.script.text(), value, pc, tag)?;
                 Some(value)
             }
             0x121 => Some(value),
@@ -694,49 +703,37 @@ impl Machine {
             _ => None, // The original leaves +82812 unchanged.
         };
         if result.is_some() {
-            self.state.set_result_journaled(result, journal);
+            self.state.set_result_journaled(result, self.journal);
         }
         // This evaluator does not modify integer condition flags itself.
         self.state
-            .set_string_buffer_journaled(std::mem::take(buffer), journal);
+            .set_string_buffer_journaled(std::mem::take(buffer), self.journal);
         Ok(())
     }
 
-    /// frame[depth]: 0x140080530 zeroes entry 0 with SP, and 0x0410 writes only depth >= 1.
-    fn frame_base(&self) -> usize {
-        self.frames.last().copied().unwrap_or(0)
-    }
     /// Runs a numeric evaluation with the current labels and frame; rolls back on failure.
     fn numeric<T>(
         &mut self,
         run: impl FnOnce(&mut State, &mut Env, &mut EvalScratch, &mut Journal) -> Result<T, DecodeError>,
     ) -> Result<T, DecodeError> {
         let base = self.frame_base();
-        let mut journal = std::mem::take(&mut self.journal);
-        let mut scratch = std::mem::take(&mut self.eval_scratch);
         let outcome = {
-            let image = self.images.get_mut(&self.slot).expect("active image");
             let mut env = Env {
-                labels: &image.labels,
-                data: Some(&mut image.data),
+                labels: self.labels,
+                data: Some(self.data),
                 frame: Some(Frame {
-                    stack: &mut self.stack,
+                    stack: self.stack,
                     base,
                 }),
             };
-            run(&mut self.state, &mut env, &mut scratch, &mut journal)
+            run(self.state, &mut env, self.eval_scratch, self.journal)
         };
         if outcome.is_err() {
-            self.state.rollback(
-                &mut journal,
-                Some(&mut self.stack),
-                Some(&mut self.images.get_mut(&self.slot).expect("active image").data),
-            );
+            self.state
+                .rollback(self.journal, Some(self.stack), Some(self.data));
         } else {
-            journal.clear(&mut scratch);
+            self.journal.clear(self.eval_scratch);
         }
-        self.eval_scratch = scratch;
-        self.journal = journal;
         outcome
     }
 
@@ -763,7 +760,9 @@ impl Machine {
         }
         Ok(())
     }
+}
 
+impl Machine {
     /// Execute one instruction, or return the command already awaiting completion.
     ///
     /// A pending [`Step::System`] is returned unchanged until handled. This call
@@ -773,19 +772,37 @@ impl Machine {
         if let Some((pc, command)) = self.pending {
             return Ok(Step::System { pc, command });
         }
-        let instructions = Arc::clone(&self.image().instructions);
-        let index = instructions
+        let image = self.images.get_mut(&self.slot).expect("active image");
+        let index = image
+            .instructions
             .get(self.pc_hint)
             .filter(|i| i.pc == self.pc)
             .map(|_| self.pc_hint)
-            .or_else(|| instructions.binary_search_by_key(&self.pc, |i| i.pc).ok())
+            .or_else(|| {
+                image
+                    .instructions
+                    .binary_search_by_key(&self.pc, |i| i.pc)
+                    .ok()
+            })
             .ok_or_else(|| error(self.pc, 0, "PC outside decoded instruction boundaries"))?;
-        let insn = &instructions[index];
+        let insn = &image.instructions[index];
         let pc = insn.pc;
         let op = insn.opcode;
-        let mut next = insn.end;
+        let end = insn.end;
+        let mut next = end;
         match &insn.kind {
-            InstructionKind::Expression(expr) => self.expression(expr)?,
+            InstructionKind::Expression(expr) => EvalContext {
+                script: &image.script,
+                labels: &image.labels,
+                data: &mut image.data,
+                state: &mut self.state,
+                stack: &mut self.stack,
+                frames: &self.frames,
+                journal: &mut self.journal,
+                eval_scratch: &mut self.eval_scratch,
+                string_entries: &mut self.string_entries,
+            }
+            .expression(expr)?,
             InstructionKind::Jump { target } | InstructionKind::LongJump { target, .. } => {
                 next = *target as usize
             }
@@ -809,13 +826,13 @@ impl Machine {
                 }
             }
             InstructionKind::Label { index } => {
-                next = self.image().labels[*index as usize] as usize;
+                next = image.labels[*index as usize] as usize;
                 if op == 0x410 {
                     if self.frames.len() >= MAX_CALL_DEPTH {
                         return Err(error(pc, op, "call frame table holds 63 nested calls"));
                     }
                     self.stack
-                        .push_u32(insn.end as u32)
+                        .push_u32(end as u32)
                         .map_err(|e| error(pc, op, e.0))?;
                     self.frames.push(self.stack.len_bytes());
                 }
@@ -839,7 +856,7 @@ impl Machine {
                     usize::from((count as u16).wrapping_mul(4))
                 };
                 next = self.stack.peek_u32(4).map_err(|e| error(pc, op, e.0))? as usize;
-                if !self.is_boundary(self.slot, next) {
+                if image.instruction_index(next).is_none() {
                     return Err(error(pc, op, "invalid return address"));
                 }
                 self.stack
@@ -897,7 +914,7 @@ impl Machine {
             _ => return Err(error(pc, op, "instruction execution is not implemented")),
         }
         self.pc = next;
-        self.pc_hint = if next == insn.end { index + 1 } else { 0 };
+        self.pc_hint = if next == end { index + 1 } else { 0 };
         Ok(Step::Continue)
     }
 

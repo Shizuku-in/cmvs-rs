@@ -10,6 +10,9 @@ cargo-fuzz = true
 # Standalone workspace so offline workspace builds of cmvs-rs never pull in libfuzzer-sys.
 [workspace]
 
+[lints.rust]
+unsafe_code = "forbid"
+
 [dependencies]
 libfuzzer-sys = "0.4"
 cmvs-core = { path = "../crates/cmvs-core" }

@@ -324,58 +324,98 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         println!("{USAGE}");
         return Ok(());
     }
-    let args: Vec<String> = raw_args
-        .into_iter()
-        .map(|arg| {
-            arg.into_string()
-                .map_err(|_| "arguments must be valid UTF-8")
-        })
-        .collect::<Result<_, _>>()?;
-    // Options follow the subcommand's positional argument as `--name value` pairs.
-    let options =
-        |allowed: &[&str]| -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>> {
-            let rest = args.get(2..).unwrap_or_default();
-            let mut parsed = Vec::new();
-            let mut rest = rest.iter();
-            while let Some(flag) = rest.next() {
+    let mut args = raw_args.into_iter().peekable();
+    let mut positional_only = false;
+    if args.peek().is_some_and(|a| a == "--") {
+        args.next();
+        positional_only = true;
+    }
+    let Some(command) = args.next() else {
+        return Err("missing subcommand: identify, table, show or owners".into());
+    };
+    if !positional_only && command.to_string_lossy().starts_with('-') {
+        return Err(format!("unknown option {}", command.to_string_lossy()).into());
+    }
+    let command = command
+        .into_string()
+        .map_err(|_| "arguments must be valid UTF-8")?;
+    type ParsedArgs = (Vec<std::ffi::OsString>, Vec<(String, String)>);
+    let parse_rest = |args: &mut std::iter::Peekable<std::vec::IntoIter<std::ffi::OsString>>,
+                      allowed: &[&str]|
+     -> Result<ParsedArgs, Box<dyn Error + Send + Sync>> {
+        let mut positionals = Vec::new();
+        let mut parsed = Vec::new();
+        let mut only_pos = positional_only;
+        while let Some(arg) = args.next() {
+            if !only_pos && arg == "--" {
+                only_pos = true;
+                continue;
+            }
+            if !only_pos && arg.to_string_lossy().starts_with('-') {
+                let flag = arg
+                    .into_string()
+                    .map_err(|_| "arguments must be valid UTF-8")?;
                 if !allowed.contains(&flag.as_str()) {
                     return Err(format!("unknown option {flag}").into());
                 }
-                let value = rest
+                let value = args
                     .next()
-                    .filter(|v| !v.starts_with("--") && *v != "-h")
-                    .ok_or_else(|| format!("{flag} requires a value"))?;
-                parsed.push((flag.clone(), value.clone()));
+                    .filter(|v| !v.to_string_lossy().starts_with("--") && v != "-h")
+                    .ok_or_else(|| format!("{flag} requires a value"))?
+                    .into_string()
+                    .map_err(|_| "arguments must be valid UTF-8")?;
+                parsed.push((flag, value));
+                continue;
             }
-            Ok(parsed)
-        };
+            positionals.push(arg);
+        }
+        Ok((positionals, parsed))
+    };
     let find = |options: &[(String, String)], name: &str| {
         options
             .iter()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.clone())
     };
-    match args.first().map(String::as_str) {
-        None => Err("missing subcommand: identify, table, show or owners".into()),
-        Some("identify") if args.len() >= 2 => {
-            let options = options(&["--profile"])?;
-            identify(Path::new(&args[1]), find(&options, "--profile").as_deref())
+    match command.as_str() {
+        "identify" => {
+            let (positionals, options) = parse_rest(&mut args, &["--profile"])?;
+            let [root]: [_; 1] = positionals
+                .try_into()
+                .map_err(|_| "invalid arguments for identify")?;
+            identify(Path::new(&root), find(&options, "--profile").as_deref())
         }
-        Some("table") if args.len() >= 2 => {
-            let options = options(&["--id", "--base"])?;
+        "table" => {
+            let (positionals, options) = parse_rest(&mut args, &["--id", "--base"])?;
+            let [root]: [_; 1] = positionals
+                .try_into()
+                .map_err(|_| "invalid arguments for table")?;
             let id = find(&options, "--id").ok_or("table requires --id")?;
-            table(
-                Path::new(&args[1]),
-                &id,
-                find(&options, "--base").as_deref(),
-            )
+            table(Path::new(&root), &id, find(&options, "--base").as_deref())
         }
-        Some("show") if args.len() == 2 => show(&args[1]),
-        Some("owners") if args.len() <= 2 => owners(args.get(1).map(String::as_str)),
-        Some(command) if ["identify", "table", "show", "owners"].contains(&command) => {
-            Err(format!("invalid arguments for {command}").into())
+        "show" => {
+            let (positionals, _) = parse_rest(&mut args, &[])?;
+            let [id]: [_; 1] = positionals
+                .try_into()
+                .map_err(|_| "invalid arguments for show")?;
+            let id = id
+                .into_string()
+                .map_err(|_| "arguments must be valid UTF-8")?;
+            show(&id)
         }
-        Some(command) => Err(format!("unknown subcommand {command}").into()),
+        "owners" => {
+            let (positionals, _) = parse_rest(&mut args, &[])?;
+            if positionals.len() > 1 {
+                return Err("invalid arguments for owners".into());
+            }
+            let cmd = positionals
+                .into_iter()
+                .next()
+                .map(|s| s.into_string().map_err(|_| "arguments must be valid UTF-8"))
+                .transpose()?;
+            owners(cmd.as_deref())
+        }
+        _ => Err(format!("unknown subcommand {command}").into()),
     }
 }
 

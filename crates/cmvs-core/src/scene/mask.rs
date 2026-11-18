@@ -221,7 +221,7 @@ impl SceneHost {
             self.finish_mask(channel);
             return Ok(());
         }
-        let op = command + 0x2000;
+        let op = call.opcode();
         let fail = |why| error(pc, op, why);
         let name = call.argument(4, "mask name")?;
         let slot = call.argument(8, "object slot")?;

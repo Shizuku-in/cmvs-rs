@@ -153,7 +153,7 @@ impl CommandGate {
     pub fn evidence(&self) -> &[String] {
         &self.evidence
     }
-    /// Borrowed view of the full [`ProfileSelection`].
+    /// Reconstruct the selection, cloning its evidence.
     pub fn selection(&self) -> ProfileSelection<'_> {
         ProfileSelection {
             profile: &self.profile,

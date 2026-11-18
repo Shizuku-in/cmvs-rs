@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 [dependencies]
 cmvs-core = { path = "../../../crates/cmvs-core" }
-cmvs-host = { path = "../../../crates/cmvs-host", default-features = false, features = ["std-fs"] }
+cmvs-host = { path = "../../../crates/cmvs-host", default-features = false }
 cmvs-native = { path = "../../../crates/cmvs-native" }
 cmvs-font = { path = "../../../crates/cmvs-font" }
 cmvs-console = { path = "../../../crates/cmvs-console" }

@@ -11,7 +11,7 @@ use std::{
     fmt,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
     },
     thread,
@@ -41,10 +41,9 @@ fn yuv_frame_bytes(frame: &crate::theora::Frame) -> usize {
     frame.planes.iter().map(Vec::len).sum()
 }
 
-#[derive(Clone)]
 enum CachedFrame {
     Rgba(RgbaImage),
-    Yuv(Arc<crate::theora::Frame>),
+    Yuv(crate::theora::Frame),
 }
 impl CachedFrame {
     fn byte_len(&self) -> usize {
@@ -54,13 +53,13 @@ impl CachedFrame {
         }
     }
     fn rgba(
-        &self,
+        self,
         ident: &crate::TheoraIdentHeader,
         index: &MgvIndex,
     ) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
         match self {
-            Self::Rgba(image) => Ok(image.clone()),
-            Self::Yuv(frame) => Ok(crate::to_rgba(ident, frame, index)?),
+            Self::Rgba(image) => Ok(image),
+            Self::Yuv(frame) => Ok(crate::to_rgba(ident, &frame, index)?),
         }
     }
 }
@@ -68,6 +67,8 @@ impl CachedFrame {
 struct CacheState {
     frames: VecDeque<(u32, CachedFrame)>,
     bytes: usize,
+    wanted: u32,
+    awaited: Option<u32>,
     #[cfg(test)]
     peak_bytes: usize,
 }
@@ -76,6 +77,8 @@ impl CacheState {
         Self {
             frames: VecDeque::new(),
             bytes: 0,
+            wanted: u32::MAX,
+            awaited: None,
             #[cfg(test)]
             peak_bytes: 0,
         }
@@ -87,10 +90,12 @@ impl CacheState {
             self.peak_bytes = self.peak_bytes.max(bytes);
         }
     }
-    fn retain_from(&mut self, min_packet: u32) {
+    fn retain_wanted(&mut self) {
+        let wanted = self.wanted;
+        let awaited = self.awaited;
         let mut removed = 0usize;
         self.frames.retain(|(p, frame)| {
-            if *p >= min_packet {
+            if *p > wanted || awaited == Some(*p) {
                 true
             } else {
                 removed += frame.byte_len();
@@ -107,15 +112,15 @@ impl CacheState {
         &mut self,
         packet: u32,
         frame: CachedFrame,
-        wanted: u32,
         budget_bytes: usize,
         max_frames: usize,
     ) {
-        if wanted != u32::MAX {
-            self.retain_from(wanted);
-            if packet < wanted {
-                return;
-            }
+        if self.wanted == u32::MAX {
+            return;
+        }
+        self.retain_wanted();
+        if packet <= self.wanted && self.awaited != Some(packet) {
+            return;
         }
         let new_bytes = frame.byte_len();
         if let Some((_, existing)) = self.frames.iter_mut().find(|(p, _)| *p == packet) {
@@ -136,36 +141,56 @@ impl CacheState {
 }
 
 enum WorkerPlan {
-    Promote(u32, Arc<crate::theora::Frame>),
+    Promote(u32, crate::theora::Frame),
     DecodeRgba,
     DecodeYuv,
 }
 
 struct Cache {
     state: Mutex<CacheState>,
-    wanted: AtomicU32,
     shutdown: AtomicBool,
     budget_bytes: usize,
     max_frames: usize,
     yuv: bool,
 }
 impl Cache {
-    fn get(&self, packet: u32) -> Option<CachedFrame> {
-        let mut state = self.state.lock().unwrap();
-        state.retain_from(packet);
-        state
-            .frames
-            .iter()
-            .find(|(p, _)| *p == packet)
-            .map(|(_, frame)| frame.clone())
+    fn pop_packet(state: &mut CacheState, packet: u32) -> Option<CachedFrame> {
+        let pos = state.frames.iter().position(|(p, _)| *p == packet)?;
+        let (_, frame) = state.frames.remove(pos).expect("validated index");
+        state.bytes -= frame.byte_len();
+        Some(frame)
+    }
+    /// Pops `packet` for `PrefetchDecoder`, or marks it awaited if missing so an in-flight
+    /// worker decode preserves `packet` for the incoming `Request::Frame`.
+    fn take_or_await(&self, packet: u32) -> Option<CachedFrame> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.wanted = packet;
+        let taken = Self::pop_packet(&mut state, packet);
+        state.awaited = if taken.is_some() { None } else { Some(packet) };
+        state.retain_wanted();
+        taken
+    }
+    /// Pops `packet` while servicing `Request::Frame` on the worker and clears `awaited`.
+    fn take_for_request(&self, packet: u32) -> Option<CachedFrame> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.wanted = packet;
+        state.awaited = None;
+        let taken = Self::pop_packet(&mut state, packet);
+        state.retain_wanted();
+        taken
     }
     fn insert_or_replace(&self, packet: u32, frame: CachedFrame) {
-        let wanted = self.wanted.load(Ordering::Acquire);
-        let mut state = self.state.lock().unwrap();
-        state.insert_or_replace(packet, frame, wanted, self.budget_bytes, self.max_frames);
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.insert_or_replace(packet, frame, self.budget_bytes, self.max_frames);
     }
     fn clear(&self) {
-        self.state.lock().unwrap().clear();
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+    fn reset_wanted(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.wanted = u32::MAX;
+        state.awaited = None;
+        state.clear();
     }
     fn plan_work(
         &self,
@@ -178,26 +203,29 @@ impl Cache {
         if stream_failed || self.shutdown.load(Ordering::Acquire) {
             return None;
         }
-        let wanted = self.wanted.load(Ordering::Acquire);
-        if wanted == u32::MAX {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let wanted = state.wanted;
+        if wanted == u32::MAX || state.awaited == Some(wanted) {
             return None;
         }
-        let mut state = self.state.lock().unwrap();
-        state.retain_from(wanted);
+        state.retain_wanted();
 
-        // First convert near-future YUV entries within `wanted..=wanted + RGBA_LOOKAHEAD`
-        // into RGBA on the worker whenever the byte budget accommodates the upgrade.
+        // Claim the YUV under the lock. A request arriving during conversion then
+        // awaits this worker's result instead of converting the same packet again.
         let rgba_limit = wanted.saturating_add(RGBA_LOOKAHEAD);
-        for (packet, entry) in &state.frames {
-            if *packet > rgba_limit {
-                break;
-            }
-            if let CachedFrame::Yuv(yuv) = entry {
-                let upgraded = state.bytes - yuv_frame_bytes(yuv) + rgba_bytes;
-                if upgraded <= self.budget_bytes {
-                    return Some(WorkerPlan::Promote(*packet, Arc::clone(yuv)));
-                }
-            }
+        let upgrade = state
+            .frames
+            .iter()
+            .take_while(|(packet, _)| *packet <= rgba_limit)
+            .position(|(_, frame)| {
+                matches!(frame, CachedFrame::Yuv(_))
+                    && state.bytes - frame.byte_len() + rgba_bytes <= self.budget_bytes
+            });
+        if let Some(pos) = upgrade
+            && let Some((packet, CachedFrame::Yuv(yuv))) = state.frames.remove(pos)
+        {
+            state.bytes -= yuv_frame_bytes(&yuv);
+            return Some(WorkerPlan::Promote(packet, yuv));
         }
 
         if next_packet <= wanted
@@ -225,9 +253,11 @@ struct BufferedFactory {
     yuv: bool,
 }
 impl PrefetchTheoraFactory {
-    /// Bounds lookahead by exact cached byte usage (`bytes`) and frame count (`frames`,
-    /// minimum two frames). Near-future frames are converted to RGBA on the worker thread,
-    /// while deeper lookahead remains YUV420 within `bytes`.
+    /// Bounds lookahead of upcoming packets (`> current`) by exact cached byte usage
+    /// (`bytes`) and frame count (`frames`, minimum two frames). Near-future frames are
+    /// pre-converted to RGBA on the worker thread when `bytes` permits, while deeper
+    /// lookahead remains YUV420; the decoder retains the current packet's RGBA image
+    /// directly so repeated nominal frames never rewind even at zero lookahead budget.
     pub fn with_lookahead(self, bytes: usize, frames: usize) -> impl mgv::DecoderFactory {
         BufferedFactory {
             factory: self,
@@ -253,18 +283,17 @@ impl mgv::DecoderFactory for PrefetchTheoraFactory {
     }
 }
 impl BufferedFactory {
-    fn open_prefetch(
+    fn open_worker(
         &self,
         reader: Box<dyn ReadSeek>,
         index: &MgvIndex,
-    ) -> Result<PrefetchDecoder, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Result<PrefetchDecoder, TheoraStream>, Box<dyn Error + Send + Sync>> {
         let stream = TheoraStream::open(reader, index)?;
         let rgba_bytes = usize::from(index.width) * usize::from(index.height) * 4;
         let yuv_bytes = yuv_frame_bytes(stream.decoder.current_frame());
         let ident = stream.ident.clone();
         let cache = Arc::new(Cache {
             state: Mutex::new(CacheState::new()),
-            wanted: AtomicU32::new(u32::MAX),
             shutdown: AtomicBool::new(false),
             budget_bytes: self.bytes,
             max_frames: self.frames.max(2),
@@ -274,9 +303,18 @@ impl BufferedFactory {
         let (requests, worker_requests) = sync_channel(1);
         let (worker_replies, replies) = sync_channel(1);
         let start = self.factory.on_thread_start;
-        let worker = thread::Builder::new()
+        let stream_slot = Arc::new(Mutex::new(Some(stream)));
+        let worker_stream = Arc::clone(&stream_slot);
+        if thread::Builder::new()
             .name("mgv-decode".into())
             .spawn(move || {
+                let Some(stream) = worker_stream
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take()
+                else {
+                    return;
+                };
                 start();
                 serve(
                     stream,
@@ -286,15 +324,36 @@ impl BufferedFactory {
                     rgba_bytes,
                     yuv_bytes,
                 );
-            })?;
-        Ok(PrefetchDecoder {
-            requests: Some(requests),
-            replies: Some(replies),
+            })
+            .is_err()
+        {
+            let stream = stream_slot
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+                .expect("stream still present after failed spawn");
+            return Ok(Err(stream));
+        }
+        Ok(Ok(PrefetchDecoder {
+            requests,
+            replies,
             cache,
-            worker: Some(worker),
             index: index.clone(),
             ident,
-        })
+            current: None,
+        }))
+    }
+
+    #[cfg(test)]
+    fn open_prefetch(
+        &self,
+        reader: Box<dyn ReadSeek>,
+        index: &MgvIndex,
+    ) -> Result<PrefetchDecoder, Box<dyn Error + Send + Sync>> {
+        match self.open_worker(reader, index)? {
+            Ok(decoder) => Ok(decoder),
+            Err(_) => Err("failed to spawn MGV decoding thread".into()),
+        }
     }
 }
 impl mgv::DecoderFactory for BufferedFactory {
@@ -303,7 +362,10 @@ impl mgv::DecoderFactory for BufferedFactory {
         reader: Box<dyn ReadSeek>,
         index: &MgvIndex,
     ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error + Send + Sync>> {
-        Ok(Box::new(self.open_prefetch(reader, index)?))
+        match self.open_worker(reader, index)? {
+            Ok(decoder) => Ok(Box::new(decoder)),
+            Err(stream) => Ok(Box::new(stream)),
+        }
     }
 }
 
@@ -377,7 +439,7 @@ fn serve(
                             if let Ok(frame) = stream.prefetch_yuv()
                                 && !cache.shutdown.load(Ordering::Acquire)
                             {
-                                cache.insert_or_replace(packet, CachedFrame::Yuv(Arc::new(frame)));
+                                cache.insert_or_replace(packet, CachedFrame::Yuv(frame));
                             }
                         }
                     }
@@ -393,22 +455,16 @@ fn serve(
             Request::Wake => continue,
             Request::Frame(frame) => {
                 let packet = u32::from(stream.index.frames[frame as usize].packet);
-                cache.wanted.store(packet, Ordering::Release);
-                let image = if let Some(cached) = cache.get(packet) {
+                let image = if let Some(cached) = cache.take_for_request(packet) {
                     cached.rgba(&stream.ident, &stream.index)
                 } else {
                     // A real backwards seek or a jump beyond lookahead may replay.
                     cache.clear();
-                    let decoded = stream.frame(frame);
-                    if cache.budget_bytes >= rgba_bytes {
-                        stream.recent = [None, None];
-                    }
-                    decoded
+                    let res = stream.frame(frame);
+                    stream.recent = [None, None];
+                    res
                 };
-                image.map(|image| {
-                    cache.insert_or_replace(packet, CachedFrame::Rgba(image.clone()));
-                    Some(image)
-                })
+                image.map(Some)
             }
             Request::Finish => {
                 cache.clear();
@@ -423,15 +479,17 @@ fn serve(
     }
 }
 
-/// A cache hit never waits for the in-progress packet. Dropping the decoder signals
-/// shutdown and joins its worker thread cleanly without deadlocking on full queues.
+/// A host reader can block indefinitely. Drop signals shutdown and disconnects both
+/// channels; the detached worker releases its stream when the pending read returns.
 struct PrefetchDecoder {
-    requests: Option<SyncSender<Request>>,
-    replies: Option<Receiver<Reply>>,
+    requests: SyncSender<Request>,
+    replies: Receiver<Reply>,
     cache: Arc<Cache>,
-    worker: Option<thread::JoinHandle<()>>,
     index: MgvIndex,
     ident: crate::TheoraIdentHeader,
+    /// Retains the most recently displayed nominal packet so repeated nominal frames
+    /// never rewind or consume future lookahead budget.
+    current: Option<(u32, RgbaImage)>,
 }
 impl fmt::Debug for PrefetchDecoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -441,29 +499,13 @@ impl fmt::Debug for PrefetchDecoder {
 impl Drop for PrefetchDecoder {
     fn drop(&mut self) {
         self.cache.shutdown.store(true, Ordering::Release);
-        drop(self.requests.take());
-        drop(self.replies.take());
-        if let Some(worker) = self.worker.take()
-            && worker.thread().id() != thread::current().id()
-        {
-            let _ = worker.join();
-        }
     }
 }
 impl PrefetchDecoder {
     fn call(&self, request: Request) -> Result<Option<RgbaImage>, Box<dyn Error + Send + Sync>> {
         const GONE: &str = "MGV decoding thread stopped";
-        self.requests
-            .as_ref()
-            .ok_or(GONE)?
-            .send(request)
-            .map_err(|_| GONE)?;
-        Ok(self
-            .replies
-            .as_ref()
-            .ok_or(GONE)?
-            .recv()
-            .map_err(|_| GONE)??)
+        self.requests.send(request).map_err(|_| GONE)?;
+        Ok(self.replies.recv().map_err(|_| GONE)??)
     }
 }
 impl mgv::Decoder for PrefetchDecoder {
@@ -475,29 +517,28 @@ impl mgv::Decoder for PrefetchDecoder {
             .ok_or(cmvs_core::FormatError("MGV nominal frame out of range"))?
             .packet;
         let packet = u32::from(packet);
-        self.cache.wanted.store(packet, Ordering::Release);
-        if let Some(cached) = self.cache.get(packet) {
-            // Only a wake notification is queued. The atomic always holds the latest
-            // target, so cached requests cannot build an unbounded request backlog.
-            if let Some(requests) = &self.requests {
-                let _ = requests.try_send(Request::Wake);
-            }
-            return match cached {
-                CachedFrame::Rgba(image) => Ok(image),
-                CachedFrame::Yuv(yuv) => {
-                    let image = crate::to_rgba(&self.ident, &yuv, &self.index)?;
-                    self.cache
-                        .insert_or_replace(packet, CachedFrame::Rgba(image.clone()));
-                    Ok(image)
-                }
-            };
+        if let Some((cur_packet, image)) = &self.current
+            && *cur_packet == packet
+        {
+            return Ok(image.clone());
         }
-        Ok(self
+        if let Some(cached) = self.cache.take_or_await(packet) {
+            // Only a wake notification is queued. The cache state always holds the
+            // latest target, so cached requests cannot build an unbounded request backlog.
+            let _ = self.requests.try_send(Request::Wake);
+            let image = cached.rgba(&self.ident, &self.index)?;
+            self.current = Some((packet, image.clone()));
+            return Ok(image);
+        }
+        let image = self
             .call(Request::Frame(frame))?
-            .expect("frame request returns an image"))
+            .expect("frame request returns an image");
+        self.current = Some((packet, image.clone()));
+        Ok(image)
     }
     fn finish(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.cache.wanted.store(u32::MAX, Ordering::Release);
+        self.current = None;
+        self.cache.reset_wanted();
         self.call(Request::Finish).map(|_| ())
     }
 }
@@ -507,7 +548,7 @@ mod tests {
     use super::*;
     use cmvs_core::format::mgv::Decoder;
     use std::{
-        io::{Cursor, Read, Seek, SeekFrom},
+        io::Cursor,
         time::{Duration, Instant},
     };
 
@@ -520,6 +561,32 @@ mod tests {
             .iter()
             .map(|b| u8::from_str_radix(std::str::from_utf8(b).unwrap(), 16).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn request_during_promotion_consumes_the_workers_converted_frame() {
+        let cache = Cache {
+            state: Mutex::new(CacheState::new()),
+            shutdown: AtomicBool::new(false),
+            budget_bytes: 16,
+            max_frames: 2,
+            yuv: true,
+        };
+        cache.take_for_request(0);
+        let yuv = crate::theora::Frame {
+            planes: [vec![0; 4], vec![0], vec![0]],
+        };
+        cache.insert_or_replace(1, CachedFrame::Yuv(yuv));
+        assert!(matches!(
+            cache.plan_work(false, 2, 2, 16, 6),
+            Some(WorkerPlan::Promote(1, _))
+        ));
+        assert!(cache.take_or_await(1).is_none());
+        let image = RgbaImage::new(2, 2, vec![128; 16]).unwrap();
+        cache.insert_or_replace(1, CachedFrame::Rgba(image.clone()));
+        assert!(
+            matches!(cache.take_for_request(1), Some(CachedFrame::Rgba(result)) if result == image)
+        );
     }
 
     #[test]
@@ -560,9 +627,14 @@ mod tests {
 
             let first = decoder.frame(0).unwrap();
             assert_eq!(first, expected[0], "budget={budget} frame=0");
+            assert_eq!(
+                decoder.frame(0).unwrap(),
+                expected[0],
+                "repeated budget={budget} frame=0"
+            );
 
             // Allow the background worker to fill its lookahead up to `budget`.
-            if budget >= 2 * rgba_bytes {
+            if budget >= rgba_bytes {
                 let deadline = Instant::now() + Duration::from_secs(2);
                 while Instant::now() < deadline {
                     let ready = {
@@ -590,6 +662,8 @@ mod tests {
             for (i, want) in expected.iter().enumerate().skip(1) {
                 let got = decoder.frame(i as u32).unwrap();
                 assert_eq!(&got, want, "budget={budget} frame={i}");
+                let repeated = decoder.frame(i as u32).unwrap();
+                assert_eq!(&repeated, want, "repeated budget={budget} frame={i}");
                 let state = decoder.cache.state.lock().unwrap();
                 assert!(
                     state.bytes <= budget,
@@ -607,62 +681,6 @@ mod tests {
             decoder.finish().unwrap();
             let state = decoder.cache.state.lock().unwrap();
             assert!(state.peak_bytes <= budget);
-        }
-    }
-
-    #[test]
-    fn drop_cancels_and_joins_worker_cleanly_even_when_request_queue_is_full() {
-        struct AliveReader {
-            inner: Cursor<Vec<u8>>,
-            alive: Arc<AtomicBool>,
-        }
-        impl Read for AliveReader {
-            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                self.inner.read(buf)
-            }
-        }
-        impl Seek for AliveReader {
-            fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-                self.inner.seek(pos)
-            }
-        }
-        impl Drop for AliveReader {
-            fn drop(&mut self) {
-                self.alive.store(false, Ordering::Release);
-            }
-        }
-
-        let bytes = fixture();
-        let index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
-
-        for yuv in [false, true] {
-            let alive = Arc::new(AtomicBool::new(true));
-            let factory = BufferedFactory {
-                factory: PrefetchTheoraFactory::default(),
-                bytes: 1 << 20,
-                frames: 16,
-                yuv,
-            };
-            let mut decoder = factory
-                .open_prefetch(
-                    Box::new(AliveReader {
-                        inner: Cursor::new(bytes.clone()),
-                        alive: Arc::clone(&alive),
-                    }),
-                    &index,
-                )
-                .unwrap();
-
-            decoder.frame(0).unwrap();
-            // Deliberately saturate the bounded request channel right before Drop.
-            if let Some(tx) = &decoder.requests {
-                while tx.try_send(Request::Wake).is_ok() {}
-            }
-            drop(decoder);
-            assert!(
-                !alive.load(Ordering::Acquire),
-                "worker thread and stream must be joined and dropped before Drop returns"
-            );
         }
     }
 }

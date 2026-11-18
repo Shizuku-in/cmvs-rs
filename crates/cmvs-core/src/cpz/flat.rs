@@ -89,7 +89,7 @@ impl FlatLookup {
             .map(|e| fold_vec(&e.name).into_boxed_slice())
             .collect();
         Self {
-            table: LookupTable::from_entries(entries),
+            table: LookupTable::from_entries(entries, fold_vec),
             folded_names,
         }
     }

@@ -13,7 +13,7 @@ impl Runtime {
         configuration: Configuration,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let bytes = configuration.bytes();
-        let audio = AudioHost::for_profile(self.gate.selection().profile, bytes);
+        let audio = AudioHost::for_profile(self.gate.profile(), bytes);
         self.audio_backend
             .configure_voice_ducking(audio.voice_ducking())?;
         let settings = SettingsHost::from_ini(bytes);
@@ -27,7 +27,7 @@ impl Runtime {
         self.effects = profile_int(bytes, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         self.audio = audio;
         self.platform.configure_display_selection(bytes);
-        if self.gate.selection().profile.uses_window_full_move() {
+        if self.gate.profile().uses_window_full_move() {
             self.platform.configure_window_full_move(bytes);
         }
         self.configuration = configuration;
@@ -50,7 +50,7 @@ impl Runtime {
             return Err("invalid saved display aspect or render mode".into());
         }
         let mut configuration = self.configuration.clone();
-        if self.gate.selection().profile.uses_window_full_move() {
+        if self.gate.profile().uses_window_full_move() {
             configuration.set_integer(
                 "SYSTEM_INFO",
                 "WINDOW_FULL_MOVE_USE",

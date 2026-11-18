@@ -10,8 +10,12 @@ description = "Shared CMVS OpenType glyph rendering and font resolution"
 [lints]
 workspace = true
 
+[features]
+default = ["std-fs"]
+std-fs = ["cmvs-core/std-fs"]
+
 [dependencies]
-cmvs-core = { path = "../cmvs-core" }
-cmvs-native = { path = "../cmvs-native" }
+cmvs-core = { path = "../cmvs-core", default-features = false }
+cmvs-native = { path = "../cmvs-native", default-features = false }
 encoding_rs.workspace = true
 ab_glyph.workspace = true

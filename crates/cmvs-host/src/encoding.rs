@@ -43,7 +43,7 @@ pub fn resolve_encoding_with_fs(
     if let EncodingPolicy::Explicit(encoding) = policy {
         return Ok(encoding);
     }
-    if let Some(encoding) = encoding_txt_with_fs(fs, root)? {
+    if let Some(encoding) = text_codec::encoding_txt_with_fs(fs, root)? {
         return Ok(encoding);
     }
     if let Some(encoding) = conversion_encoding_with_fs(fs, root)? {
@@ -64,24 +64,6 @@ pub fn resolve_encoding_with_fs(
     }
 }
 
-fn encoding_txt_with_fs(
-    fs: &dyn HostFs,
-    root: &Path,
-) -> Result<Option<TextEncoding>, Box<dyn Error + Send + Sync>> {
-    match fs.open_read(&root.join("encoding.txt")) {
-        Ok(file) => {
-            let mut setting = String::new();
-            file.take(65).read_to_string(&mut setting)?;
-            let name = setting.trim();
-            text_codec::parse(name).map(Some).map_err(|_| {
-                format!("encoding.txt must be shift-jis, gbk or utf-8, not {name:?}").into()
-            })
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(Box::new(error)),
-    }
-}
-
 /// Reads the top-level `"encoding"` setting from `root/conversion.json` if that file exists.
 pub fn conversion_encoding_with_fs(
     fs: &dyn HostFs,
@@ -92,12 +74,13 @@ pub fn conversion_encoding_with_fs(
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(Box::new(error)),
     };
-    let mut text = String::new();
+    let mut raw = Vec::new();
     file.take(MAX_CONVERSION_JSON as u64 + 1)
-        .read_to_string(&mut text)?;
-    if text.len() > MAX_CONVERSION_JSON {
+        .read_to_end(&mut raw)?;
+    if raw.len() > MAX_CONVERSION_JSON {
         return Err("conversion.json exceeds 256 KiB limit".into());
     }
+    let text = String::from_utf8(raw)?;
     parse_conversion_json_encoding(&text)
 }
 

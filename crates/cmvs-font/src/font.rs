@@ -96,8 +96,10 @@ pub struct FontRenderer {
     encoding: TextEncoding,
     library: Arc<Mutex<FontLibrary>>,
     library_generation: Arc<AtomicU64>,
+    cached_generation: u64,
     cache: GlyphCache,
     scene_cache: Option<CachedGlyphScene>,
+    scene_used_transient_fallback: bool,
     #[cfg(test)]
     scene_cache_hits: u64,
     #[cfg(test)]
@@ -360,8 +362,10 @@ impl FontRenderer {
             encoding: TextEncoding::default(),
             library: Arc::new(Mutex::new(FontLibrary::new(Arc::new(font)))),
             library_generation: Arc::new(AtomicU64::new(0)),
+            cached_generation: 0,
             cache: GlyphCache::default(),
             scene_cache: None,
+            scene_used_transient_fallback: false,
             #[cfg(test)]
             scene_cache_hits: 0,
             #[cfg(test)]
@@ -388,8 +392,10 @@ impl FontRenderer {
             encoding: TextEncoding::default(),
             library: Arc::new(Mutex::new(library)),
             library_generation: Arc::new(AtomicU64::new(0)),
+            cached_generation: 0,
             cache: GlyphCache::default(),
             scene_cache: None,
+            scene_used_transient_fallback: false,
             #[cfg(test)]
             scene_cache_hits: 0,
             #[cfg(test)]
@@ -402,9 +408,18 @@ impl FontRenderer {
     /// discards cached glyph images; existing metrics retain their encoding.
     pub fn with_text_encoding(mut self, encoding: TextEncoding) -> Self {
         self.encoding = encoding;
+        self.cached_generation = self.library_generation.load(Ordering::Relaxed);
         self.cache = GlyphCache::default();
         self.scene_cache = None;
         self
+    }
+    fn sync_library_generation(&mut self) {
+        let generation = self.library_generation.load(Ordering::Relaxed);
+        if self.cached_generation != generation {
+            self.cached_generation = generation;
+            self.cache = GlyphCache::default();
+            self.scene_cache = None;
+        }
     }
     /// Matches this renderer's fonts; OpenType ink bounds replace GDI's
     /// device metrics. Whitespace deterministically has zero ink extent.
@@ -484,13 +499,8 @@ impl FontRenderer {
         self.library_generation.fetch_add(1, Ordering::Relaxed);
         Ok(out)
     }
-    fn font(&self, face: &[u8], ch: char) -> Result<Arc<FontVec>, FormatError> {
-        self.library
-            .lock()
-            .map_err(|_| FormatError("font library lock poisoned"))
-            .map(|mut library| library.for_character(face, self.encoding, ch))
-    }
     fn glyph(&mut self, glyph: &RecordedGlyph) -> Result<RgbaImage, FormatError> {
+        self.sync_library_generation();
         if !(1..=128).contains(&glyph.size) {
             return Err(FormatError("glyph size outside 1..128 preview range"));
         }
@@ -516,7 +526,11 @@ impl FontRenderer {
             return Ok(image.clone());
         }
         let ch = character(self.encoding, glyph.code)?;
-        let font = self.font(&glyph.face, ch)?;
+        let (font, cacheable) = self
+            .library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?
+            .resolve_character(&glyph.face, self.encoding, ch);
         let id = font.glyph_id(ch);
         let scale = glyph.size as f32;
         let baseline = font.as_scaled(scale).ascent();
@@ -555,7 +569,11 @@ impl FontRenderer {
             embolden(&mut mask, side);
         }
         let image = paint(&mask, side, glyph.colors, glyph.gradient, glyph.outline)?;
-        self.cache.insert(key, image.clone());
+        if cacheable {
+            self.cache.insert(key, image.clone());
+        } else {
+            self.scene_used_transient_fallback = true;
+        }
         Ok(image)
     }
 
@@ -595,6 +613,7 @@ impl FontRenderer {
         &mut self,
         messages: &MessageHost,
     ) -> Result<Vec<SceneObject>, FormatError> {
+        self.sync_library_generation();
         let fingerprint = self.glyph_scene_fingerprint(messages);
         if let (Some(fp), Some(cached)) = (fingerprint, self.scene_cache.as_ref())
             && cached.fingerprint == fp
@@ -609,8 +628,11 @@ impl FontRenderer {
         {
             self.glyph_build_calls += 1;
         }
+        self.scene_used_transient_fallback = false;
         let objects = messages.build_glyph_objects(self)?;
-        if let Some(fingerprint) = fingerprint {
+        if let Some(fingerprint) = fingerprint
+            && !self.scene_used_transient_fallback
+        {
             self.scene_cache = Some(CachedGlyphScene {
                 fingerprint,
                 objects: objects.clone(),
@@ -950,113 +972,166 @@ mod tests {
         assert!(FontRenderer::from_bytes(b"ttcf".to_vec(), 1).is_err());
     }
 
-    fn minimal_test_ttf() -> Vec<u8> {
-        let mut cmap = Vec::new();
-        for v in [0u16, 1, 3, 1] {
-            cmap.extend(v.to_be_bytes());
-        }
-        cmap.extend(12u32.to_be_bytes());
-        for v in [
-            4u16,
-            32,
-            0,
-            4,
-            4,
-            1,
-            0,
-            0x0041,
-            0xffff,
-            0,
-            0x0041,
-            0xffff,
-            (-64i16) as u16,
-            1,
-            0,
-            0,
-        ] {
-            cmap.extend(v.to_be_bytes());
-        }
-        let mut glyf = Vec::new();
-        for v in [1i16, 0, 0, 500, 700] {
-            glyf.extend(v.to_be_bytes());
-        }
-        glyf.extend(3u16.to_be_bytes());
-        glyf.extend(0u16.to_be_bytes());
-        glyf.extend([0x01u8; 4]);
-        for v in [0i16, 500, 0, -500, 0, 0, 700, -700] {
-            glyf.extend(v.to_be_bytes());
-        }
-        let mut head = vec![0u8; 54];
-        head[..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-        head[12..16].copy_from_slice(&0x5f0f_3cf5u32.to_be_bytes());
-        head[18..20].copy_from_slice(&1000u16.to_be_bytes());
-        head[38..40].copy_from_slice(&1000i16.to_be_bytes());
-        head[40..42].copy_from_slice(&1000i16.to_be_bytes());
-        head[46..48].copy_from_slice(&8u16.to_be_bytes());
-        head[48..50].copy_from_slice(&2i16.to_be_bytes());
-        let mut hhea = vec![0u8; 36];
-        hhea[..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-        hhea[4..6].copy_from_slice(&800i16.to_be_bytes());
-        hhea[6..8].copy_from_slice(&(-200i16).to_be_bytes());
-        hhea[10..12].copy_from_slice(&1000u16.to_be_bytes());
-        hhea[34..36].copy_from_slice(&2u16.to_be_bytes());
-        let mut hmtx = Vec::new();
-        for (adv, lsb) in [(500u16, 0i16), (600u16, 0i16)] {
-            hmtx.extend(adv.to_be_bytes());
-            hmtx.extend(lsb.to_be_bytes());
-        }
-        let mut loca = Vec::new();
-        for off in [0u16, 0, (glyf.len() / 2) as u16] {
-            loca.extend(off.to_be_bytes());
-        }
-        let mut maxp = vec![0u8; 32];
-        maxp[..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-        maxp[4..6].copy_from_slice(&2u16.to_be_bytes());
-        maxp[6..8].copy_from_slice(&4u16.to_be_bytes());
-        maxp[8..10].copy_from_slice(&1u16.to_be_bytes());
-        let mut name = Vec::new();
-        let family_utf16: Vec<u8> = "BenchFont"
-            .encode_utf16()
-            .flat_map(u16::to_be_bytes)
-            .collect();
-        for v in [0u16, 1, 18] {
-            name.extend(v.to_be_bytes());
-        }
-        for v in [3u16, 1, 0x0409, 1, family_utf16.len() as u16, 0] {
-            name.extend(v.to_be_bytes());
-        }
-        name.extend(family_utf16);
+    #[test]
+    fn library_mutations_invalidate_glyph_cache_and_scene_cache() {
+        use crate::font_library::tests::minimal_ttf_with_box;
+        use cmvs_core::{
+            host::input::ActionInput,
+            profile::Semantics,
+            vm::dispatch::{self, Hosts},
+            vm::machine::{Machine, Step},
+        };
 
-        let tables: [(&[u8; 4], Vec<u8>); 8] = [
-            (b"cmap", cmap),
-            (b"glyf", glyf),
-            (b"head", head),
-            (b"hhea", hhea),
-            (b"hmtx", hmtx),
-            (b"loca", loca),
-            (b"maxp", maxp),
-            (b"name", name),
-        ];
-        let mut sfnt = Vec::new();
-        sfnt.extend(0x0001_0000u32.to_be_bytes());
-        sfnt.extend((tables.len() as u16).to_be_bytes());
-        sfnt.extend(128u16.to_be_bytes());
-        sfnt.extend(3u16.to_be_bytes());
-        sfnt.extend(0u16.to_be_bytes());
-        let mut offset = 12 + 16 * tables.len();
-        let mut payload = Vec::new();
-        for (tag, data) in &tables {
-            sfnt.extend_from_slice(*tag);
-            sfnt.extend(0u32.to_be_bytes());
-            sfnt.extend((offset as u32).to_be_bytes());
-            sfnt.extend((data.len() as u32).to_be_bytes());
-            payload.extend_from_slice(data);
-            let pad = (4 - data.len() % 4) % 4;
-            payload.resize(payload.len() + pad, 0);
-            offset += data.len() + pad;
+        let root =
+            std::env::temp_dir().join(format!("cmvs-font-invalidate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Default font renders a small 120x120 box for 'A' and lacks 'B'.
+        let default_bytes = minimal_ttf_with_box("Default", 0x0041, 120, 120);
+        let mut font = FontRenderer::from_bytes(default_bytes, 0).unwrap();
+        let custom_ttf = minimal_ttf_with_box("CustomFace", 0x0041, 500, 700);
+        let custom_path = root.join("custom.ttf");
+        std::fs::write(&custom_path, &custom_ttf).unwrap();
+        let mut expected_custom_font = FontRenderer::from_bytes(custom_ttf, 0).unwrap();
+
+        let fallback_ttf = minimal_ttf_with_box("FallbackFace", 0x0042, 500, 700);
+        let mut expected_fallback_font = FontRenderer::from_bytes(fallback_ttf.clone(), 0).unwrap();
+
+        let ink = |image: &RgbaImage| -> u64 {
+            image
+                .pixels()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| u64::from(p[3]))
+                .sum()
+        };
+
+        // Warm both `font` and a clone sharing its `FontLibrary` before `CustomFace` is imported:
+        // missing face falls back to Default and caches the 120x120 glyph under `"CustomFace"`.
+        let mut custom_glyph = recorded_glyph(u16::from(b'A'));
+        custom_glyph.face = Arc::from(&b"CustomFace"[..]);
+        let before = font.rasterize_glyph(&custom_glyph).unwrap();
+        let mut clone = font.clone();
+        assert_eq!(clone.rasterize_glyph(&custom_glyph).unwrap(), before);
+
+        // Also warm `scene_cache` for a visible message using `CustomFace` via `0x2157`.
+        let mut messages = MessageHost::default();
+        messages.set_glyph_metrics(font.metrics());
+        messages.set_record_output(true);
+        let mut code = Vec::new();
+        push_call(&mut code, 0x215d, &[720, 1280, 120, 400, 0, 0, 7, 0]);
+        push_call(&mut code, 0x214e, &[1, 0]);
+        push_call(&mut code, 0x2106, &[0, 7]);
+        push_call(&mut code, 0x2152, &[11, u32::MAX, 0]);
+        let script = ps2_script(&code, b"CustomFace\0A\0");
+        let mut vm = Machine::new(&script).unwrap();
+        for _ in 0..3 {
+            while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            let mut hosts = Hosts {
+                messages: Some(&mut messages),
+                ..Hosts::default()
+            };
+            dispatch::run(Semantics::Root, &mut vm, &mut hosts).unwrap();
         }
-        sfnt.extend(payload);
-        sfnt
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let mut input = ActionInput::default();
+        messages
+            .try_record_output(&mut vm, &mut input, Default::default())
+            .unwrap()
+            .unwrap();
+        messages.advance_frame(1000);
+        let scene_before = font.prepare_objects(&messages).unwrap();
+        assert_eq!(clone.prepare_objects(&messages).unwrap(), scene_before);
+
+        // Set user directory + import `CustomFace`: both `font` and `clone` must invalidate
+        // both `scene_cache` and `GlyphCache`.
+        font.set_user_directory(&root).unwrap();
+        let imported_name = font.import_font(&custom_path, 0).unwrap();
+        assert_eq!(imported_name, b"CustomFace");
+
+        let expected_a = expected_custom_font
+            .rasterize_glyph(&recorded_glyph(u16::from(b'A')))
+            .unwrap();
+        assert!(ink(&expected_a) > ink(&before));
+        assert_eq!(font.rasterize_glyph(&custom_glyph).unwrap(), expected_a);
+        assert_eq!(clone.rasterize_glyph(&custom_glyph).unwrap(), expected_a);
+
+        let expected_scene = expected_custom_font.prepare_objects(&messages).unwrap();
+        let scene_after = font.prepare_objects(&messages).unwrap();
+        assert_ne!(scene_after, scene_before);
+        assert_eq!(scene_after, expected_scene);
+        let clone_scene_after = clone.prepare_objects(&messages).unwrap();
+        assert_eq!(clone_scene_after, scene_after);
+
+        // Now check `add_fallback` and `set_user_directory` invalidation too.
+        let b_glyph = recorded_glyph(u16::from(b'B'));
+        assert!(font.rasterize_glyph(&b_glyph).is_err());
+        assert!(clone.rasterize_glyph(&b_glyph).is_err());
+
+        font.add_fallback(fallback_ttf, 0).unwrap();
+        let expected_b = expected_fallback_font.rasterize_glyph(&b_glyph).unwrap();
+        assert!(ink(&expected_b) > 0);
+        assert_eq!(font.rasterize_glyph(&b_glyph).unwrap(), expected_b);
+        assert_eq!(clone.rasterize_glyph(&b_glyph).unwrap(), expected_b);
+
+        // Pre-warm a fresh renderer with the unavailable `CustomFace` (cached as Default),
+        // then call `set_user_directory(&root)` where `CustomFace` was already imported above.
+        let mut late_user_dir =
+            FontRenderer::from_bytes(minimal_ttf_with_box("Default", 0x0041, 120, 120), 0).unwrap();
+        assert_eq!(
+            late_user_dir.rasterize_glyph(&custom_glyph).unwrap(),
+            before
+        );
+        late_user_dir.set_user_directory(&root).unwrap();
+        // Fail an actual read of the imported face while leaving its alias intact.
+        let stored = std::fs::read_dir(root.join("font-faces"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("CMVS-F-")
+            })
+            .unwrap();
+        let backup = stored.with_extension("saved");
+        std::fs::rename(&stored, &backup).unwrap();
+        std::fs::create_dir(&stored).unwrap();
+        assert_eq!(
+            late_user_dir.prepare_objects(&messages).unwrap(),
+            scene_before
+        );
+        std::fs::remove_dir(&stored).unwrap();
+        std::fs::rename(backup, stored).unwrap();
+        assert_eq!(
+            late_user_dir.prepare_objects(&messages).unwrap(),
+            expected_scene
+        );
+        assert_eq!(
+            late_user_dir.rasterize_glyph(&custom_glyph).unwrap(),
+            expected_a
+        );
+
+        // Both directories resolve the same family name to distinct stored font files.
+        let other = root.join("other");
+        font.set_user_directory(&other).unwrap();
+        std::fs::write(
+            &custom_path,
+            minimal_ttf_with_box("CustomFace", 0x41, 320, 480),
+        )
+        .unwrap();
+        assert_eq!(font.import_font(&custom_path, 0).unwrap(), b"CustomFace");
+        let expected_other = font.rasterize_glyph(&custom_glyph).unwrap();
+        assert_ne!(expected_other, expected_a);
+        late_user_dir.set_user_directory(&other).unwrap();
+        assert_eq!(
+            late_user_dir.rasterize_glyph(&custom_glyph).unwrap(),
+            expected_other
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     fn ps2_script(code: &[u8], text: &[u8]) -> cmvs_core::format::ps3::Script {
@@ -1102,7 +1177,9 @@ mod tests {
             vm::machine::{Machine, Step},
         };
 
-        let mut font = FontRenderer::from_bytes(minimal_test_ttf(), 0).unwrap();
+        let mut font =
+            FontRenderer::from_bytes(crate::font_library::tests::minimal_ttf("BenchFont"), 0)
+                .unwrap();
         let mut messages = MessageHost::default();
         messages.set_glyph_metrics(font.metrics());
         messages.set_record_output(true);

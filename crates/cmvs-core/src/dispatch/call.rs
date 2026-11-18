@@ -59,6 +59,7 @@ pub enum RuntimeOperation {
 pub struct RuntimeCall {
     pc: usize,
     command: u16,
+    opcode: u16,
     arguments: u64,
     operation: RuntimeOperation,
     stack_len: usize,
@@ -84,7 +85,7 @@ impl RuntimeCall {
         {
             return Err(error(
                 self.pc,
-                self.command + 0x2000,
+                self.opcode,
                 "runtime request no longer matches the pending command",
             ));
         }
@@ -96,6 +97,7 @@ impl RuntimeCall {
             vm,
             pc: self.pc,
             command: self.command,
+            source_command: self.opcode.saturating_sub(0x2000),
             arguments: self.arguments,
         }
         .finish(flags)
@@ -106,17 +108,24 @@ pub(crate) struct Call<'a> {
     pub vm: &'a mut Machine,
     pub pc: usize,
     pub command: u16,
+    source_command: u16,
     arguments: u64,
 }
 
 impl<'a> Call<'a> {
     pub(crate) fn new(vm: &'a mut Machine, pc: usize, command: u16) -> Self {
+        let source_command = vm.pending_source().unwrap_or(command);
         Self {
             vm,
             pc,
             command,
+            source_command,
             arguments: 0,
         }
+    }
+
+    pub fn opcode(&self) -> u16 {
+        0x2000 + self.source_command
     }
 
     pub fn argument(&mut self, distance: usize, name: &'static str) -> Result<u32, DecodeError> {
@@ -127,7 +136,7 @@ impl<'a> Call<'a> {
             .vm
             .stack()
             .peek_u32(distance)
-            .map_err(|_| error(self.pc, self.command + 0x2000, name))?;
+            .map_err(|_| self.error(name))?;
         self.arguments |= 1 << (distance / 4 - 1);
         Ok(value)
     }
@@ -148,7 +157,7 @@ impl<'a> Call<'a> {
         Ok(())
     }
     pub fn error(&self, why: &'static str) -> DecodeError {
-        error(self.pc, self.command + 0x2000, why)
+        error(self.pc, self.opcode(), why)
     }
     fn require_arguments(&self, bytes: usize) -> Result<(), DecodeError> {
         if bytes > 256 || !bytes.is_multiple_of(4) {
@@ -214,6 +223,7 @@ impl<'a> Call<'a> {
         Ok(Flow::Runtime(RuntimeCall {
             pc: self.pc,
             command: self.command,
+            opcode: self.opcode(),
             arguments: self.arguments,
             operation,
             stack_len: self.vm.stack().len_bytes(),

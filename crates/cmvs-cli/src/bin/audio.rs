@@ -23,29 +23,32 @@ Build: cargo build --features audio-output --bin cmvs-audio
 Example: cmvs-audio voice.ogg --pcm voice.f32";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut all_args: Vec<_> = env::args_os().skip(1).collect();
+    let all_args: Vec<_> = env::args_os().skip(1).collect();
     if cmvs_cli::wants_help(&all_args) {
         println!("{USAGE}");
         return Ok(());
     }
-    let positional_first = if all_args.first().is_some_and(|a| a == "--") && all_args.len() >= 2 {
-        all_args.remove(0);
-        true
-    } else {
-        false
-    };
     let mut args = all_args.into_iter();
-    let path = args
-        .next()
-        .ok_or("usage: cmvs-audio <file.ogg|movie.cmv> [--pcm <new.f32>]")?;
-    if !positional_first && path.to_string_lossy().starts_with('-') {
-        return Err(format!("unknown option {}", path.to_string_lossy()).into());
+    let mut positional = false;
+    let mut path = None;
+    let mut output = None;
+    while let Some(arg) = args.next() {
+        if !positional && arg == "--" {
+            positional = true;
+        } else if !positional && arg == "--pcm" {
+            if output.is_some() {
+                return Err("duplicate --pcm option".into());
+            }
+            output = Some(args.next().ok_or("--pcm requires an output path")?);
+        } else if !positional && arg.to_string_lossy().starts_with('-') {
+            return Err(format!("unknown option {}", arg.to_string_lossy()).into());
+        } else if path.is_none() {
+            path = Some(arg);
+        } else {
+            return Err("unexpected extra audio inspector argument".into());
+        }
     }
-    let output = match (args.next(), args.next(), args.next()) {
-        (None, None, None) => None,
-        (Some(flag), Some(path), None) if flag == "--pcm" => Some(path),
-        _ => return Err("invalid audio inspector options".into()),
-    };
+    let path = path.ok_or("usage: cmvs-audio <file.ogg|movie.cmv> [--pcm <new.f32>]")?;
     let mut file = File::open(path)?;
     let mut signature = [0; 4];
     file.read_exact(&mut signature)?;

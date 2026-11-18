@@ -118,7 +118,7 @@ mod modules {
     pub mod settings;
     pub mod snapshot;
     pub mod system_save;
-    pub mod text;
+    pub(crate) mod text;
     pub mod text_encoding;
     pub mod timers;
     pub mod viewport;
@@ -164,7 +164,7 @@ pub mod host {
     pub use crate::modules::text_encoding::TextEncoding;
     pub use crate::modules::{
         audio, filesystem, gesture, image, input, movie, platform, random, resources, settings,
-        text, text_encoding,
+        text_encoding,
     };
 }
 

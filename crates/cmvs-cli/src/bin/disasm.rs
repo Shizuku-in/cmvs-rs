@@ -13,22 +13,29 @@ Options:
 Example: cmvs-disasm data/pack/start.ps3";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let args: Vec<_> = env::args_os().skip(1).collect();
-    if cmvs_cli::wants_help(&args) {
+    let raw_args: Vec<_> = env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&raw_args) {
         println!("{USAGE}");
         return Ok(());
     }
-    let path = match args.as_slice() {
-        [] => return Err("usage: cmvs-disasm <script>".into()),
-        [sep, path] if *sep == "--" => path,
-        [flag, ..] if flag.to_string_lossy().starts_with('-') => {
-            return Err(format!("unknown option {}", flag.to_string_lossy()).into());
+    let mut positional_only = false;
+    let mut path: Option<std::ffi::OsString> = None;
+    for arg in raw_args {
+        if !positional_only && arg == "--" {
+            positional_only = true;
+            continue;
         }
-        [path] => path,
-        _ => return Err("too many arguments".into()),
-    };
+        if !positional_only && arg.to_string_lossy().starts_with('-') {
+            return Err(format!("unknown option {}", arg.to_string_lossy()).into());
+        }
+        if path.is_some() {
+            return Err("too many arguments".into());
+        }
+        path = Some(arg);
+    }
+    let path = path.ok_or("usage: cmvs-disasm <script>")?;
     let mut raw = Vec::new();
-    File::open(path)?
+    File::open(&path)?
         .take(MAX_PAYLOAD as u64 + 49)
         .read_to_end(&mut raw)?;
     if raw.len() > MAX_PAYLOAD + 48 {

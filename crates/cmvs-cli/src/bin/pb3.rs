@@ -20,45 +20,55 @@ Output files must not already exist. Resource checksums are not verified.
 Example: cmvs-pb3 background.pb3 --rgba background.rgba";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut args: Vec<_> = env::args_os().skip(1).collect();
+    let args: Vec<_> = env::args_os().skip(1).collect();
     if cmvs_cli::wants_help(&args) {
         println!("{USAGE}");
         return Ok(());
     }
-    let positional_first = if args.first().is_some_and(|a| a == "--") && args.len() >= 2 {
-        args.remove(0);
-        true
-    } else {
-        false
-    };
-    if !positional_first
-        && let Some(flag) = args.first()
-        && flag.to_string_lossy().starts_with('-')
-    {
-        return Err(format!("unknown option {}", flag.to_string_lossy()).into());
+    let mut input: Option<std::ffi::OsString> = None;
+    let mut rgba_out: Option<std::ffi::OsString> = None;
+    let mut positional_only = false;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        if !positional_only && arg == "--" {
+            positional_only = true;
+            continue;
+        }
+        if !positional_only && arg == "--rgba" {
+            if rgba_out.is_some() {
+                return Err("duplicate --rgba option".into());
+            }
+            rgba_out = Some(iter.next().ok_or("wrong argument count; use --help")?);
+            continue;
+        }
+        if !positional_only && arg.to_string_lossy().starts_with('-') {
+            return Err(format!("unknown option {}", arg.to_string_lossy()).into());
+        }
+        if input.is_some() {
+            return Err("wrong argument count; use --help".into());
+        }
+        input = Some(arg);
     }
-    if args.len() != 1 && !(args.len() == 3 && args[1] == "--rgba") {
-        return Err("wrong argument count; use --help".into());
-    }
+    let input = input.ok_or("wrong argument count; use --help")?;
     let mut bytes = Vec::new();
-    File::open(&args[0])?
+    File::open(&input)?
         .take(MAX_PAYLOAD as u64 + 1)
         .read_to_end(&mut bytes)?;
     let header = pb3::Header::parse(&bytes)?;
     println!("PB3B {header:?}");
-    if args.len() == 3 {
+    if let Some(rgba_out) = rgba_out {
         let image = pb3::decode(&bytes)?;
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&args[2])?;
+            .open(&rgba_out)?;
         output.write_all(image.pixels())?;
         println!(
             "Wrote {} RGBA bytes ({}x{}) to {:?}",
             image.pixels().len(),
             image.width(),
             image.height(),
-            args[2]
+            rgba_out
         );
     }
     Ok(())

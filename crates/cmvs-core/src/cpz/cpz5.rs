@@ -455,7 +455,7 @@ impl Cpz5Index {
                 return Err(FormatError("CPZ5 file count/length mismatch").into());
             }
         }
-        let lookup = LookupTable::from_entries(&entries);
+        let lookup = LookupTable::from_entries(&entries, <[u8]>::to_vec);
         Ok(Self {
             layout,
             mode,

@@ -8,10 +8,10 @@ use crate::{
     target::{Target, cap},
 };
 use cmvs_core::{
-    format::digest::Sha256, format::ps3::Script, host::audio::RecordingAudio,
-    host::input::CodeInput, host::input::KeyBindings, host::platform::RecordingBackend,
-    profile::GateErrorKind, runtime::Runtime, runtime::RuntimeEvent, runtime::RuntimeOptions,
-    runtime::SaveStorage, runtime::SnapshotPolicy,
+    format::digest::Sha256, host::audio::RecordingAudio, host::input::CodeInput,
+    host::input::KeyBindings, host::platform::RecordingBackend, profile::GateErrorKind,
+    runtime::Runtime, runtime::RuntimeEvent, runtime::RuntimeOptions, runtime::SaveStorage,
+    runtime::SnapshotPolicy,
 };
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -184,7 +184,7 @@ impl<'a> Session<'a> {
     /// `user` must be a new, empty directory; the engine writes system and slot saves there.
     pub fn start(
         target: &'a Target,
-        script: &'a Script,
+        script: impl cmvs_core::vm::machine::IntoSharedScript,
         user: &Path,
         options: &Options,
         font: Option<&cmvs_font::font::FontRenderer>,
@@ -452,7 +452,7 @@ impl<'a> Session<'a> {
                         (
                             "semantics",
                             cmvs_core::vm::dispatch::semantics_name(
-                                self.run.gate().selection().profile,
+                                self.run.gate().profile(),
                                 command,
                             )
                             .into(),

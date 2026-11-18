@@ -9,7 +9,7 @@ use cmvs_core::{
     host::settings::{DEFAULT_FONT_FACE, font_face_for_encoding},
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -19,6 +19,16 @@ use std::{
 const MAX_FONT: usize = 32 * 1024 * 1024;
 const MAX_FONT_FILES: usize = 8192;
 const MAX_MISSING_FACES: usize = 1024;
+const FACE_NOT_FOUND: FormatError =
+    FormatError("font face not found in the system font directories");
+const UNREADABLE_NAME: FormatError = FormatError("cannot read Unicode font name");
+
+fn remember_missing(cache: &mut HashSet<Vec<u8>>, face: &[u8]) {
+    if cache.len() >= MAX_MISSING_FACES {
+        cache.clear();
+    }
+    cache.insert(face.to_vec());
+}
 
 /// Encoding-free state shared by renderers: each caller passes the encoding of the
 /// game's legacy font face fields (LOGFONT names), so renderers sharing a library
@@ -35,14 +45,14 @@ pub struct FontLibrary {
     located: HashMap<TextEncoding, HashMap<Vec<u8>, Arc<FontVec>>>,
     /// Known-missing face keys per encoding, avoiding repeated SHA-256 hashing and
     /// `ENOENT` probes on every glyph measurement and rasterization.
-    missing: HashMap<TextEncoding, HashMap<Vec<u8>, FormatError>>,
+    missing: HashMap<TextEncoding, HashSet<Vec<u8>>>,
     /// Lowercased family name -> font file and collection index; built on first use.
     index: Option<BTreeMap<String, (PathBuf, u32)>>,
     directories: Vec<PathBuf>,
     /// Unicode names live outside the game's fixed-width legacy font fields.
     unicode_names: HashMap<Vec<u8>, String>,
     /// Known-unresolvable `CMVS-U-...` handles queried through `family_name`.
-    missing_unicode: HashMap<Vec<u8>, FormatError>,
+    missing_unicode: HashSet<Vec<u8>>,
     unicode_directory: Option<PathBuf>,
 }
 
@@ -57,7 +67,7 @@ impl FontLibrary {
             index: None,
             directories: cmvs_native::font_directories(),
             unicode_names: HashMap::new(),
-            missing_unicode: HashMap::new(),
+            missing_unicode: HashSet::new(),
             unicode_directory: None,
         }
     }
@@ -73,7 +83,16 @@ impl FontLibrary {
         self.missing_unicode.clear();
     }
     pub fn set_user_directory(&mut self, directory: &Path) {
-        self.unicode_directory = Some(directory.join("font-faces"));
+        let directory = directory.join("font-faces");
+        if self.unicode_directory.as_ref() != Some(&directory) {
+            // User aliases take precedence over both imported and system faces.
+            self.loaded.clear();
+            self.located.clear();
+            if self.unicode_directory.is_some() {
+                self.unicode_names.clear();
+            }
+            self.unicode_directory = Some(directory);
+        }
         self.invalidate_missing();
     }
     /// A stable ASCII handle fits the VM/CSV2 LOGFONT field. The actual family
@@ -127,17 +146,10 @@ impl FontLibrary {
             return Ok(name.clone());
         }
         if face.starts_with(b"CMVS-U-") {
-            if let Some(err) = self.missing_unicode.get(face) {
-                return Err(err.clone());
+            if self.missing_unicode.contains(face) {
+                return Err(UNREADABLE_NAME);
             }
-            let result = self.resolve_unicode_name(face);
-            if let Err(ref err) = result {
-                if self.missing_unicode.len() >= MAX_MISSING_FACES {
-                    self.missing_unicode.clear();
-                }
-                self.missing_unicode.insert(face.to_vec(), err.clone());
-            }
-            return result;
+            return self.resolve_unicode_name(face);
         }
         legacy_family_name(encoding, face)
     }
@@ -150,9 +162,16 @@ impl FontLibrary {
             .as_ref()
             .ok_or(FormatError("Unicode font mapping is unavailable"))?;
         let mut bytes = Vec::new();
-        File::open(directory.join(std::str::from_utf8(face).expect("ASCII handle")))
-            .and_then(|file| file.take(513).read_to_end(&mut bytes))
-            .map_err(|_| FormatError("cannot read Unicode font name"))?;
+        let file = File::open(directory.join(std::str::from_utf8(face).expect("ASCII handle")))
+            .map_err(|err| {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    remember_missing(&mut self.missing_unicode, face);
+                }
+                UNREADABLE_NAME
+            })?;
+        file.take(513)
+            .read_to_end(&mut bytes)
+            .map_err(|_| UNREADABLE_NAME)?;
         let name = String::from_utf8(bytes)
             .map_err(|_| FormatError("font family name is not valid UTF-8"))?;
         if name.is_empty()
@@ -182,26 +201,13 @@ impl FontLibrary {
         if let Some(font) = self.located.get(&encoding).and_then(|m| m.get(face)) {
             return Ok(font.clone());
         }
-        if let Some(err) = self.missing.get(&encoding).and_then(|m| m.get(face)) {
-            return Err(err.clone());
+        if self
+            .missing
+            .get(&encoding)
+            .is_some_and(|m| m.contains(face))
+        {
+            return Err(FACE_NOT_FOUND);
         }
-        match self.resolve_face(face, encoding) {
-            Ok(font) => Ok(font),
-            Err(err) => {
-                let by_encoding = self.missing.entry(encoding).or_default();
-                if by_encoding.len() >= MAX_MISSING_FACES {
-                    by_encoding.clear();
-                }
-                by_encoding.insert(face.to_vec(), err.clone());
-                Err(err)
-            }
-        }
-    }
-    fn resolve_face(
-        &mut self,
-        face: &[u8],
-        encoding: TextEncoding,
-    ) -> Result<Arc<FontVec>, FormatError> {
         if face.starts_with(b"CMVS-F-") {
             if face.len() != 31 || !face[7..].iter().all(u8::is_ascii_hexdigit) {
                 return Err(FormatError("invalid imported font handle"));
@@ -255,9 +261,10 @@ impl FontLibrary {
                 .insert(face.to_vec(), self.default.clone());
             return Ok(self.default.clone());
         }
-        let (path, index) = self.locate(face, encoding)?.ok_or(FormatError(
-            "font face not found in the system font directories",
-        ))?;
+        let Some((path, index)) = self.locate(face, encoding)? else {
+            remember_missing(self.missing.entry(encoding).or_default(), face);
+            return Err(FACE_NOT_FOUND);
+        };
         let mut bytes = Vec::new();
         File::open(&path)
             .and_then(|file| file.take(MAX_FONT as u64 + 1).read_to_end(&mut bytes))
@@ -351,21 +358,35 @@ impl FontLibrary {
     /// unusable selected faces fall back to the explicit default supplied by --font,
     /// then to the added fallbacks; a character none covers uses the default.
     pub fn for_character(&mut self, face: &[u8], encoding: TextEncoding, ch: char) -> Arc<FontVec> {
+        self.resolve_character(face, encoding, ch).0
+    }
+    /// Returns the chosen font and whether glyphs drawn with it can be cached.
+    pub(crate) fn resolve_character(
+        &mut self,
+        face: &[u8],
+        encoding: TextEncoding,
+        ch: char,
+    ) -> (Arc<FontVec>, bool) {
         let covers = |font: &FontVec| {
             let id = font.glyph_id(ch);
             id.0 != 0 && (ch.is_whitespace() || font.outline(id).is_some())
         };
-        let font = self
-            .face(face, encoding)
-            .unwrap_or_else(|_| self.default.clone());
+        let (font, cacheable) = match self.face(face, encoding) {
+            Ok(font) => (font, true),
+            Err(err) => (
+                self.default.clone(),
+                err == FACE_NOT_FOUND
+                    || (err == UNREADABLE_NAME && self.missing_unicode.contains(face)),
+            ),
+        };
         if covers(&font) {
-            return font;
+            return (font, cacheable);
         }
-        std::iter::once(&self.default)
+        let fallback = std::iter::once(&self.default)
             .chain(&self.fallbacks)
             .find(|font| covers(font))
-            .unwrap_or(&self.default)
-            .clone()
+            .unwrap_or(&self.default);
+        (fallback.clone(), cacheable)
     }
     fn locate(
         &mut self,
@@ -536,7 +557,7 @@ fn name_records(table: &[u8]) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -673,8 +694,8 @@ mod tests {
     }
 
     /// Minimal self-contained TrueType `sfnt` accepted by `ab_glyph::FontVec`, mapping
-    /// `'A'` to a rectangular outline glyph so unit tests run without external fonts.
-    fn minimal_ttf(family: &str) -> Vec<u8> {
+    /// `ch` to a rectangular outline glyph `(0, 0)..(xmax, ymax)` so tests run offline.
+    pub(crate) fn minimal_ttf_with_box(family: &str, ch: u16, xmax: i16, ymax: i16) -> Vec<u8> {
         let mut cmap = Vec::new();
         for v in [0u16, 1] {
             cmap.extend(v.to_be_bytes());
@@ -682,35 +703,21 @@ mod tests {
         cmap.extend(3u16.to_be_bytes());
         cmap.extend(1u16.to_be_bytes());
         cmap.extend(12u32.to_be_bytes());
+        let id_delta = (1i32 - i32::from(ch)) as i16 as u16;
         for v in [
-            4u16,
-            32,
-            0,
-            4,
-            4,
-            1,
-            0,
-            0x0041,
-            0xffff,
-            0,
-            0x0041,
-            0xffff,
-            (-64i16) as u16,
-            1,
-            0,
-            0,
+            4u16, 32, 0, 4, 4, 1, 0, ch, 0xffff, 0, ch, 0xffff, id_delta, 1, 0, 0,
         ] {
             cmap.extend(v.to_be_bytes());
         }
 
         let mut glyf = Vec::new();
-        for v in [1i16, 0, 0, 500, 700] {
+        for v in [1i16, 0, 0, xmax, ymax] {
             glyf.extend(v.to_be_bytes());
         }
         glyf.extend(3u16.to_be_bytes());
         glyf.extend(0u16.to_be_bytes());
         glyf.extend([0x01u8; 4]);
-        for v in [0i16, 500, 0, -500, 0, 0, 700, -700] {
+        for v in [0i16, xmax, 0, -xmax, 0, 0, ymax, -ymax] {
             glyf.extend(v.to_be_bytes());
         }
 
@@ -782,6 +789,10 @@ mod tests {
         sfnt
     }
 
+    pub(crate) fn minimal_ttf(family: &str) -> Vec<u8> {
+        minimal_ttf_with_box(family, 0x0041, 500, 700)
+    }
+
     /// Rebases each face's table offsets into a `ttcf` collection.
     fn collection(faces: &[Vec<u8>]) -> Vec<u8> {
         let mut out = b"ttcf".to_vec();
@@ -829,7 +840,7 @@ mod tests {
             library
                 .missing
                 .get(&TextEncoding::ShiftJis)
-                .is_some_and(|m| m.contains_key(missing_sjis.as_slice()))
+                .is_some_and(|m| m.contains(missing_sjis.as_slice()))
         );
 
         // Plant a corrupt mapping file directly on disk without going through
@@ -860,7 +871,7 @@ mod tests {
             !library
                 .missing
                 .get(&TextEncoding::ShiftJis)
-                .is_some_and(|m| m.contains_key(missing_sjis.as_slice()))
+                .is_some_and(|m| m.contains(missing_sjis.as_slice()))
         );
         let resolved = library.face(&missing_sjis, TextEncoding::ShiftJis).unwrap();
         assert!(!Arc::ptr_eq(&resolved, &default_font));
@@ -882,11 +893,7 @@ mod tests {
                 .face(&unicode_handle, TextEncoding::ShiftJis)
                 .is_err()
         );
-        assert!(
-            library
-                .missing_unicode
-                .contains_key(unicode_handle.as_slice())
-        );
+        assert!(library.missing_unicode.contains(unicode_handle.as_slice()));
         assert_eq!(
             library.register_unicode("UnicodeTarget").unwrap(),
             unicode_handle
@@ -898,6 +905,40 @@ mod tests {
                 .is_ok()
         );
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_font_and_name_reads_can_be_retried() {
+        let root = std::env::temp_dir().join(format!("cmvs-font-retry-{}", std::process::id()));
+        let default = Arc::new(FontVec::try_from_vec(minimal_ttf("Default")).unwrap());
+        let mut writer = FontLibrary::with_directories(default.clone(), Vec::new());
+        writer.set_user_directory(&root);
+        let name = writer.register_unicode("Test Face").unwrap();
+        let font = writer.import_file(minimal_ttf("Test Face"), 0).unwrap();
+        writer.name_imported_font(&name, &font).unwrap();
+
+        let mut reader = FontLibrary::with_directories(default, Vec::new());
+        reader.set_user_directory(&root);
+        let encoding = TextEncoding::ShiftJis;
+        // A directory at the expected path fails to read even for privileged test runners.
+        for handle in [&name, &font] {
+            let path = root
+                .join("font-faces")
+                .join(std::str::from_utf8(handle).unwrap());
+            let backup = path.with_extension("saved");
+            std::fs::rename(&path, &backup).unwrap();
+            std::fs::create_dir(&path).unwrap();
+            if handle == &name {
+                assert!(reader.family_name(&name, encoding).is_err());
+            } else {
+                assert!(reader.face(&name, encoding).is_err());
+            }
+            std::fs::remove_dir(&path).unwrap();
+            std::fs::rename(backup, path).unwrap();
+        }
+        assert_eq!(reader.family_name(&name, encoding).unwrap(), "Test Face");
+        assert!(reader.face(&name, encoding).is_ok());
         std::fs::remove_dir_all(root).unwrap();
     }
 
