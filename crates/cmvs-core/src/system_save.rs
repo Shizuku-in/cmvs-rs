@@ -243,9 +243,13 @@ impl Css1Save {
 pub trait SystemSaveSource {
     fn read(&mut self) -> io::Result<Option<Vec<u8>>>;
 }
+enum SavePath {
+    File(PathBuf),
+    GameTemplate { root: PathBuf, name: Vec<u8> },
+}
 pub struct FileSystemSave {
     fs: Arc<dyn HostFs>,
-    path: PathBuf,
+    path: SavePath,
     /// CVNS `save000.dat` is CSS0, whose layout the decoder checks; read it whole.
     css0: bool,
 }
@@ -253,14 +257,14 @@ impl FileSystemSave {
     pub fn with_fs(path: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Self {
         Self {
             fs,
-            path: path.as_ref().to_owned(),
+            path: SavePath::File(path.as_ref().to_owned()),
             css0: false,
         }
     }
     pub fn css0_with_fs(path: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Self {
         Self {
             fs,
-            path: path.as_ref().to_owned(),
+            path: SavePath::File(path.as_ref().to_owned()),
             css0: true,
         }
     }
@@ -273,6 +277,34 @@ impl FileSystemSave {
             Self::css0_with_fs(path, fs)
         } else {
             Self::with_fs(path, fs)
+        }
+    }
+    pub(crate) fn game_template(
+        profile: &crate::profile::EngineProfile,
+        root: &Path,
+        fs: Arc<dyn HostFs>,
+    ) -> Self {
+        let filename = profile.system_save_file_name();
+        if !profile.is_cvns() {
+            return Self::with_fs(root.join("save").join(filename), fs);
+        }
+        Self {
+            fs,
+            path: SavePath::GameTemplate {
+                root: root.to_owned(),
+                name: format!("save/{filename}").into_bytes(),
+            },
+            css0: true,
+        }
+    }
+    pub(crate) fn set_template_directory(&mut self, directory: &[u8], filename: &str) {
+        if let SavePath::GameTemplate { name, .. } = &mut self.path {
+            name.clear();
+            name.extend_from_slice(directory);
+            if !name.is_empty() && !name.ends_with(b"/") && !name.ends_with(b"\\") {
+                name.push(b'/');
+            }
+            name.extend_from_slice(filename.as_bytes());
         }
     }
     #[cfg(feature = "std-fs")]
@@ -290,7 +322,19 @@ impl FileSystemSave {
 }
 impl SystemSaveSource for FileSystemSave {
     fn read(&mut self) -> io::Result<Option<Vec<u8>>> {
-        let mut file = match self.fs.open_read(&self.path) {
+        let resolved;
+        let path = match &self.path {
+            SavePath::File(path) => path,
+            SavePath::GameTemplate { root, name } => {
+                resolved = match crate::filesystem::resolve_under_with_fs(&*self.fs, root, name) {
+                    Ok(path) => path,
+                    Err(e) if e.is_not_found() => return Ok(None),
+                    Err(e) => return Err(io::Error::other(e)),
+                };
+                &resolved
+            }
+        };
+        let mut file = match self.fs.open_read(path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),

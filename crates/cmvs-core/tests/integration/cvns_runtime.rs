@@ -466,6 +466,119 @@ fn cvns_runtime_0x20c0_blocks_vm_scales_volume_and_consumes_skip_input() {
 }
 
 #[test]
+fn cvns_system_save_reads_registered_template_until_a_user_save_exists() {
+    use cmvs_core::{
+        host::platform::RecordingBackend, profile::Registry, runtime::Runtime,
+        runtime::RuntimeEvent,
+    };
+
+    let (root, _) = cvns_movie_fixture("registered-css0", 0);
+    let user = crate::support::temp_dir::TempDir::new("cvns-css0-user");
+    let (mut payload, starts) = css0_payload();
+    std::fs::create_dir_all(root.join("data/save")).unwrap();
+    std::fs::write(
+        root.join("data/save/save000.dat"),
+        css0(&payload, [1, 0], [1, 2]),
+    )
+    .unwrap();
+    let mut code = Vec::new();
+    push_const(&mut code, 0x201, 0x120, 0);
+    push_const(&mut code, 0x200, 0x100, 0);
+    word(&mut code, 0x2026);
+    for (op, start) in [
+        (0x210b, starts.bit),
+        (0x210c, starts.integer),
+        (0x210d, starts.string),
+    ] {
+        push_const(&mut code, 0x200, 0x100, start);
+        word(&mut code, op);
+    }
+    word(&mut code, 0x21c0);
+    word(&mut code, 0x2000);
+    let start = Script::decode(&script(&code, b"data/save/\0")).unwrap();
+    let game = Registry::builtin()
+        .identify_game(&root, Some("cvns-20090203"))
+        .unwrap();
+    for expected in [-5i32, 42] {
+        if expected == 42 {
+            payload[1..5].copy_from_slice(&expected.to_le_bytes());
+            std::fs::write(user.join("save000.dat"), css0(&payload, [1, 0], [1, 2])).unwrap();
+        }
+        let mut run = Runtime::new(&start, &root, &game, 0).unwrap();
+        run.set_user_data_directory(&user).unwrap();
+        let mut platform = RecordingBackend::default();
+        while run.tick(&mut platform).unwrap() != RuntimeEvent::Yield {}
+        assert_eq!(
+            run.machine().state().integer(starts.integer),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn cvns_preferences_round_trip_menu_settings_and_volume_percentages() {
+    use cmvs_core::{
+        host::platform::RecordingBackend, host::settings::CvnsSettings, profile::Registry,
+        runtime::Runtime, runtime::RuntimeEvent,
+    };
+
+    let (root, _) = cvns_movie_fixture("preferences", 0);
+    let user = crate::support::temp_dir::TempDir::new("cvns-preferences");
+    let game = Registry::builtin()
+        .identify_game(&root, Some("cvns-20090203"))
+        .unwrap();
+    let mut code = Vec::new();
+    let volumes = [50, 100, 25, 75, 60];
+    for (id, value) in
+        (10..=14)
+            .zip(volumes)
+            .chain([(2, 1), (16, 1), (22, 1), (27, 1), (28, 2), (30, 1), (31, 2)])
+    {
+        for arg in [0, value, 0, id] {
+            push_const(&mut code, 0x200, 0x100, arg);
+        }
+        word(&mut code, 0x21ed);
+    }
+    word(&mut code, 0x2000);
+    let start = Script::decode(&script(&code, &[])).unwrap();
+    let mut run = Runtime::new(&start, &root, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    let mut platform = RecordingBackend::default();
+    loop {
+        match run.tick(&mut platform).unwrap() {
+            RuntimeEvent::Progress => {}
+            RuntimeEvent::Yield => break,
+            other => panic!("unexpected runtime event: {other:?}"),
+        }
+    }
+    assert_eq!(run.audio().settings().master, 128);
+    assert!(run.settings().cvns().text_shadow);
+    run.save_preferences(Default::default()).unwrap();
+    drop(run);
+
+    let mut resumed = Runtime::new(&start, &root, &game, 0).unwrap();
+    resumed.set_user_data_directory(&user).unwrap();
+    let audio = resumed.audio().settings();
+    assert_eq!(
+        [audio.master, audio.bgm, audio.se, audio.voice, audio.movie],
+        volumes
+    );
+    assert_eq!(
+        resumed.settings().cvns(),
+        &CvnsSettings {
+            wait_timing: true,
+            text_shadow: true,
+            auto_skip: true,
+            mouse_right_mode: true,
+            wheel_mode: 2,
+            auto_move: true,
+            frame_ctrl: 2,
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
 fn cvns_0x21ab_save_comment_updates_csp_slot_and_skips_slot_zero() {
     use cmvs_core::{
         host::platform::RecordingBackend, profile::Registry, runtime::Runtime,

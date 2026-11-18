@@ -656,6 +656,9 @@ impl Runtime {
         slot: u16,
         before_load: bool,
     ) -> Result<bool, Box<dyn Error + Send + Sync>> {
+        if slot == 0 && self.save_family() == SaveFamily::Cvns {
+            return Ok(false);
+        }
         if self.slot_edit.is_some() {
             return Err("finish the pending slot edit before writing a gameplay save".into());
         }
@@ -722,7 +725,7 @@ impl Runtime {
     }
 
     /// The write 0x22b6 performs, from any point between VM steps. False when no snapshot
-    /// has been taken yet, as in the original.
+    /// has been taken yet or the slot is reserved for the CVNS system save.
     pub fn save_slot(&mut self, slot: u16) -> Result<bool, Box<dyn Error + Send + Sync>> {
         if slot > 999 {
             return Err("save slot outside 0..999".into());
@@ -778,7 +781,7 @@ impl Runtime {
         request: &RuntimeCall,
         slot: u32,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        if slot <= 999 && (self.save_family() != SaveFamily::Cvns || slot != 0) {
+        if slot <= 999 {
             self.write_slot(slot as u16, false)?;
         }
         request.complete(&mut self.machine, 0x4004)?;
@@ -959,7 +962,10 @@ impl Runtime {
         history.restore(&snapshot.history)?;
         self.platform
             .restored_title(&snapshot.scene_title, self.machine.text_encoding())?;
-        if slot < 950 && matches!(self.save_image, SaveImage::Captured(_)) {
+        if slot < 950
+            && matches!(self.save_image, SaveImage::Captured(_))
+            && matches!(self.system_output, Some(SystemOutput::Profile(_)))
+        {
             self.write_slot(LOAD_BACKUP_SLOT, true)?;
         }
         self.machine.install_restore(vm);

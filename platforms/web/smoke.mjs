@@ -44,6 +44,7 @@ await init({module_or_path:readFileSync(new URL('./pkg/cmvs_web_bg.wasm',import.
 const profile='cmvs-20160201';
 console.log("Identifying synthetic game");
 assert.match(identify(profile),/^cmvs-20160201-/);
+assert.throws(() => new WebRuntime(new Uint8Array(),0,'cvns-20090203',false),/CVNS.*audio.*browser/);
 const candidates=[process.env.CMVS_TEST_FONT,'C:/Windows/Fonts/msgothic.ttc','/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'].filter(Boolean);
 const font=candidates.find(existsSync); if(!font) throw Error('Set CMVS_TEST_FONT to a TTF/OTF/TTC file');
 console.log("Creating runtime");

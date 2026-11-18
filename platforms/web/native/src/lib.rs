@@ -240,6 +240,11 @@ impl WebRuntime {
             (!profile.is_empty()).then_some(profile),
             EncodingPolicy::AutoDefaultShiftJis,
         )?;
+        if bootstrap.game.selection.profile.is_cvns() {
+            return Err(
+                "CVNS games require audio support that is unavailable in the browser player".into(),
+            );
+        }
         let font = FontRenderer::from_bytes(font, face)?.with_text_encoding(bootstrap.encoding);
         let mut session = bootstrap.into_session(
             font,

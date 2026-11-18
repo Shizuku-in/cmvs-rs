@@ -22,8 +22,9 @@ internal object GameImport {
             val name = name(context, DocumentsContract.buildDocumentUriUsingTree(tree, id))
             copyTree(context, tree, id, root, cancelled, HashSet(), 0)
             check(cancelled)
-            if (!File(root, "data/pack/script.cpz").isFile ||
-                (!File(root, "data/pack/start.ps3").isFile && !File(root, "data/pack/start.ps2").isFile)
+            val pack = File(root, "data/pack")
+            if (!File(pack, "script.cpz").isFile ||
+                listOf("start.ps3", "start.ps2", "start.pss").none { File(pack, it).isFile }
             ) {
                 throw IOException("请选择包含 data/pack 的游戏根目录")
             }

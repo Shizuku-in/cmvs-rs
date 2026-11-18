@@ -7,6 +7,7 @@ pub(crate) struct PcmWave {
     end: usize,
     pub channels: u16,
     pub rate: u32,
+    pub pcm_bytes: u32,
 }
 impl PcmWave {
     pub fn new(bytes: Arc<[u8]>) -> Result<Self, Box<dyn Error + Send + Sync>> {
@@ -80,6 +81,7 @@ impl PcmWave {
             end,
             channels,
             rate,
+            pcm_bytes: (end - at) as u32,
         })
     }
     pub fn packet(&mut self) -> Option<Vec<f32>> {
@@ -122,6 +124,7 @@ mod tests {
     #[test]
     fn pcm_samples_loop_restart_and_eof() {
         let mut p = AudioProgram::new(fixture(), None, true).unwrap();
+        assert_eq!(p.primary_pcm_bytes().unwrap(), 12);
         assert_eq!((p.channels(), p.sample_rate()), (2, 44100));
         let expected = [-1.0, 32767.0 / 32768.0, 0.0, 0.5, -0.5, 0.0];
         for _ in 0..3 {

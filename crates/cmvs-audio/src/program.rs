@@ -157,6 +157,26 @@ impl AudioProgram {
     pub fn sample_rate(&self) -> u32 {
         self.rate
     }
+    /// Length of the primary track as interleaved 16-bit PCM, before looping or mixing.
+    pub fn primary_pcm_bytes(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
+        match AudioReader::new(self.bytes[0].clone())? {
+            AudioReader::Mv2(m) => {
+                let h = m.header();
+                Ok(h.samples_per_channel * u32::from(h.channels) * 2)
+            }
+            AudioReader::Wave(w) => Ok(w.pcm_bytes),
+            AudioReader::Vorbis(mut v) => {
+                // Count decoder output, including any initial block padding.
+                let mut bytes = 0u32;
+                while let Some(packet) = v.packet()? {
+                    bytes = bytes
+                        .checked_add(packet.len() as u32 * 2)
+                        .ok_or("voice PCM byte count exceeds u32")?;
+                }
+                Ok(bytes)
+            }
+        }
+    }
     fn refill(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.finished {
             return Ok(());
@@ -268,6 +288,9 @@ mod tests {
     fn streams_single_shot_and_looping_mv2_programs() {
         let intro = synthetic_mv2(260, 22050, 1, true);
         let mut single = AudioProgram::new(intro.clone(), None, false).unwrap();
+        assert_eq!(single.primary_pcm_bytes().unwrap(), 520);
+        let stereo = AudioProgram::new(synthetic_mv2(260, 22050, 2, false), None, false).unwrap();
+        assert_eq!(stereo.primary_pcm_bytes().unwrap(), 1040);
         assert_eq!(single.channels(), 1);
         assert_eq!(single.sample_rate(), 22050);
         let mut samples = Vec::new();

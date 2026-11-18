@@ -110,7 +110,12 @@ pub fn part_names(raw: &[u8]) -> Result<Vec<Vec<u8>>, FormatError> {
     if h.kind != 6 {
         return Ok(Vec::new());
     }
-    let mut names = Vec::with_capacity(h.count as usize);
+    // Each part needs a length word, a padded name, and a 16-byte payload header.
+    const MIN_CHUNK_SIZE: usize = 4 + 4 + 16;
+    if u64::from(h.count) > ((raw.len() - HEADER_SIZE) / MIN_CHUNK_SIZE) as u64 {
+        return Err(FormatError("PB2 type-6 chunk count exceeds file size"));
+    }
+    let mut names = Vec::new();
     let mut pos = HEADER_SIZE;
     for _ in 0..h.count {
         let (chunk_size, name, _) = read_part_chunk(raw, pos)?;

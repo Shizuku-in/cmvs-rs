@@ -1,6 +1,8 @@
 //! Additional configuration flags read and written by CVNS (`0x21ec` / `0x21ed`).
-use super::SettingsHost;
-use crate::save_menu::profile_int;
+use super::{Configuration, SettingsHost};
+use crate::{FormatError, save_menu::profile_int};
+
+const TEXT_SHADOW_KEY: &str = "TEXT_SADOW";
 
 /// Configuration fields specific to CVNS that are absent from CMVS `SettingsHost`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +43,7 @@ impl CvnsSettings {
     pub fn from_ini(bytes: &[u8]) -> Self {
         Self {
             wait_timing: profile_int(bytes, "SYSTEM_INFO", "WAIT_TIMING", 0) != 0,
-            text_shadow: profile_int(bytes, "MESSAGE_INFO", "TEXT_SADOW", 0) != 0,
+            text_shadow: profile_int(bytes, "MESSAGE_INFO", TEXT_SHADOW_KEY, 0) != 0,
             auto_skip: profile_int(bytes, "MESSAGE_INFO", "AUTO_SKIP", 0) != 0,
             mouse_right_mode: profile_int(bytes, "SYSTEM_INFO", "MOUSE_RIGHT_MODE", 0) != 0,
             wheel_mode: profile_int(bytes, "MOUSE_INFO", "WHEEL_MODE", 0) as u32,
@@ -49,6 +51,25 @@ impl CvnsSettings {
             frame_ctrl: profile_int(bytes, "VIDEO_INFO", "FRAME_CTRL", 0) as u32,
             ..Self::default()
         }
+    }
+
+    pub(crate) fn write_ini(&self, configuration: &mut Configuration) -> Result<(), FormatError> {
+        for (section, key, value) in [
+            ("SYSTEM_INFO", "WAIT_TIMING", u32::from(self.wait_timing)),
+            (
+                "SYSTEM_INFO",
+                "MOUSE_RIGHT_MODE",
+                u32::from(self.mouse_right_mode),
+            ),
+            ("MESSAGE_INFO", TEXT_SHADOW_KEY, u32::from(self.text_shadow)),
+            ("MESSAGE_INFO", "AUTO_SKIP", u32::from(self.auto_skip)),
+            ("MOUSE_INFO", "WHEEL_MODE", self.wheel_mode),
+            ("MOUSE_INFO", "AUTO_MOVE", u32::from(self.auto_move)),
+            ("VIDEO_INFO", "FRAME_CTRL", self.frame_ctrl),
+        ] {
+            configuration.set_integer(section, key, value)?;
+        }
+        Ok(())
     }
 }
 

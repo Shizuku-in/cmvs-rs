@@ -182,10 +182,11 @@ impl CodeInput {
                 now[code] && !self.previous[code],
             ];
         }
-        if now[4] && !self.previous[4] {
+        // Wheel codes are per-frame pulses, including on consecutive frames.
+        if now[4] {
             input.cvns_wheel = input.cvns_wheel.saturating_sub(1);
         }
-        if now[5] && !self.previous[5] {
+        if now[5] {
             input.cvns_wheel = input.cvns_wheel.saturating_add(1);
         }
         input.cvns_middle_pressed = now[2] && !self.previous[2];
@@ -746,6 +747,22 @@ mod tests {
         while !matches!(vm.step().unwrap(), crate::machine::Step::System { .. }) {}
         let pc = vm.pc();
         (vm, pc)
+    }
+
+    #[test]
+    fn cvns_wheel_counts_consecutive_pulses_in_both_directions() {
+        let mut codes = CodeInput::default();
+        let bindings = KeyBindings::default();
+        let mut input = ActionInput::default();
+        for (code, expected) in [(4, -2), (5, 2)] {
+            let mut now = [false; 128];
+            now[code] = true;
+            codes.update(&bindings, &now, &mut input);
+            codes.update(&bindings, &now, &mut input);
+            assert_eq!(input.cvns_wheel, expected);
+            let (mut vm, pc) = vm_pending(0x439, &[]);
+            try_handle_cvns(&mut Call::new(&mut vm, pc, 0x439), &mut input).unwrap();
+        }
     }
 
     #[test]

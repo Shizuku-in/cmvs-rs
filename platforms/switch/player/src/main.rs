@@ -14,7 +14,7 @@ mod sys;
 
 use cmvs_console::{
     ButtonMap, Console, Labels,
-    backend::ConsoleBackend,
+    backend::{ConsoleBackend, ConsoleFrame},
     controls::{self, Controls},
     encoding::{self, SystemFont, UNCERTAIN_ENCODING_MESSAGE},
     error_screen, format_tick_error, library, menu, millis,
@@ -299,7 +299,7 @@ fn run(
                     if session.runtime.capture_due() {
                         session.runtime.supply_capture(frame.clone())?;
                     }
-                    backend.frame = Some(frame);
+                    backend.frame = Some(ConsoleFrame::Canvas(frame));
                 }
             }
             FrameOutcome::Stopped(event) => return Err(format!("game stopped: {event:?}").into()),

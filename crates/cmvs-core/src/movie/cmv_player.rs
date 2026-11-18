@@ -46,8 +46,8 @@ impl Movie {
 }
 
 impl MovieHost {
-    /// Real audio time is absolute and never supplemented by wall time. Ended releases
-    /// the player, including when audio duration differs from the container's frame limit.
+    /// A soundtrack supplies an absolute playback clock. Silent CVNS movies advance by
+    /// frame delta until they reach the container's frame limit.
     pub(super) fn advance_cmv_with_clock(
         &mut self,
         delta_ms: u32,
@@ -57,6 +57,7 @@ impl MovieHost {
         let Some(movie) = &self.player else {
             return Ok(());
         };
+        let clock = clock.filter(|_| !(self.player_modal && movie.index.header.audio_flag == 0));
         if clock == Some(MovieAudioClock::Ended) {
             self.player = None;
             self.cmv_reader = None;
@@ -143,16 +144,16 @@ impl MovieHost {
                     None
                 };
                 if let Some((path, index)) = &opened {
-                    if let Some(audio) = index.audio() {
+                    if modal && index.header.audio_flag == 0 {
+                        // cvns-20090203 0x43e760 skips soundtrack setup when header +40 == 0.
+                        backend.stop_movie_audio()?;
+                    } else if let Some(audio) = index.audio() {
                         backend.play_movie_audio(&AudioRequest::PlayMovieAudio {
                             path: path.clone(),
                             offset: audio.file_offset(&index.header),
                             size: audio.stored_size,
                             volume: settings.master.wrapping_mul(settings.movie) >> 8,
                         })?;
-                    } else if modal && index.header.audio_flag == 0 {
-                        // cvns-20090203 0x43e760 skips soundtrack setup when header +40 == 0.
-                        backend.stop_movie_audio()?;
                     } else {
                         // 0x1400397e0/0x1400397b0 fetch the soundtrack; a CMV without one is the
                         // MOG_INputMemory crash RxCMVS notes, so it is rejected here.

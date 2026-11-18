@@ -15,6 +15,7 @@ use rodio::{DeviceSinkBuilder, MixerDeviceSink};
 use rodio::{
     Player, Source,
     mixer::{Mixer, MixerSource},
+    source::UniformSourceIterator,
 };
 use std::{
     collections::BTreeMap,
@@ -24,7 +25,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -133,6 +134,37 @@ impl Source for StreamSource {
     }
 }
 
+/// Apply channel balance to stereo frames, including duplicated mono input.
+struct StereoBalance {
+    source: UniformSourceIterator<StreamSource>,
+    pan: Arc<AtomicI32>,
+    right: bool,
+}
+impl Iterator for StereoBalance {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        let sample = self.source.next()?;
+        let pan = self.pan.load(Ordering::Relaxed);
+        let attenuation = if self.right { -pan } else { pan }.max(0);
+        self.right = !self.right;
+        Some(sample * ((100 - attenuation) as f32 / 100.0))
+    }
+}
+impl Source for StereoBalance {
+    fn current_span_len(&self) -> Option<usize> {
+        self.source.current_span_len()
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        self.source.channels()
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.source.sample_rate()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.source.total_duration()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Envelope {
     from: f32,
@@ -172,6 +204,7 @@ struct Channel {
     gain: f32,
     duck_gain: f32,
     script_gain: f32,
+    pan: Arc<AtomicI32>,
 }
 impl Channel {
     fn check(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -375,7 +408,7 @@ impl NativeAudio {
         let envelope = (fade_ms != 0).then(|| Envelope::new(0.0, 1.0, fade_ms));
         sink.set_volume(if envelope.is_some() { 0.0 } else { gain });
         let bytes = program.bytes.clone();
-        sink.append(StreamSource {
+        let source = StreamSource {
             output_enabled: self.output_enabled.clone(),
             mixer_gain: self.mixer_gain.clone(),
             host_control: self.host_control.clone(),
@@ -383,6 +416,13 @@ impl NativeAudio {
             compression,
             fault: fault.clone(),
             failed: false,
+        };
+        let rate = source.sample_rate();
+        let pan = Arc::new(AtomicI32::new(0));
+        sink.append(StereoBalance {
+            source: UniformSourceIterator::new(source, rodio::ChannelCount::new(2).unwrap(), rate),
+            pan: Arc::clone(&pan),
+            right: false,
         });
         self.mixer.add(queue);
         Channel {
@@ -395,6 +435,7 @@ impl NativeAudio {
             gain,
             duck_gain: 1.0,
             script_gain: 1.0,
+            pan,
         }
     }
     fn fade(channel: &mut Option<Channel>, ms: u32) {
@@ -699,6 +740,9 @@ impl AudioBackend for NativeAudio {
         let program = AudioProgram::from_shared(current.bytes.clone(), looped)?;
         let mut candidate = self.prepare(program, (current.gain * 256.0) as u32, 0);
         candidate.script_gain = current.script_gain;
+        candidate
+            .pan
+            .store(current.pan.load(Ordering::Relaxed), Ordering::Relaxed);
         Self::set_gain(&mut candidate, current.gain);
         // All fallible preparation precedes replacing the old device channel.
         self.se[slot] = Some(candidate);
@@ -721,55 +765,15 @@ impl AudioBackend for NativeAudio {
         Ok(())
     }
     fn play_voice(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
-        let AudioRequest::PlayVoice {
-            channel,
-            name,
-            volume,
-            start,
-            rate_bits,
-            mixer,
-        } = request
-        else {
-            return Err("expected PlayVoice".into());
-        };
-        let slot = usize::from(*channel);
-        if slot >= VOICE_CHANNELS {
-            return Err("voice channel out of range".into());
-        }
-        let data = self.load(ResourceKind::Voice, name)?;
-        // The device releases the channel before loading, also when loading fails.
-        self.voice[slot] = None;
-        let Some(data) = data else {
-            return Ok(false);
-        };
-        let program = AudioProgram::new(data, None, false)?;
-        let rate = f32::from_bits(*rate_bits);
-        let compression =
-            match VoiceCompressor::new(rate, program.sample_rate(), program.channels())? {
-                Some(compressor) => Some(Compression {
-                    compressor,
-                    chunk_bytes: mixer
-                        .mono_request(program.sample_rate())
-                        .ok_or("SOUND_BUFFER outside 0..3 leaves the mixer chunk unset")?,
-                    chunk: Vec::new(),
-                    at: 0,
-                    last: false,
-                }),
-                None => None,
-            };
-        println!(
-            "# native voice[{channel}] {}: {} Hz, {} channels, rate={rate}, compressed={}, started={start}",
-            name.escape_ascii(),
-            program.sample_rate(),
-            program.channels(),
-            compression.is_some()
-        );
-        let candidate = self.prepare_with(program, compression, *volume, 0);
-        if *start {
-            candidate.sink.play();
-        }
-        self.voice[slot] = Some(candidate);
-        Ok(true)
+        self.load_voice(request, None)
+    }
+    fn play_voice_with_len(
+        &mut self,
+        request: &AudioRequest,
+    ) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
+        let mut bytes = 0;
+        let loaded = self.load_voice(request, Some(&mut bytes))?;
+        Ok(loaded.then_some(bytes))
     }
     fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         *self
@@ -813,10 +817,14 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
-    fn set_se_pan(&mut self, channel: u8, _pan: i32) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.se
+    fn set_se_pan(&mut self, channel: u8, pan: i32) -> Result<(), Box<dyn Error + Send + Sync>> {
+        if let Some(sound) = self
+            .se
             .get(usize::from(channel))
-            .ok_or("SE channel out of range")?;
+            .ok_or("SE channel out of range")?
+        {
+            sound.pan.store(pan.clamp(-100, 100), Ordering::Relaxed);
+        }
         Ok(())
     }
     fn start_voice(
@@ -841,14 +849,14 @@ impl AudioBackend for NativeAudio {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Self::set_slot_script_gain(&mut self.voice, channel, "voice", multiplier)
     }
-    fn set_voice_pan(
-        &mut self,
-        channel: u8,
-        _pan: i32,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.voice
+    fn set_voice_pan(&mut self, channel: u8, pan: i32) -> Result<(), Box<dyn Error + Send + Sync>> {
+        if let Some(sound) = self
+            .voice
             .get(usize::from(channel))
-            .ok_or("voice channel out of range")?;
+            .ok_or("voice channel out of range")?
+        {
+            sound.pan.store(pan.clamp(-100, 100), Ordering::Relaxed);
+        }
         Ok(())
     }
     fn play_aux_se(
@@ -1070,6 +1078,65 @@ impl AudioBackend for NativeAudio {
 }
 
 impl NativeAudio {
+    fn load_voice(
+        &mut self,
+        request: &AudioRequest,
+        pcm_bytes: Option<&mut u32>,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
+        let AudioRequest::PlayVoice {
+            channel,
+            name,
+            volume,
+            start,
+            rate_bits,
+            mixer,
+        } = request
+        else {
+            return Err("expected PlayVoice".into());
+        };
+        let slot = usize::from(*channel);
+        if slot >= VOICE_CHANNELS {
+            return Err("voice channel out of range".into());
+        }
+        let data = self.load(ResourceKind::Voice, name)?;
+        // The device releases the channel before loading, also when loading fails.
+        self.voice[slot] = None;
+        let Some(data) = data else {
+            return Ok(false);
+        };
+        let program = AudioProgram::new(data, None, false)?;
+        if let Some(length) = pcm_bytes {
+            *length = program.primary_pcm_bytes()?;
+        }
+        let rate = f32::from_bits(*rate_bits);
+        let compression =
+            match VoiceCompressor::new(rate, program.sample_rate(), program.channels())? {
+                Some(compressor) => Some(Compression {
+                    compressor,
+                    chunk_bytes: mixer
+                        .mono_request(program.sample_rate())
+                        .ok_or("SOUND_BUFFER outside 0..3 leaves the mixer chunk unset")?,
+                    chunk: Vec::new(),
+                    at: 0,
+                    last: false,
+                }),
+                None => None,
+            };
+        println!(
+            "# native voice[{channel}] {}: {} Hz, {} channels, rate={rate}, compressed={}, started={start}",
+            name.escape_ascii(),
+            program.sample_rate(),
+            program.channels(),
+            compression.is_some()
+        );
+        let candidate = self.prepare_with(program, compression, *volume, 0);
+        if *start {
+            candidate.sink.play();
+        }
+        self.voice[slot] = Some(candidate);
+        Ok(true)
+    }
+
     fn play_bgm_with_loop(
         &mut self,
         request: &AudioRequest,
@@ -1130,6 +1197,69 @@ impl NativeAudio {
 #[cfg(test)]
 mod output_gate_tests {
     use super::*;
+
+    #[test]
+    fn cvns_voice_length_and_channel_balance_reach_pull_output() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+        let voice = |name: &[u8]| AudioRequest::PlayVoice {
+            channel: 0,
+            name: name.to_vec(),
+            volume: 256,
+            start: false,
+            rate_bits: 1.0f32.to_bits(),
+            mixer: Default::default(),
+        };
+        for is_voice in [true, false] {
+            let (mut audio, mut output) = NativeAudio::pull(&root, 8000, 2).unwrap();
+            audio
+                .configure_paths(&BTreeMap::from([
+                    ((0x2012, 0), b"audio\\".to_vec()),
+                    ((0x2014, 0), b"audio\\".to_vec()),
+                ]))
+                .unwrap();
+            if is_voice {
+                assert_eq!(
+                    audio.play_voice_with_len(&voice(b"missing.ogg")).unwrap(),
+                    None
+                );
+                assert_eq!(
+                    audio.play_voice_with_len(&voice(b"mono440.ogg")).unwrap(),
+                    Some(768 * 2)
+                );
+                audio.set_voice_pan(0, -100).unwrap();
+                audio.start_voice(0, true).unwrap();
+            } else {
+                assert!(
+                    audio
+                        .play(&AudioRequest::PlaySe {
+                            channel: 47,
+                            name: b"mono440.ogg".to_vec(),
+                            volume: 256,
+                            looped: true,
+                            flag: false,
+                            fade_in_ms: 0,
+                        })
+                        .unwrap()
+                );
+                audio.set_se_pan(47, -100).unwrap();
+                audio.start(47, true).unwrap();
+            }
+            let mut pcm = [0; 2048];
+            output.fill_i16(&mut pcm);
+            let frames = pcm.as_chunks::<2>().0;
+            assert!(frames.iter().all(|f| f[1] == 0));
+            assert!(frames.iter().any(|f| f[0] != 0));
+            if is_voice {
+                audio.set_voice_pan(0, 100).unwrap();
+            } else {
+                audio.set_se_pan(47, 100).unwrap();
+            }
+            output.fill_i16(&mut pcm);
+            let frames = pcm.as_chunks::<2>().0;
+            assert!(frames.iter().all(|f| f[0] == 0));
+            assert!(frames.iter().any(|f| f[1] != 0));
+        }
+    }
 
     #[test]
     fn pull_output_resamples_channels_and_pads_with_silence() {

@@ -625,6 +625,7 @@ impl Runtime {
         if game.selection.profile.uses_window_full_move() {
             platform.configure_window_full_move(text);
         }
+        let canonical_root = fs.canonicalize(root)?;
         Ok(Self {
             slot_edit: None,
             main_script_name: match game.files.start_name().as_slice() {
@@ -652,12 +653,7 @@ impl Runtime {
             )?,
             saves: DirectorySaves::with_fs(root.join("save"), Arc::clone(&fs))?,
             save_menu,
-            // CVNS keeps CSS0 in the save directory the start script registers (0x2026).
-            system_source: FileSystemSave::for_profile_with_fs(
-                profile,
-                root.join("save").join(profile.system_save_file_name()),
-                Arc::clone(&fs),
-            ),
+            system_source: FileSystemSave::game_template(profile, &canonical_root, Arc::clone(&fs)),
             system_host: SystemSaveHost::for_profile(profile),
             system_output: None,
             assets: DirectoryAssets::with_fs(root, Arc::clone(&fs))?,
@@ -666,7 +662,7 @@ impl Runtime {
             buttons,
             movies: MovieHost::for_profile(game.selection.profile),
             scene_movies: ResourceArchives::with_fs(root, Arc::clone(&fs))?,
-            root: fs.canonicalize(root)?,
+            root: canonical_root,
             sequence: SequenceHost::default(),
             camera,
             capture: ScreenCapture::default(),
@@ -1210,20 +1206,13 @@ impl Runtime {
         let saves = DirectorySaves::with_fs(profile.directory(), Arc::clone(&save_fs))?;
         let configuration = profile.read_configuration()?;
         let primary = profile.path();
-        let (source, source_fs) = if save_fs.try_exists(&primary)? {
-            (primary, save_fs)
-        } else {
-            (
-                self.root
-                    .join("save")
-                    .join(engine_profile.system_save_file_name()),
-                Arc::clone(&self.fs),
-            )
-        };
+        let has_primary = save_fs.try_exists(&primary)?;
         if let Some(configuration) = configuration {
             self.install_configuration(configuration)?;
         }
-        self.system_source = self.open_system_source(source, source_fs);
+        if has_primary {
+            self.system_source = self.open_system_source(primary, save_fs);
+        }
         self.saves = saves;
         self.system_output = Some(SystemOutput::Profile(profile));
         Ok(())
@@ -1481,6 +1470,15 @@ impl Runtime {
                 hosts.bootstrap = Some(&mut self.bootstrap);
             }
             let flow = entry.run(&mut self.machine, &mut hosts)?;
+            if command == crate::cvns::cmd::SAVE_DIRECTORY
+                && let Some(directory) = self.bootstrap.paths().get(&(0x2016, 0))
+            {
+                self.system_source
+                    .set_template_directory(directory, self.gate.profile().system_save_file_name());
+                if !matches!(self.system_output, Some(SystemOutput::Profile(_))) {
+                    self.saves.set_registered_directory(&self.root, directory);
+                }
+            }
             if self.gate.profile().is_cvns() {
                 self.sync_cvns_persistent_starts()?;
             }

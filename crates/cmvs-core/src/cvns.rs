@@ -13,6 +13,7 @@ pub const LAST_COMMAND: u16 = 0x7ff;
 /// subsystems outside the dispatch registry table.
 pub mod cmd {
     pub const FRAME_INTERVAL: u16 = 0x402;
+    pub const SAVE_DIRECTORY: u16 = 0x426;
     pub const CAPTURE_SCREEN: u16 = 0x45a;
     pub const PERSISTENT_BIT_START: u16 = 0x50b;
     pub const PERSISTENT_INT_START: u16 = 0x50c;

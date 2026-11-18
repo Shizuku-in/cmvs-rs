@@ -92,6 +92,12 @@ impl Runtime {
         }
         configuration.set_string("MESSAGE_INFO", "FONT", self.settings.font_face())?;
         let audio = self.audio.settings();
+        let [master, music, se, voice, movie] = if self.gate.profile().is_cvns() {
+            self.settings.cvns().write_ini(&mut configuration)?;
+            std::array::from_fn(|kind| self.audio.cvns_volume(kind))
+        } else {
+            [audio.master, audio.bgm, audio.se, audio.voice, audio.movie]
+        };
         let duck = self.audio.voice_ducking();
         let background_output = u32::from(self.audio.background_output());
         for (key, value) in [
@@ -99,11 +105,11 @@ impl Runtime {
             ("MUSIC_USE", u32::from(audio.bgm_enabled)),
             ("SE_USE", u32::from(audio.se_enabled)),
             ("VOICE_USE", u32::from(audio.voice_enabled)),
-            ("MASTER_VOLUME", audio.master),
-            ("MUSIC_VOLUME", audio.bgm),
-            ("SE_VOLUME", audio.se),
-            ("VOICE_VOLUME", audio.voice),
-            ("VIDEO_VOLUME", audio.movie),
+            ("MASTER_VOLUME", master),
+            ("MUSIC_VOLUME", music),
+            ("SE_VOLUME", se),
+            ("VOICE_VOLUME", voice),
+            ("VIDEO_VOLUME", movie),
             ("VOICE_FADE_VOLOME", duck.percent),
             ("VOICE_FADE_TIMER", duck.fade_ms),
             ("VOICE_FADE_WAIT", duck.wait_ms),

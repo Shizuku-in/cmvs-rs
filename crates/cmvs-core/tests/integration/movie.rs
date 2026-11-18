@@ -617,8 +617,12 @@ fn cvns_modal_player_yields_allows_silent_cmv3_and_clears_on_missing_or_end() {
     assert!(movies.has_cvns_modal_player());
     assert_eq!(audio.requests(), &[AudioRequest::StopMovieAudio]);
 
-    // Natural completion clears both player and modal flag.
-    movies.advance(125);
+    // A stopped audio device reports Ended on every update of a silent movie.
+    let clock = Some(cmvs_core::host::audio::MovieAudioClock::Ended);
+    movies.advance_with_clock(42, clock, &mut files).unwrap();
+    assert_eq!(movies.player().unwrap().frame, 1);
+    assert!(movies.has_cvns_modal_player());
+    movies.advance_with_clock(83, clock, &mut files).unwrap();
     assert!(!movies.has_player());
     assert!(!movies.has_cvns_modal_player());
 

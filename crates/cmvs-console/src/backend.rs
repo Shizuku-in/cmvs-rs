@@ -4,7 +4,7 @@ use cmvs_core::{
     host::platform::MessageDialogRequest, host::platform::MessageDialogResult,
     host::platform::PlatformBackend, host::platform::PlatformRequest,
     host::platform::TextDialogRequest, host::platform::TextDialogResult,
-    host::settings::DisplayPreferences, render::raster::RgbaImage,
+    host::settings::DisplayPreferences, render::raster::RgbaImage, render::raster::movie_canvas,
 };
 use std::error::Error;
 
@@ -22,12 +22,33 @@ pub type TextDialogFn = fn(
     &mut dyn FnMut(&str) -> Result<(), String>,
 ) -> Result<Option<String>, &'static str>;
 
+/// The last software-presented frame, with decoded movie pixels retained for readback.
+pub enum ConsoleFrame {
+    Canvas(RgbaImage),
+    Movie { image: RgbaImage, linear: bool },
+}
+
+impl ConsoleFrame {
+    pub fn image(&self) -> &RgbaImage {
+        match self {
+            Self::Canvas(image) | Self::Movie { image, .. } => image,
+        }
+    }
+
+    pub fn readback(&self, size: [u32; 2]) -> Result<RgbaImage, cmvs_core::FormatError> {
+        match self {
+            Self::Canvas(image) => Ok(image.clone()),
+            Self::Movie { image, linear } => movie_canvas(image, size, *linear),
+        }
+    }
+}
+
 /// Shared `PlatformBackend` adapter parameterized by console GPU readback and keyboard dialog.
 pub struct ConsoleBackend<'a, G> {
     pub display: DisplayPreferences,
     pub size: [u32; 2],
     /// Last completed software frame when software compositing owns the screen.
-    pub frame: Option<RgbaImage>,
+    pub frame: Option<ConsoleFrame>,
     pub gpu: Option<&'a mut G>,
     /// A modal system keyboard/dialog ran since the host last cleared this.
     pub modal_shown: bool,
@@ -103,9 +124,8 @@ impl<G: ConsoleGpu> PlatformBackend for ConsoleBackend<'_, G> {
         if let Some(frame) = self.gpu.as_deref_mut().and_then(ConsoleGpu::read_presented) {
             return frame;
         }
-        self.frame
-            .clone()
-            .ok_or_else(|| "no completed frame".into())
+        let frame = self.frame.as_ref().ok_or("no completed frame")?;
+        Ok(frame.readback(self.size)?)
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         match request {
@@ -150,6 +170,22 @@ mod tests {
     }
 
     #[test]
+    fn decoded_movie_readback_uses_the_logical_canvas() {
+        let image = RgbaImage::new(1, 1, vec![10, 20, 30, 255]).unwrap();
+        let frame = ConsoleFrame::Movie {
+            image,
+            linear: false,
+        };
+        let canvas = frame.readback([3, 1]).unwrap();
+        assert_eq!([canvas.width(), canvas.height()], [3, 1]);
+        assert_eq!(
+            canvas.pixels(),
+            &[0, 0, 0, 255, 10, 20, 30, 255, 0, 0, 0, 255]
+        );
+        assert_eq!(frame.image().width(), 1);
+    }
+
+    #[test]
     fn rejected_request_keeps_preferences_and_readback_prefers_presented_gpu_frame() {
         let mut backend: ConsoleBackend<'_, FakeGpu> = ConsoleBackend {
             display: DisplayPreferences::default(),
@@ -173,7 +209,7 @@ mod tests {
         assert!(backend.read_device_frame().is_err());
 
         let sw = RgbaImage::new(1, 1, vec![10, 20, 30, 255]).unwrap();
-        backend.frame = Some(sw);
+        backend.frame = Some(ConsoleFrame::Canvas(sw));
         assert_eq!(
             backend.read_device_frame().unwrap().pixels(),
             &[10, 20, 30, 255]

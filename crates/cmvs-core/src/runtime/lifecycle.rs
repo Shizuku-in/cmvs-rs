@@ -785,6 +785,7 @@ mod tests {
             }
             code.extend(op.to_le_bytes());
         };
+        call(&mut code, 0x2026, &[0, 0x8000_0000 | 7]);
         call(&mut code, 0x210b, &[16]);
         call(&mut code, 0x210c, &[8]);
         call(&mut code, 0x210d, &[3]);
@@ -793,6 +794,8 @@ mod tests {
         call(&mut code, 0x200a, &[0x223344]);
         call(&mut code, 0x21a0, &[]); // 0x22b2 capture snapshot
         let after_capture_pc = code.len();
+        call(&mut code, 0x21a1, &[1]);
+        let after_menu_pc = code.len();
         call(&mut code, 0x21ae, &[0]); // slot 0 (save000.dat) -> 0
         let after_exists0_pc = code.len();
         call(&mut code, 0x21ae, &[1]); // slot 1 (CSP1) -> 1
@@ -842,6 +845,10 @@ mod tests {
         run.machine.state_mut().set_string(1, b"local1").unwrap();
         run.machine.state_mut().set_string(3, b"persist3").unwrap();
         run.machine.state_mut().set_string(6, b"Miharu").unwrap();
+        run.machine
+            .state_mut()
+            .set_string(7, b"data\\Saves\\")
+            .unwrap();
         run.save_title.restore(b"Chapter".to_vec());
         run.save_info.restore([101, 202, 303]);
         let mut bmp = Vec::new();
@@ -868,6 +875,16 @@ mod tests {
             ));
         }
         assert!(run.save_slot(1).unwrap());
+        while run.machine.pc() != after_menu_pc {
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+        }
+        assert_eq!(run.save_menu.menu().unwrap().latest, Some(0));
+
+        let system = std::fs::read(user.join("save000.dat")).unwrap();
+        assert!(system.starts_with(b"CSS0"));
+        assert!(!run.save_slot(0).unwrap());
+        assert_eq!(std::fs::read(user.join("save000.dat")).unwrap(), system);
+        assert!(!user.join("save999.dat").exists());
 
         run.save_info = Default::default();
         while run.machine.pc() != after_exists0_pc {
@@ -910,6 +927,28 @@ mod tests {
             Some(b"persist_new".as_slice())
         );
         assert_eq!(run.save_info.values(), [Some(101), Some(202), Some(303)]);
+
+        let registered = root.join("data/Saves");
+        std::fs::create_dir_all(&registered).unwrap();
+        std::fs::copy(user.join("save001.dat"), registered.join("save001.dat")).unwrap();
+        let mut read_only = Runtime::new(&script, &root, &game, 0).unwrap();
+        read_only
+            .machine
+            .state_mut()
+            .set_string(7, b"data\\Saves\\")
+            .unwrap();
+        while read_only.machine.pc() != after_menu_pc {
+            let event = read_only.tick(&mut backend).unwrap();
+            assert!(matches!(
+                event,
+                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured
+            ));
+        }
+        assert_eq!(read_only.save_menu.menu().unwrap().latest, Some(0));
+        read_only.load_slot(1, &mut backend).unwrap();
+        assert_eq!(read_only.machine.state().integer(2), Some(123));
+        assert!(!registered.join("save998.dat").exists());
+        drop(run);
         let _ = std::fs::remove_dir_all(user);
         let _ = std::fs::remove_dir_all(root);
     }

@@ -13,7 +13,7 @@ mod sys;
 
 use cmvs_console::{
     ButtonMap, Console, Labels,
-    backend::ConsoleBackend,
+    backend::{ConsoleBackend, ConsoleFrame},
     controls::{self, Controls},
     encoding::{self, SystemFont, UNCERTAIN_ENCODING_MESSAGE},
     error_screen, format_tick_error, library, menu, millis,
@@ -107,6 +107,20 @@ fn view_rect(view: Viewport) -> [f32; 4] {
         view.width as f32,
         view.height as f32,
     ]
+}
+
+/// Maps the movie's letterboxed rectangle from the logical canvas to the screen.
+fn movie_view_rect(view: Viewport, canvas: [u32; 2], movie: [u32; 2]) -> Result<[f32; 4]> {
+    let fitted = Viewport::new(movie, canvas, 1)?;
+    let [left, top, width, height] = view_rect(view);
+    let sx = width / canvas[0] as f32;
+    let sy = height / canvas[1] as f32;
+    Ok([
+        left + fitted.left as f32 * sx,
+        top + fitted.top as f32 * sy,
+        fitted.width as f32 * sx,
+        fitted.height as f32 * sy,
+    ])
 }
 
 fn run(
@@ -256,7 +270,6 @@ fn run(
                     [at[0] as f32, at[1] as f32]
                 });
                 match &mut backend.gpu {
-                    // Movie frames are shown as decoded, like software frames.
                     Some(gpu) if session.runtime.movie_frame().is_none() => {
                         render_gpu(&mut session, gpu)?;
                         gpu.present(view_rect(view), linear, cursor)?;
@@ -268,19 +281,44 @@ fn run(
                         backend.frame = None;
                     }
                     gpu => {
-                        let frame = session.compose_cpu_frame(linear, false)?;
-                        window.present(
-                            frame.pixels(),
-                            [frame.width(), frame.height()],
-                            view_rect(view),
-                            linear,
-                            cursor,
-                        )?;
+                        let (mut frame, rect) = if let Some(image) = session.runtime.movie_frame() {
+                            let rect =
+                                movie_view_rect(view, size, [image.width(), image.height()])?;
+                            (
+                                ConsoleFrame::Movie {
+                                    image: image.clone(),
+                                    linear,
+                                },
+                                rect,
+                            )
+                        } else {
+                            let image = session.compose_cpu_frame(linear, false)?;
+                            (ConsoleFrame::Canvas(image), view_rect(view))
+                        };
+                        let image = frame.image();
+                        let dimensions = [image.width(), image.height()];
+                        if let Err(error) =
+                            window.present(image.pixels(), dimensions, rect, linear, cursor)
+                        {
+                            if !matches!(frame, ConsoleFrame::Movie { .. }) || dimensions == size {
+                                return Err(error.into());
+                            }
+                            // Large decoded frames may exceed the Vita texture limits.
+                            let canvas = frame.readback(size)?;
+                            window.present(
+                                canvas.pixels(),
+                                size,
+                                view_rect(view),
+                                linear,
+                                cursor,
+                            )?;
+                            frame = ConsoleFrame::Canvas(canvas);
+                        }
                         if let Some(gpu) = gpu {
                             gpu.forget_presented();
                         }
                         if session.runtime.capture_due() {
-                            session.runtime.supply_capture(frame.clone())?;
+                            session.runtime.supply_capture(frame.readback(size)?)?;
                         }
                         backend.frame = Some(frame);
                     }
@@ -505,5 +543,15 @@ mod tests {
         // 800x600 contained in 960x544: a 725 px wide picture centred.
         let view = Viewport::new([800, 600], SCREEN, 1).unwrap();
         assert_eq!(view_rect(view), [117.0, 0.0, 725.0, 544.0]);
+    }
+
+    #[test]
+    fn movie_presentation_preserves_letterboxing_inside_the_screen_viewport() {
+        let canvas = [1280, 720];
+        let view = Viewport::new(canvas, [960, 544], 1).unwrap();
+        assert_eq!(
+            movie_view_rect(view, canvas, [640, 480]).unwrap(),
+            [120.0, 2.0, 720.0, 540.0]
+        );
     }
 }

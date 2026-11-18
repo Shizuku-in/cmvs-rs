@@ -1,6 +1,6 @@
 //! Read-only gameplay-save header scanning, signature queries and menu state.
 //! Header recognition does not validate or restore the saved engine snapshot.
-use crate::filesystem::HostFs;
+use crate::filesystem::{File, HostFs, resolve_under_with_fs};
 use crate::{FormatError, bytecode::DecodeError, dispatch::Call};
 use std::{
     error::Error,
@@ -17,32 +17,45 @@ pub trait SaveSource {
     fn read_header(&mut self, slot: u16) -> io::Result<Option<Vec<u8>>>;
 }
 
-/// An explicitly selected directory; no writes or game-relative path inference.
-/// A missing directory represents an empty set of saves on first startup.
+/// A read-only slot directory. A missing directory represents an empty set of saves.
 pub struct DirectorySaves {
     fs: Arc<dyn HostFs>,
-    root: PathBuf,
+    directory: SlotDirectory,
+}
+
+enum SlotDirectory {
+    Fixed(PathBuf),
+    Registered { game_root: PathBuf, prefix: Vec<u8> },
 }
 
 impl DirectorySaves {
     pub fn with_fs(root: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> io::Result<Self> {
-        let root = match fs.canonicalize(root.as_ref()) {
-            Ok(root) => root,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                return Ok(Self {
-                    root: fs.absolute(root.as_ref())?,
-                    fs,
-                });
+        let directory = match fs.canonicalize(root.as_ref()) {
+            Ok(root) if fs.is_dir(&root) => root,
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "save root is not a directory",
+                ));
             }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => fs.absolute(root.as_ref())?,
             Err(e) => return Err(e),
         };
-        if !fs.is_dir(&root) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "save root is not a directory",
-            ));
+        Ok(Self {
+            fs,
+            directory: SlotDirectory::Fixed(directory),
+        })
+    }
+
+    pub(crate) fn set_registered_directory(&mut self, game_root: &Path, directory: &[u8]) {
+        let mut prefix = directory.to_vec();
+        if !prefix.is_empty() && !prefix.ends_with(b"/") && !prefix.ends_with(b"\\") {
+            prefix.push(b'/');
         }
-        Ok(Self { fs, root })
+        self.directory = SlotDirectory::Registered {
+            game_root: game_root.to_owned(),
+            prefix,
+        };
     }
 
     #[cfg(feature = "std-fs")]
@@ -52,15 +65,31 @@ impl DirectorySaves {
 }
 
 impl DirectorySaves {
+    fn open_slot(&self, slot: u16) -> io::Result<Option<File>> {
+        let filename = format!("save{slot:03}.dat");
+        let path = match &self.directory {
+            SlotDirectory::Fixed(root) => root.join(filename),
+            SlotDirectory::Registered { game_root, prefix } => {
+                let mut name = prefix.clone();
+                name.extend_from_slice(filename.as_bytes());
+                match resolve_under_with_fs(&*self.fs, game_root, &name) {
+                    Ok(path) => path,
+                    Err(e) if e.is_not_found() => return Ok(None),
+                    Err(e) => return Err(io::Error::other(e)),
+                }
+            }
+        };
+        match self.fs.open_read(&path) {
+            Ok(file) => Ok(Some(file)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// A whole slot file for loading (0x1400087c0), bounded by the research payload limit.
     pub(crate) fn read_slot(&self, slot: u16) -> io::Result<Option<Vec<u8>>> {
-        let file = match self
-            .fs
-            .open_read(&self.root.join(format!("save{slot:03}.dat")))
-        {
-            Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e),
+        let Some(file) = self.open_slot(slot)? else {
+            return Ok(None);
         };
         let mut bytes = Vec::new();
         file.take(crate::MAX_PAYLOAD as u64 + 1)
@@ -83,13 +112,8 @@ impl SaveSource for DirectorySaves {
                 "save slot outside 0..999",
             ));
         }
-        let file = match self
-            .fs
-            .open_read(&self.root.join(format!("save{slot:03}.dat")))
-        {
-            Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e),
+        let Some(file) = self.open_slot(slot)? else {
+            return Ok(None);
         };
         let mut bytes = Vec::new();
         file.take(HEADER_READ_LIMIT as u64)

@@ -420,8 +420,8 @@ impl MovieHost {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.advance_with_clock(delta_ms, None, source)
     }
-    /// Real audio time is absolute and never supplemented by wall time. Ended releases
-    /// the player, including when audio duration differs from the container's frame limit.
+    /// An available soundtrack clock supplies absolute time and signals the end of playback.
+    /// Silent CVNS movies use the elapsed frame time.
     pub fn advance_with_clock(
         &mut self,
         delta_ms: u32,
