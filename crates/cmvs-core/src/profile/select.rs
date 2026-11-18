@@ -299,7 +299,9 @@ impl Registry {
             }
         }
         Ok(ProfileSelection {
-            profile: self.profile(&game.profile).expect("validated record"),
+            profile: self
+                .profile(&game.profile)
+                .ok_or_else(|| SelectionError::UnknownProfile(game.profile.clone()))?,
             record: Some(game),
             basis: if data.is_none() {
                 SelectionBasis::Binary

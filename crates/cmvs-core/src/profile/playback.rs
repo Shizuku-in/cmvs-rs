@@ -3,7 +3,6 @@ use super::{
     Binary, CommandStatus, EngineProfile, Family, GameRecord, RecordFile, Registry, VariantId,
 };
 use crate::exe::Arch;
-use std::collections::BTreeMap;
 
 mod data;
 
@@ -97,19 +96,9 @@ impl ProfileData {
                     arch: *arch,
                     file: file.path.to_owned(),
                     sha256: file.sha256,
-                    timestamp: 0,
-                    linker: (0, 0),
-                    image_base: 0,
-                    table_rva: 0,
-                    default_rva: 0,
-                    cases: Vec::new(),
                 })
                 .collect(),
             statuses: self.statuses.to_vec(),
-            proofs: Vec::new(),
-            contracts: Vec::new(),
-            reviews: Vec::new(),
-            variant: Vec::new(),
             variant_ids: self.variants.to_vec(),
             maps: self.maps.to_vec(),
         }
@@ -131,9 +120,8 @@ impl GameData {
 }
 
 pub(super) fn registry() -> Registry {
-    Registry {
-        profiles: data::PROFILES.iter().map(ProfileData::owned).collect(),
-        games: data::GAMES.iter().map(GameData::owned).collect(),
-        contracts: BTreeMap::new(),
-    }
+    Registry::new(
+        data::PROFILES.iter().map(ProfileData::owned).collect(),
+        data::GAMES.iter().map(GameData::owned).collect(),
+    )
 }

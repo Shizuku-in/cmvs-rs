@@ -1,7 +1,10 @@
 use cmvs_core::{
-    format::digest::sha256, format::digest::to_hex, format::exe::Arch, format::exe::PeImage,
-    format::exe::find_dispatch, profile::CommandStatus, profile::ContractRules,
-    profile::EXECUTABLE_NAMES, profile::EngineProfile, profile::Family, profile::Registry,
+    format::digest::{sha256, to_hex},
+    profile::{CommandStatus, EXECUTABLE_NAMES, Family},
+};
+use cmvs_profile_research::{
+    ResearchProfile, ResearchRegistry,
+    exe::{Arch, PeImage, find_dispatch},
 };
 use std::{
     env,
@@ -43,40 +46,15 @@ Example: cmvs-profile owners 0x2140";
 /// Signatures of an earlier predecessor engine, reported but not supported.
 const PVNS_HINTS: [&str; 1] = ["pvns.exe"];
 
-fn load_research(directory: Option<&str>) -> Result<Registry, Box<dyn Error + Send + Sync>> {
+fn load_research(
+    directory: Option<&str>,
+) -> Result<ResearchRegistry, Box<dyn Error + Send + Sync>> {
     let directory = Path::new(directory.unwrap_or(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../research/profiles"
     )));
-    let entries = fs::read_dir(directory).map_err(|err| {
-        format!(
-            "cannot open research profiles at {}: {err}; use --profiles-dir to locate them",
-            directory.display()
-        )
-    })?;
-    let mut paths = Vec::new();
-    for entry in entries {
-        let path = entry?.path();
-        if path.extension().is_some_and(|ext| ext == "profile") {
-            paths.push(path);
-        }
-    }
-    if paths.is_empty() {
-        return Err(format!("no .profile files in {}", directory.display()).into());
-    }
-    paths.sort_unstable();
-    let profiles = paths
-        .iter()
-        .map(fs::read_to_string)
-        .collect::<io::Result<Vec<_>>>()?;
-    let profiles = profiles.iter().map(String::as_str).collect::<Vec<_>>();
-    let rules = ContractRules::parse(&fs::read_to_string(directory.join("contract_rules.txt"))?)?;
-    Ok(Registry::parse_with_contracts(
-        &profiles,
-        &fs::read_to_string(directory.join("games.txt"))?,
-        &fs::read_to_string(directory.join("contracts.txt"))?,
-        &[rules],
-    )?)
+    ResearchRegistry::load(directory)
+        .map_err(|err| format!("{err}; use --profiles-dir to locate the research directory").into())
 }
 
 fn magic(path: &Path) -> String {
@@ -90,7 +68,7 @@ fn magic(path: &Path) -> String {
 }
 
 fn identify(
-    registry: &Registry,
+    registry: &ResearchRegistry,
     root: &Path,
     explicit: Option<&str>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -169,7 +147,7 @@ fn identify(
             Err(e) => println!(" switch-error={e}"),
         }
     }
-    let game = registry.identify_game(root, explicit)?;
+    let game = registry.playback().identify_game(root, explicit)?;
     for line in game.selection.log_lines() {
         println!("{line}");
     }
@@ -211,7 +189,7 @@ fn table(root: &Path, id: &str, base: Option<&str>) -> Result<(), Box<dyn Error 
     } else {
         Family::Cmvs
     };
-    let profile = EngineProfile::from_dispatch(
+    let profile = ResearchProfile::from_dispatch(
         id,
         family,
         base,
@@ -254,7 +232,7 @@ fn range(start: usize, end: usize) -> String {
     }
 }
 
-fn show(registry: &Registry, id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn show(registry: &ResearchRegistry, id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let profile = registry
         .profile(id)
         .ok_or_else(|| format!("unknown engine profile {id}"))?;
@@ -274,7 +252,12 @@ fn show(registry: &Registry, id: &str) -> Result<(), Box<dyn Error + Send + Sync
             b.cases.len()
         );
     }
-    for game in registry.games().iter().filter(|g| g.profile == profile.id) {
+    for game in registry
+        .playback()
+        .games()
+        .iter()
+        .filter(|g| g.profile == profile.id)
+    {
         println!("game {} game-id=0x{:08x}", game.game, game.game_id);
     }
     for status in [
@@ -370,7 +353,11 @@ fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let raw_args: Vec<_> = env::args_os().skip(1).collect();
-    if cmvs_cli::wants_help(&raw_args) {
+    if raw_args
+        .iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| arg == "-h" || arg == "--help")
+    {
         println!("{USAGE}");
         return Ok(());
     }
@@ -468,7 +455,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
             let registry = load_research(find(&options, "--profiles-dir").as_deref())?;
             let mut source = String::new();
-            generate::write_playback(&mut source, &registry)?;
+            generate::write_playback(&mut source, registry.playback())?;
             if let Some(output) = find(&options, "--output") {
                 generate::replace_table(Path::new(&output), source.as_bytes())?;
             } else {

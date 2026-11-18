@@ -1,15 +1,17 @@
 //! Semantic invariants for source profiles and their registry.
 use super::{
-    CommandStatus, ContractProof, EngineProfile, Family, GameRecord, ProfileError, VariantId, text,
+    CommandStatus, ContractProof, Family, GameRecord, ProfileError, ResearchProfile, VariantId,
+    text,
 };
 use crate::exe::Case;
+use cmvs_core::vm::cvns;
 use std::collections::BTreeMap;
 
 /// x86/x64 executables of one build are linked minutes apart (66-147 s in the 2010-2023 survey).
 pub const SAME_BUILD_SECONDS: u32 = 300;
 
 pub(crate) fn validate_profile(
-    profile: &EngineProfile,
+    profile: &ResearchProfile,
     has_variant_handler: impl Fn(VariantId, u16) -> bool,
 ) -> Result<(), ProfileError> {
     if !text::is_identifier(&profile.id) {
@@ -69,7 +71,7 @@ pub(crate) fn validate_profile(
             ));
         }
         if let Some(target) = profile.map(command as u16)
-            && target > crate::cvns::LAST_COMMAND
+            && target > cvns::LAST_COMMAND
         {
             return Err(ProfileError::new(
                 "map target is outside the system opcodes",
@@ -149,7 +151,7 @@ pub(crate) fn validate_profile(
 }
 
 pub(crate) fn validate_registry(
-    profiles: &[EngineProfile],
+    profiles: &[ResearchProfile],
     games: &[GameRecord],
     contracts: &BTreeMap<[u8; 32], ContractProof>,
     has_cvns_handler: impl Fn(u16) -> bool,
@@ -179,7 +181,7 @@ pub(crate) fn validate_registry(
             // their own registered handler.
             let has_root_semantics = |command: u16| match profile.map(command) {
                 None => base.status(command) == CommandStatus::Base,
-                Some(target) if target < crate::cvns::CVNS_ONLY => {
+                Some(target) if target < cvns::CVNS_ONLY => {
                     base.status(target) == CommandStatus::Base
                 }
                 Some(target) => has_cvns_handler(target),

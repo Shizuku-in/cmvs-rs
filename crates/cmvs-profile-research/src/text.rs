@@ -1,12 +1,10 @@
 //! Line-oriented profile and game-record files; `#` starts a comment line.
 use super::{
-    Binary, CommandStatus, EngineProfile, Family, GameRecord, MachineProof, ProfileError,
-    RecordFile, VariantBinding, VariantId, model::lookup_sorted,
+    CommandStatus, Family, GameRecord, MachineProof, ProfileError, RecordFile, ResearchBinary,
+    ResearchProfile, VariantBinding, VariantId, model::lookup_sorted,
 };
-use crate::{
-    digest::{parse_hex, to_hex},
-    exe::{Arch, Case},
-};
+use crate::exe::{Arch, Case};
+use cmvs_core::format::digest::{parse_hex, to_hex};
 use std::fmt::Write;
 
 pub(super) fn is_identifier(text: &str) -> bool {
@@ -152,7 +150,7 @@ fn is_review_path(path: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(&b))
 }
 
-pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
+pub(crate) fn parse_profile(text: &str) -> Result<ResearchProfile, ProfileError> {
     let mut lines = Lines::new(text);
     let (line, words) = lines.expect("profile", 1)?;
     let id = identifier(line, words[0])?;
@@ -189,7 +187,7 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             return Err(at(line, "file name must be ASCII"));
         }
         declared.push(cases);
-        binaries.push(Binary {
+        binaries.push(ResearchBinary {
             arch,
             file: v[0].to_owned(),
             sha256: sha(line, v[1])?,
@@ -381,7 +379,7 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             "compare line without inherited or presumed commands",
         ));
     }
-    Ok(EngineProfile {
+    Ok(ResearchProfile {
         id,
         family,
         base,
@@ -391,22 +389,13 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         contracts,
         reviews,
         variant,
-        variant_ids: Vec::new(),
         maps,
     })
 }
 
-impl EngineProfile {
-    /// The canonical file form of a full research profile.
-    ///
-    /// # Panics
-    ///
-    /// A playback profile from `Registry::builtin()` has no dispatch evidence to export.
+impl ResearchProfile {
+    /// The canonical file form of a source profile.
     pub fn to_text(&self) -> String {
-        assert!(
-            self.binaries.iter().all(|binary| !binary.cases.is_empty()),
-            "export requires an engine profile with dispatch evidence",
-        );
         let mut out = String::new();
         let _ = writeln!(out, "profile {}", self.id);
         let _ = writeln!(

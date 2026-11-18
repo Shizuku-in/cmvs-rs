@@ -135,7 +135,7 @@ pub(crate) use modules::{
     sequence, settings, snapshot, system_save, text, text_encoding, timers, viewport, vm_core,
 };
 
-/// Resource container, archive, script, image, video, cursor, executable, and save formats.
+/// Resource containers, scripts, images, video, cursors, saves, and executable architecture.
 pub mod format {
     pub use crate::modules::{
         cmv, cmv9, cpz, cursor, digest, exe, jbp1, jbpd, lzss, mgv, msk, mv2, pb2, pb3, ps3, save,

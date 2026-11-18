@@ -1,10 +1,8 @@
 //! Reviewed, identity-bound contract certificates. This is a trusted registry input,
 //! not an IR interpreter: hashes bind the offline evidence, not a proof of the lifter.
-use super::{EngineProfile, ProfileError, text};
-use crate::{
-    digest::{sha256, to_hex},
-    exe::{Arch, Case},
-};
+use super::{ProfileError, ResearchProfile, text};
+use crate::exe::{Arch, Case};
+use cmvs_core::format::digest::{sha256, to_hex};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,8 +228,8 @@ impl ContractProof {
     pub(super) fn bind(
         &self,
         command: u16,
-        base: &EngineProfile,
-        derived: &EngineProfile,
+        base: &ResearchProfile,
+        derived: &ResearchProfile,
     ) -> Result<(), ProfileError> {
         if self.opcode != command + 0x2000 {
             return Err(ProfileError::new(

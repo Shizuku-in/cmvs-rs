@@ -504,35 +504,15 @@ fn old_text_dialog_waits_and_rejects_invalid_results_atomically() {
         assert_eq!(vm.state().system_integer(0), Some(9));
         assert_eq!(vm.state().string(0), Some(b"unchanged".as_slice()));
     }
-    let root = include_str!("../../../../research/profiles/cmvs-20160201.profile");
-    for (name, source) in [
-        (
-            "cmvs-20071117",
-            include_str!("../../../../research/profiles/cmvs-20071117.profile"),
-        ),
-        (
-            "cmvs-20080719",
-            include_str!("../../../../research/profiles/cmvs-20080719.profile"),
-        ),
-        (
-            "cmvs-20080903",
-            include_str!("../../../../research/profiles/cmvs-20080903.profile"),
-        ),
-    ] {
-        let research = Registry::parse(&[root, source], "").unwrap();
-        let mut wrong = research.profile(name).unwrap().clone();
-        wrong.binaries[0].sha256 = [0; 32];
-        assert!(Registry::parse(&[root, &wrong.to_text()], "").is_err());
-        assert_eq!(
-            dispatch::run(
-                cmvs_core::profile::Semantics::Root,
-                &mut vm,
-                &mut Hosts::default()
-            )
-            .unwrap(),
-            None
-        );
-    }
+    assert_eq!(
+        dispatch::run(
+            cmvs_core::profile::Semantics::Root,
+            &mut vm,
+            &mut Hosts::default()
+        )
+        .unwrap(),
+        None
+    );
 }
 
 #[test]

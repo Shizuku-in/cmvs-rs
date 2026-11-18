@@ -1,88 +1,48 @@
 mod callbacks;
-use crate::support::bytecode as commands;
+use crate::support::{bytecode as commands, profile::synthetic_profile};
 mod frame_driver;
 mod lifecycle;
 mod snapshots;
 mod system_save;
 use cmvs_core::{
-    format::digest::sha256, format::digest::to_hex, format::ps3::Script,
-    format::snapshot::SaveImage, host::platform::PlatformBackend, host::platform::PlatformRequest,
-    host::platform::RecordingBackend, profile::Game, profile::Registry, runtime::Runtime,
-    runtime::RuntimeEvent, runtime::RuntimeOptions, runtime::SaveStorage, runtime::SnapshotPolicy,
+    format::digest::sha256,
+    format::ps3::Script,
+    format::snapshot::SaveImage,
+    host::platform::PlatformBackend,
+    host::platform::PlatformRequest,
+    host::platform::RecordingBackend,
+    profile::{CommandStatus, EngineProfile, Family, Game, GameRecord, RecordFile, Registry},
+    runtime::Runtime,
+    runtime::RuntimeEvent,
+    runtime::RuntimeOptions,
+    runtime::SaveStorage,
+    runtime::SnapshotPolicy,
     runtime::load_start,
 };
 use std::{error::Error, fs, sync::OnceLock};
 
-/// A synthetic build whose 2048 cases all count as base semantics, so these tests exercise
-/// the runner rather than any real profile table.
-fn synthetic_profile() -> String {
-    let mut text = format!(
-        "profile synthetic-base\nfamily cmvs\nbase -\nbinary x64 file=cmvs64.exe sha256={} \
-         timestamp=0x00000000 linker=10.0 image-base=0x140000000 table=0x1000 default=0x2000 \
-         cases=2048\n",
-        "0".repeat(64)
-    );
-    for command in 0..2048 {
-        text.push_str(&format!("0x{:04x} base 0x3000\n", 0x2000 + command));
-    }
-    text
-}
 fn base_registry() -> &'static Registry {
     static REGISTRY: OnceLock<Registry> = OnceLock::new();
-    REGISTRY.get_or_init(|| Registry::parse(&[&synthetic_profile()], "").unwrap())
+    REGISTRY.get_or_init(|| Registry::new(vec![synthetic_profile("synthetic-base")], vec![]))
 }
 
 #[test]
 fn runner_contract_gate_preserves_unimplemented_handlers() {
-    use cmvs_core::{
-        format::exe::Arch, profile::ContractProof, profile::ContractRules, profile::ContractSide,
-    };
     let mut code = Vec::new();
     commands::command(&mut code, 0x27fe, &[123]);
     let root = Root::new("contract-unhandled", &code, b"");
-    let base = synthetic_profile();
-    let derived = base
-        .replace("profile synthetic-base", "profile synthetic-derived")
-        .replace("base -", "base synthetic-base")
-        .replace(&"0".repeat(64), &"1".repeat(64))
-        .replace(" base 0x3000", " unreviewed 0x3000");
-    let side = |name: &str, seed| ContractSide {
-        profile: name.into(),
-        binary_sha256: [seed; 32],
-        image_base: 0x140000000,
-        case_rva: 0x3000,
-        export_sha256: [2 + seed; 32],
-        contract_sha256: [4; 32],
-    };
-    let proof = ContractProof {
-        arch: Arch::X64,
-        opcode: 0x27fe,
-        base: side("synthetic-base", 0),
-        derived: side("synthetic-derived", 0x11),
-        rules: ContractRules {
-            extractor: [5; 32],
-            context: [6; 32],
-            mappings: [7; 32],
-            summaries: [8; 32],
-        },
-        report_sha256: [9; 32],
-        mappings_used: vec![],
-        summaries_used: vec![],
-    };
-    let derived = derived.replace(
-        "0x27fe unreviewed 0x3000",
-        &format!(
-            "0x27fe contract-equivalent 0x3000 contract={}",
-            to_hex(&proof.id())
-        ),
+    let mut statuses = vec![CommandStatus::Unreviewed; 2048];
+    statuses[0x7fe] = CommandStatus::ContractEquivalent;
+    let derived = EngineProfile::new(
+        "synthetic-derived".into(),
+        Family::Cmvs,
+        Some("synthetic-base".into()),
+        vec![],
+        statuses,
+        vec![],
+        vec![],
     );
-    let registry = Registry::parse_with_contracts(
-        &[&base, &derived],
-        "",
-        &proof.to_line(),
-        std::slice::from_ref(&proof.rules),
-    )
-    .unwrap();
+    let registry = Registry::new(vec![synthetic_profile("synthetic-base"), derived], vec![]);
     let game = registry
         .identify_game(&root.0, Some("synthetic-derived"))
         .unwrap();
@@ -269,15 +229,20 @@ impl Root {
     }
     /// A registry whose record matches this root's files and verifies skip-auto-resume.
     fn recorded_registry(&self, game_id: u32) -> Registry {
-        let hash = |name: &str| to_hex(&sha256(&fs::read(self.0.join(name)).unwrap()));
-        let games = format!(
-            "game synthetic\nprofile synthetic-base\nstart data/pack/start.ps3 sha256={}\n\
-             archive data/pack/script.cpz sha256={}\ngame-id 0x{game_id:08x}\n\
-             policy skip-auto-resume integer=2198\nend\n",
-            hash("data/pack/start.ps3"),
-            hash("data/pack/script.cpz")
-        );
-        Registry::parse(&[&synthetic_profile()], &games).unwrap()
+        let file = |path: &str| RecordFile {
+            path: path.into(),
+            sha256: sha256(&fs::read(self.0.join(path)).unwrap()),
+        };
+        let record = GameRecord {
+            game: "synthetic".into(),
+            profile: "synthetic-base".into(),
+            start_scripts: vec![file("data/pack/start.ps3")],
+            script_archive: file("data/pack/script.cpz"),
+            game_id,
+            executables: vec![],
+            skip_auto_resume: Some(2198),
+        };
+        Registry::new(vec![synthetic_profile("synthetic-base")], vec![record])
     }
     fn script(&self) -> Script {
         load_start(&self.0, &self.game().files).unwrap()

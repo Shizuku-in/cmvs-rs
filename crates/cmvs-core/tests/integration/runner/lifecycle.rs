@@ -798,8 +798,7 @@ fn verified_startup_globals_are_zero_but_unverified_profiles_remain_unknown() {
         "cmvs-20171114",
         "synthetic-base",
     ] {
-        let profile = synthetic_profile().replace("synthetic-base", id);
-        let registry = Registry::parse(&[&profile], "").unwrap();
+        let registry = Registry::new(vec![synthetic_profile(id)], vec![]);
         let game = registry.identify_game(&root.0, Some(id)).unwrap();
         let run = Runtime::new(&script, &root.0, &game, 0).unwrap();
         let state = run.machine().state();

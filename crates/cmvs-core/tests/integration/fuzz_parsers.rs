@@ -4,8 +4,8 @@
 use cmvs_core::{
     MAX_PAYLOAD,
     format::{
-        cmv, cmv9, cpz, cursor, exe, jbp1, jbpd, lzss, mgv, msk, mv2, pb2, pb3, ps3, save,
-        snapshot, system_save,
+        cmv, cmv9, cpz, cursor, jbp1, jbpd, lzss, mgv, msk, mv2, pb2, pb3, ps3, save, snapshot,
+        system_save,
     },
     render::raster::RgbaImage,
     vm::{bytecode, machine::Machine},
@@ -322,12 +322,6 @@ fn feed_all_decoders(bytes: &[u8], query_rng: &mut SplitMix64) {
     let _ = snapshot::VisualSnapshot::decode_records(bytes);
     let _ = snapshot::SavedEffect::decode(bytes);
     let _ = snapshot::LocalVariables::decode(bytes);
-
-    // 11. Portable Executable (PE32 / PE32+) inspector & VM dispatch finder
-    if let Ok(pe) = exe::PeImage::parse(bytes) {
-        let _ = pe.offset(0x1000, 16);
-        let _ = exe::find_dispatch(&pe, bytes);
-    }
 }
 
 fn seed_corpus() -> Vec<Vec<u8>> {
@@ -414,17 +408,6 @@ fn seed_corpus() -> Vec<Vec<u8>> {
         skeleton[..magic.len()].copy_from_slice(magic);
         seeds.push(skeleton);
     }
-
-    // Minimal MZ / PE32 header skeleton
-    let mut pe = vec![0u8; 256];
-    pe[..2].copy_from_slice(b"MZ");
-    pe[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes());
-    pe[0x40..0x44].copy_from_slice(b"PE\0\0");
-    pe[0x44..0x46].copy_from_slice(&0x014cu16.to_le_bytes());
-    pe[0x46..0x48].copy_from_slice(&1u16.to_le_bytes());
-    pe[0x54..0x56].copy_from_slice(&0xe0u16.to_le_bytes());
-    pe[0x58..0x5a].copy_from_slice(&0x010bu16.to_le_bytes());
-    seeds.push(pe);
 
     // Snapshot records (EngineSnapshot & CvnsSnapshot framing)
     let mut snap = Vec::new();

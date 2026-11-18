@@ -82,13 +82,13 @@ pub(super) fn write_playback(out: &mut impl Write, registry: &Registry) -> fmt::
             )?;
         }
         writeln!(out, "        \"),")?;
-        if profile.variant_bindings().next().is_some() {
+        if !profile.variants().is_empty() {
             writeln!(out, "        variants: &[")?;
-            for (command, binding) in profile.variant_bindings() {
+            for (command, variant) in profile.variants() {
                 writeln!(
                     out,
                     "            (0x{command:03x}, VariantId::{:?}),",
-                    binding.id
+                    variant
                 )?;
             }
             writeln!(out, "        ],")?;

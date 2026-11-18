@@ -16,6 +16,7 @@ unsafe_code = "forbid"
 [dependencies]
 libfuzzer-sys = "0.4"
 cmvs-core = { path = "../crates/cmvs-core" }
+cmvs-profile-research = { path = "../crates/cmvs-profile-research" }
 
 [[bin]]
 name = "ps3_bytecode"

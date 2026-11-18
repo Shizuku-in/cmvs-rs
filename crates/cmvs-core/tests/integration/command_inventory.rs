@@ -1,26 +1,12 @@
 //! Dispatch inventory: feeds every system command through the runner's full dispatch chain
 //! with synthetic arguments and records whether any host recognizes it. The output is joined
 //! with static script sites by `tools/command_inventory.py`; see the Amatsutsumi script audit.
-use crate::support::bytecode as commands;
+use crate::support::{bytecode as commands, profile::synthetic_profile};
 use cmvs_core::{
     host::platform::RecordingBackend, profile::Registry, runtime::Runtime, runtime::RuntimeEvent,
     runtime::load_start,
 };
 use std::{fmt::Write as _, fs, path::Path};
-
-/// All 2048 cases count as base semantics so the gate never hides a host.
-fn synthetic_profile() -> String {
-    let mut text = format!(
-        "profile synthetic-base\nfamily cmvs\nbase -\nbinary x64 file=cmvs64.exe sha256={} \
-         timestamp=0x00000000 linker=10.0 image-base=0x140000000 table=0x1000 default=0x2000 \
-         cases=2048\n",
-        "0".repeat(64)
-    );
-    for command in 0..2048 {
-        text.push_str(&format!("0x{:04x} base 0x3000\n", 0x2000 + command));
-    }
-    text
-}
 
 fn write_root(root: &Path, code: &[u8]) {
     let _ = fs::remove_dir_all(root);
@@ -99,7 +85,7 @@ fn probe(registry: &Registry, root: &Path, opcode: u16, args: &[u32]) -> String 
 }
 
 fn inventory(root: &Path, opcodes: impl Iterator<Item = u16>) -> String {
-    let registry = Registry::parse(&[&synthetic_profile()], "").unwrap();
+    let registry = Registry::new(vec![synthetic_profile("synthetic-base")], vec![]);
     let variants: [(&str, [u32; 8]); 3] = [
         ("zero", [0; 8]),
         ("one", [1; 8]),

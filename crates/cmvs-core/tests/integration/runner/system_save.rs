@@ -449,8 +449,7 @@ fn read_skip_cancels_script_skip_at_unread_output_and_keeps_flags_on_unknown_bit
 #[test]
 fn first_system_save_without_template_writes_reloads_and_survives_restart() {
     use cmvs_core::{format::system_save::Css1Save, host::settings::DisplayPreferences};
-    let profile = synthetic_profile().replace("synthetic-base", "cmvs-20160201");
-    let registry = Registry::parse(&[&profile], "").unwrap();
+    let registry = Registry::new(vec![synthetic_profile("cmvs-20160201")], vec![]);
     for explicit_write in [false, true] {
         let mut code = vec![];
         commands::command(&mut code, 0x201d, &[0x12345678]);

@@ -24,6 +24,7 @@ pub use hosts::{
     MoviePlayerHosts, MovieSceneHosts, PlatformHosts, ScriptHosts, SequenceHosts, SnapshotHosts,
     SystemReadHosts, SystemWriteHosts, TextHosts, WaitHosts,
 };
+pub(crate) use registry::resolve_entry;
 pub use registry::{
     ACTIVATION_PASS, AUDIO_PRELOAD, BACKGROUND_AUDIO, CAMERA_MOVE_X, COLLISION_PARTICLES, CVNS,
     DISPLAY_COUNT, DRAW_QUERY, FADING_PARTICLES, FALLING_BILLBOARDS, FALLING_BILLBOARDS_X87,
@@ -39,7 +40,6 @@ pub use registry::{
     uses_platform, uses_platform_for, uses_sequence, uses_window_images, uses_windows,
     variant_entry,
 };
-pub(crate) use registry::{cvns_entry, resolve_entry};
 
 use crate::{
     bytecode::DecodeError,

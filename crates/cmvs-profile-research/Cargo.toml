@@ -1,0 +1,18 @@
+[package]
+name = "cmvs-profile-research"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Offline CMVS/CVNS engine profile and executable inspection"
+
+[[bin]]
+name = "cmvs-profile"
+path = "src/bin/profile.rs"
+
+[dependencies]
+cmvs-core = { path = "../cmvs-core" }
+
+[lints]
+workspace = true

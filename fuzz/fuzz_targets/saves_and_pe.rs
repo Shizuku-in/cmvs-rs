@@ -1,6 +1,7 @@
 #![no_main]
 
-use cmvs_core::format::{exe, save, snapshot, system_save};
+use cmvs_core::format::{save, snapshot, system_save};
+use cmvs_profile_research::exe;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

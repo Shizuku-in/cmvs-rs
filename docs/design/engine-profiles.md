@@ -2,12 +2,12 @@
 
 档案对应具体引擎构建，游戏记录绑定启动脚本、脚本包和可执行文件身份。数据位于 [`research/profiles`](../../research/profiles/)，解析和选择由 `profile::Registry` 完成。
 
-`cmvs-profile` 校验完整源档案，并生成播放器的 Rust 静态表。静态表包含游戏与构建身份、命令状态、变体 ID 和 CVNS 映射。播放器构建只读取静态表。
+`cmvs-profile-research` 提供源档案解析、契约校验和 PE 分派分析，`cmvs-profile` 用它生成播放器的 Rust 静态表。静态表包含游戏与构建身份、命令状态、变体 ID 和 CVNS 映射。
 
 修改源档案后，在仓库根目录重新生成。CI 会校对生成结果。
 
 ```sh
-cargo run --offline -p cmvs-cli --bin cmvs-profile -- generate-playback \
+cargo run --offline -p cmvs-profile-research --bin cmvs-profile -- generate-playback \
   --output crates/cmvs-core/src/profile/playback/data.rs
 ```
 

@@ -51,7 +51,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Verify generated playback profiles
         run: |
-          cargo run --locked --quiet -p cmvs-cli --bin cmvs-profile -- generate-playback > "$RUNNER_TEMP/cmvs-playback.rs"
+          cargo run --locked --quiet -p cmvs-profile-research --bin cmvs-profile -- generate-playback > "$RUNNER_TEMP/cmvs-playback.rs"
           diff -u crates/cmvs-core/src/profile/playback/data.rs "$RUNNER_TEMP/cmvs-playback.rs"
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings

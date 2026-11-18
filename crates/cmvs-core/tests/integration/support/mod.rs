@@ -4,6 +4,7 @@ pub mod cmv9;
 pub mod css1_fixture;
 pub mod environment_cases;
 pub mod media_cases;
+pub mod profile;
 pub mod runtime_cases;
 pub mod script_validation;
 pub mod shared_audio;

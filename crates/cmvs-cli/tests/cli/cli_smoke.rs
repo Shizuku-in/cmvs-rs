@@ -173,15 +173,6 @@ fn all_cli_binaries_honor_help_in_any_position_and_respect_double_dash() {
             ],
         ),
         (
-            env!("CARGO_BIN_EXE_cmvs-profile"),
-            &[
-                &["identify", "game-dir", "--help"],
-                &["identify", "game-dir", "--profile", "-h"],
-                &["show", "cmvs-20160201", "--help"],
-                &["owners", "0x2140", "-h"],
-            ],
-        ),
-        (
             env!("CARGO_BIN_EXE_cmvs-save"),
             &[
                 &["--records", "--help"],
@@ -273,21 +264,6 @@ fn all_cli_binaries_honor_help_in_any_position_and_respect_double_dash() {
         );
         assert!(!stdout.starts_with("Usage:"), "{stdout}");
     }
-
-    let profile_dir = TempDir::new("literal-profile-dir");
-    fs::create_dir(profile_dir.join("--help")).unwrap();
-    let profile_out = Command::new(env!("CARGO_BIN_EXE_cmvs-profile"))
-        .current_dir(&profile_dir)
-        .args(["identify", "--", "--help"])
-        .output()
-        .unwrap();
-    let profile_stdout = String::from_utf8_lossy(&profile_out.stdout);
-    let profile_stderr = String::from_utf8_lossy(&profile_out.stderr);
-    assert!(!profile_stdout.starts_with("Usage:"), "{profile_stdout}");
-    assert!(
-        !profile_stderr.contains("unknown option"),
-        "{profile_stderr}"
-    );
 }
 
 #[test]
@@ -326,46 +302,6 @@ fn disasm_cli_decodes_synthetic_ps2a_script_and_counts_system_commands() {
     assert!(
         !Command::new(exe)
             .args([script_path.to_str().unwrap(), "extra.ps3"])
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
-}
-
-#[test]
-fn profile_cli_shows_builtin_profiles_and_handler_owners() {
-    let exe = env!("CARGO_BIN_EXE_cmvs-profile");
-    let show = Command::new(exe)
-        .args(["show", "cmvs-20160201"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8(show.stdout).unwrap();
-    assert!(
-        show.status.success(),
-        "{}",
-        String::from_utf8_lossy(&show.stderr)
-    );
-    assert!(
-        stdout.contains("profile cmvs-20160201 family=Cmvs base=-"),
-        "{stdout}"
-    );
-
-    let owners = Command::new(exe)
-        .args(["owners", "0x2140"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8(owners.stdout).unwrap();
-    assert!(
-        owners.status.success(),
-        "{}",
-        String::from_utf8_lossy(&owners.stderr)
-    );
-    assert!(stdout.contains("| 0x2140 |"), "{stdout}");
-
-    assert!(
-        !Command::new(exe)
-            .args(["show", "cmvs-nonexistent"])
             .output()
             .unwrap()
             .status
