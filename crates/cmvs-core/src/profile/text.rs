@@ -391,13 +391,22 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         contracts,
         reviews,
         variant,
+        variant_ids: Vec::new(),
         maps,
     })
 }
 
 impl EngineProfile {
-    /// The canonical file form; `parse` of this text yields an equal profile.
+    /// The canonical file form of a full research profile.
+    ///
+    /// # Panics
+    ///
+    /// A playback profile from `Registry::builtin()` has no dispatch evidence to export.
     pub fn to_text(&self) -> String {
+        assert!(
+            self.binaries.iter().all(|binary| !binary.cases.is_empty()),
+            "export requires an engine profile with dispatch evidence",
+        );
         let mut out = String::new();
         let _ = writeln!(out, "profile {}", self.id);
         let _ = writeln!(

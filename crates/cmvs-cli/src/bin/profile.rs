@@ -42,7 +42,7 @@ fn magic(path: &Path) -> String {
 }
 
 fn identify(root: &Path, explicit: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let registry = Registry::builtin();
+    let registry = Registry::builtin_research();
     println!("# read-only identification of {}", root.display());
     for name in [
         "data/pack/start.ps3",
@@ -204,7 +204,7 @@ fn range(start: usize, end: usize) -> String {
 }
 
 fn show(id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let registry = Registry::builtin();
+    let registry = Registry::builtin_research();
     let profile = registry
         .profile(id)
         .ok_or_else(|| format!("unknown engine profile {id}"))?;

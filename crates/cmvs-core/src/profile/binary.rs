@@ -1,29 +1,10 @@
-//! Compact binary wire codec for the built-in profile registry bundle.
-//!
-//! Eliminates text tokenization, ASCII hex expansion, and redundant per-row fields
-//! before [`crate::lzss`] compression, while preserving exact equality with [`super::Registry::parse_with_contracts`].
+//! Wire codec for the validated playback registry.
 use super::{
-    Binary, CommandStatus, ContractProof, ContractRules, ContractSide, EngineProfile, Family,
-    GameRecord, MachineProof, ProfileError, RecordFile, VariantBinding, VariantId,
+    Binary, CommandStatus, EngineProfile, Family, GameRecord, ProfileError, RecordFile, VariantId,
 };
-use crate::exe::{Arch, Case};
-use std::collections::BTreeMap;
+use crate::exe::Arch;
 
-const MAGIC: [u8; 5] = *b"CMVB\x01";
-
-pub(super) type Bundle = (
-    Vec<EngineProfile>,
-    Vec<GameRecord>,
-    BTreeMap<[u8; 32], ContractProof>,
-);
-
-fn zigzag_encode(value: i64) -> u64 {
-    ((value << 1) ^ (value >> 63)) as u64
-}
-
-fn zigzag_decode(value: u64) -> i64 {
-    ((value >> 1) as i64) ^ (-((value & 1) as i64))
-}
+const MAGIC: [u8; 5] = *b"CMVB\x02";
 
 fn encode_family(family: Family) -> u8 {
     match family {
@@ -117,10 +98,6 @@ impl Encoder {
         self.write_u64(value as u64);
     }
 
-    fn write_i64(&mut self, value: i64) {
-        self.write_u64(zigzag_encode(value));
-    }
-
     fn write_hash(&mut self, hash: &[u8; 32]) {
         self.0.extend_from_slice(hash);
     }
@@ -135,13 +112,44 @@ impl Encoder {
         self.write_hash(&file.sha256);
     }
 
-    fn write_contract_side(&mut self, side: &ContractSide) {
-        self.write_str(&side.profile);
-        self.write_hash(&side.binary_sha256);
-        self.write_u64(side.image_base);
-        self.write_u64(u64::from(side.case_rva));
-        self.write_hash(&side.export_sha256);
-        self.write_hash(&side.contract_sha256);
+    fn write_profile(&mut self, profile: &EngineProfile) {
+        self.write_str(&profile.id);
+        self.write_u8(encode_family(profile.family));
+        match &profile.base {
+            Some(base) => {
+                self.write_u8(1);
+                self.write_str(base);
+            }
+            None => self.write_u8(0),
+        }
+
+        self.write_usize(profile.binaries.len());
+        for binary in &profile.binaries {
+            self.write_u8(encode_arch(binary.arch));
+            self.write_str(&binary.file);
+            self.write_hash(&binary.sha256);
+        }
+
+        self.write_usize(profile.statuses.len());
+        for &status in &profile.statuses {
+            self.write_u8(encode_status(status));
+        }
+
+        self.write_usize(profile.variant.len() + profile.variant_ids.len());
+        for (cmd, id) in profile
+            .variant_bindings()
+            .map(|(command, binding)| (command, binding.id))
+            .chain(profile.variant_ids.iter().copied())
+        {
+            self.write_u64(u64::from(cmd));
+            self.write_str(id.name());
+        }
+
+        self.write_usize(profile.maps.len());
+        for &(cmd, target) in &profile.maps {
+            self.write_u64(u64::from(cmd));
+            self.write_u64(u64::from(target));
+        }
     }
 }
 
@@ -194,10 +202,6 @@ impl<'a> Decoder<'a> {
         u32::try_from(self.read_u64()?).map_err(|_| ProfileError::new("binary u32 overflow"))
     }
 
-    fn read_i64(&mut self) -> Result<i64, ProfileError> {
-        Ok(zigzag_decode(self.read_u64()?))
-    }
-
     fn read_hash(&mut self) -> Result<[u8; 32], ProfileError> {
         Ok(self.read_bytes(32)?.try_into().expect("32 bytes checked"))
     }
@@ -216,150 +220,6 @@ impl<'a> Decoder<'a> {
             sha256: self.read_hash()?,
         })
     }
-
-    fn read_contract_side(&mut self) -> Result<ContractSide, ProfileError> {
-        Ok(ContractSide {
-            profile: self.read_str()?,
-            binary_sha256: self.read_hash()?,
-            image_base: self.read_u64()?,
-            case_rva: self.read_u32()?,
-            export_sha256: self.read_hash()?,
-            contract_sha256: self.read_hash()?,
-        })
-    }
-}
-
-#[allow(dead_code)]
-fn encode_profile(enc: &mut Encoder, profile: &EngineProfile) -> Result<(), ProfileError> {
-    enc.write_str(&profile.id);
-    enc.write_u8(encode_family(profile.family));
-    match &profile.base {
-        Some(base) => {
-            enc.write_u8(1);
-            enc.write_str(base);
-        }
-        None => enc.write_u8(0),
-    }
-
-    enc.write_usize(profile.binaries.len());
-    for binary in &profile.binaries {
-        enc.write_u8(encode_arch(binary.arch));
-        enc.write_str(&binary.file);
-        enc.write_hash(&binary.sha256);
-        enc.write_u32_le(binary.timestamp);
-        enc.write_u8(binary.linker.0);
-        enc.write_u8(binary.linker.1);
-        enc.write_u64(binary.image_base);
-        enc.write_u64(u64::from(binary.table_rva));
-        enc.write_u64(u64::from(binary.default_rva));
-    }
-
-    let cmd_count = profile.statuses.len();
-    enc.write_usize(cmd_count);
-    let mut prev_handler = vec![0u32; profile.binaries.len()];
-    let mut prev_noop = vec![0u32; profile.binaries.len()];
-    for (cmd, &status) in profile.statuses.iter().enumerate() {
-        enc.write_u8(encode_status(status));
-        for (idx, binary) in profile.binaries.iter().enumerate() {
-            let case = *binary
-                .cases
-                .get(cmd)
-                .ok_or_else(|| ProfileError::new("binary case count mismatch"))?;
-            match (status, case) {
-                (CommandStatus::Absent, Case::Default) => {}
-                (CommandStatus::NoOp, Case::NoOp(rva)) => {
-                    enc.write_i64(i64::from(rva) - i64::from(prev_noop[idx]));
-                    prev_noop[idx] = rva;
-                }
-                (
-                    CommandStatus::Base
-                    | CommandStatus::Inherited
-                    | CommandStatus::Reviewed
-                    | CommandStatus::ContractEquivalent
-                    | CommandStatus::Presumed
-                    | CommandStatus::Unreviewed,
-                    Case::Handler(rva),
-                ) => {
-                    enc.write_i64(i64::from(rva) - i64::from(prev_handler[idx]));
-                    prev_handler[idx] = rva;
-                }
-                _ => {
-                    return Err(ProfileError::new(
-                        "command status contradicts binary case in encoder",
-                    ));
-                }
-            }
-        }
-    }
-
-    // Deduplicate (arch, base_sha256, derived_sha256) pairs across proofs in one profile.
-    let mut proof_bases: Vec<(Arch, [u8; 32], [u8; 32])> = Vec::new();
-    for (_, proof) in &profile.proofs {
-        let key = (proof.arch, proof.base_sha256, proof.derived_sha256);
-        if !proof_bases.contains(&key) {
-            proof_bases.push(key);
-        }
-    }
-    enc.write_usize(proof_bases.len());
-    for &(arch, base_sha, derived_sha) in &proof_bases {
-        enc.write_u8(encode_arch(arch));
-        enc.write_hash(&base_sha);
-        enc.write_hash(&derived_sha);
-    }
-    enc.write_usize(profile.proofs.len());
-    for (cmd, proof) in &profile.proofs {
-        let base_idx = proof_bases
-            .iter()
-            .position(|&k| k == (proof.arch, proof.base_sha256, proof.derived_sha256))
-            .expect("inserted above");
-        enc.write_u64(u64::from(*cmd));
-        enc.write_usize(base_idx);
-        enc.write_hash(&proof.digest);
-    }
-
-    enc.write_usize(profile.contracts.len());
-    for (cmd, id) in &profile.contracts {
-        enc.write_u64(u64::from(*cmd));
-        enc.write_hash(id);
-    }
-
-    // Deduplicate review paths within each profile.
-    let mut review_paths: Vec<&str> = Vec::new();
-    for (_, path) in &profile.reviews {
-        if !review_paths.contains(&path.as_str()) {
-            review_paths.push(path);
-        }
-    }
-    enc.write_usize(review_paths.len());
-    for &path in &review_paths {
-        enc.write_str(path);
-    }
-    enc.write_usize(profile.reviews.len());
-    for (cmd, path) in &profile.reviews {
-        let path_idx = review_paths
-            .iter()
-            .position(|&p| p == path)
-            .expect("inserted above");
-        enc.write_u64(u64::from(*cmd));
-        enc.write_usize(path_idx);
-    }
-
-    enc.write_usize(profile.variant.len());
-    for (cmd, v) in &profile.variant {
-        enc.write_u64(u64::from(*cmd));
-        enc.write_str(v.id.name());
-        enc.write_u8(encode_arch(v.arch));
-        enc.write_hash(&v.binary_sha256);
-        enc.write_str(&v.evidence);
-    }
-
-    enc.write_usize(profile.maps.len());
-    for &(cmd, target) in &profile.maps {
-        enc.write_u64(u64::from(cmd));
-        enc.write_u64(u64::from(target));
-    }
-
-    Ok(())
 }
 
 fn push_sorted<T>(entries: &mut Vec<(u16, T)>, cmd: u16, value: T) -> Result<(), ProfileError> {
@@ -388,113 +248,31 @@ fn decode_profile(dec: &mut Decoder<'_>) -> Result<EngineProfile, ProfileError> 
             arch: decode_arch(dec.read_u8()?)?,
             file: dec.read_str()?,
             sha256: dec.read_hash()?,
-            timestamp: dec.read_u32_le()?,
-            linker: (dec.read_u8()?, dec.read_u8()?),
-            image_base: dec.read_u64()?,
-            table_rva: dec.read_u32()?,
-            default_rva: dec.read_u32()?,
+            timestamp: 0,
+            linker: (0, 0),
+            image_base: 0,
+            table_rva: 0,
+            default_rva: 0,
             cases: Vec::new(),
         });
     }
 
     let cmd_count = dec.read_usize()?;
-    for binary in &mut binaries {
-        binary.cases.reserve_exact(cmd_count);
-    }
-    let mut statuses = Vec::with_capacity(cmd_count);
-    let mut prev_handler = vec![0u32; binary_count];
-    let mut prev_noop = vec![0u32; binary_count];
-    for _ in 0..cmd_count {
-        let status = decode_status(dec.read_u8()?)?;
-        statuses.push(status);
-        for (idx, binary) in binaries.iter_mut().enumerate() {
-            let case = match status {
-                CommandStatus::Absent => Case::Default,
-                CommandStatus::NoOp => {
-                    let rva = u32::try_from(i64::from(prev_noop[idx]) + dec.read_i64()?)
-                        .map_err(|_| ProfileError::new("binary noop rva out of range"))?;
-                    prev_noop[idx] = rva;
-                    Case::NoOp(rva)
-                }
-                _ => {
-                    let rva = u32::try_from(i64::from(prev_handler[idx]) + dec.read_i64()?)
-                        .map_err(|_| ProfileError::new("binary handler rva out of range"))?;
-                    prev_handler[idx] = rva;
-                    Case::Handler(rva)
-                }
-            };
-            binary.cases.push(case);
-        }
-    }
-
-    let base_count = dec.read_usize()?;
-    let mut proof_bases = Vec::with_capacity(base_count);
-    for _ in 0..base_count {
-        proof_bases.push((
-            decode_arch(dec.read_u8()?)?,
-            dec.read_hash()?,
-            dec.read_hash()?,
-        ));
-    }
-    let proof_count = dec.read_usize()?;
-    let mut proofs = Vec::with_capacity(proof_count.min(dec.0.len()));
-    for _ in 0..proof_count {
-        let cmd = dec.read_u16()?;
-        let base_idx = dec.read_usize()?;
-        let &(arch, base_sha256, derived_sha256) = proof_bases
-            .get(base_idx)
-            .ok_or_else(|| ProfileError::new("binary proof base index out of bounds"))?;
-        push_sorted(
-            &mut proofs,
-            cmd,
-            MachineProof {
-                arch,
-                base_sha256,
-                derived_sha256,
-                digest: dec.read_hash()?,
-            },
-        )?;
-    }
-
-    let contract_count = dec.read_usize()?;
-    let mut contracts = Vec::with_capacity(contract_count.min(dec.0.len()));
-    for _ in 0..contract_count {
-        push_sorted(&mut contracts, dec.read_u16()?, dec.read_hash()?)?;
-    }
-
-    let path_count = dec.read_usize()?;
-    let mut review_paths = Vec::with_capacity(path_count.min(dec.0.len()));
-    for _ in 0..path_count {
-        review_paths.push(dec.read_str()?);
-    }
-    let review_count = dec.read_usize()?;
-    let mut reviews = Vec::with_capacity(review_count.min(dec.0.len()));
-    for _ in 0..review_count {
-        let cmd = dec.read_u16()?;
-        let path_idx = dec.read_usize()?;
-        let path = review_paths
-            .get(path_idx)
-            .ok_or_else(|| ProfileError::new("binary review path index out of bounds"))?;
-        push_sorted(&mut reviews, cmd, path.clone())?;
-    }
+    let statuses = dec
+        .read_bytes(cmd_count)?
+        .iter()
+        .copied()
+        .map(decode_status)
+        .collect::<Result<Vec<_>, _>>()?;
 
     let variant_count = dec.read_usize()?;
-    let mut variant = Vec::with_capacity(variant_count.min(dec.0.len()));
+    let mut variant_ids = Vec::with_capacity(variant_count.min(dec.0.len()));
     for _ in 0..variant_count {
         let cmd = dec.read_u16()?;
         let name = dec.read_str()?;
         let id = VariantId::parse(&name)
             .ok_or_else(|| ProfileError::new("unknown binary variant id"))?;
-        push_sorted(
-            &mut variant,
-            cmd,
-            VariantBinding {
-                id,
-                arch: decode_arch(dec.read_u8()?)?,
-                binary_sha256: dec.read_hash()?,
-                evidence: dec.read_str()?,
-            },
-        )?;
+        push_sorted(&mut variant_ids, cmd, id)?;
     }
 
     let map_count = dec.read_usize()?;
@@ -509,25 +287,22 @@ fn decode_profile(dec: &mut Decoder<'_>) -> Result<EngineProfile, ProfileError> 
         base,
         binaries,
         statuses,
-        proofs,
-        contracts,
-        reviews,
-        variant,
+        proofs: Vec::new(),
+        contracts: Vec::new(),
+        reviews: Vec::new(),
+        variant: Vec::new(),
+        variant_ids,
         maps,
     })
 }
 
 #[allow(dead_code)]
-pub(crate) fn encode_bundle(
-    profiles: &[EngineProfile],
-    games: &[GameRecord],
-    contracts: &BTreeMap<[u8; 32], ContractProof>,
-) -> Result<Vec<u8>, ProfileError> {
+pub(crate) fn encode_bundle(profiles: &[EngineProfile], games: &[GameRecord]) -> Vec<u8> {
     let mut enc = Encoder::new();
 
     enc.write_usize(profiles.len());
     for profile in profiles {
-        encode_profile(&mut enc, profile)?;
+        enc.write_profile(profile);
     }
 
     enc.write_usize(games.len());
@@ -553,32 +328,12 @@ pub(crate) fn encode_bundle(
         }
     }
 
-    enc.write_usize(contracts.len());
-    for (id, proof) in contracts {
-        enc.write_hash(id);
-        enc.write_u8(encode_arch(proof.arch));
-        enc.write_u64(u64::from(proof.opcode));
-        enc.write_contract_side(&proof.base);
-        enc.write_contract_side(&proof.derived);
-        enc.write_hash(&proof.rules.extractor);
-        enc.write_hash(&proof.rules.context);
-        enc.write_hash(&proof.rules.mappings);
-        enc.write_hash(&proof.rules.summaries);
-        enc.write_hash(&proof.report_sha256);
-        enc.write_usize(proof.mappings_used.len());
-        for dep in &proof.mappings_used {
-            enc.write_str(dep);
-        }
-        enc.write_usize(proof.summaries_used.len());
-        for dep in &proof.summaries_used {
-            enc.write_str(dep);
-        }
-    }
-
-    Ok(enc.0)
+    enc.0
 }
 
-pub(super) fn decode_bundle(bytes: &[u8]) -> Result<Bundle, ProfileError> {
+pub(super) fn decode_bundle(
+    bytes: &[u8],
+) -> Result<(Vec<EngineProfile>, Vec<GameRecord>), ProfileError> {
     let mut dec = Decoder(bytes);
     if dec.read_bytes(MAGIC.len())? != MAGIC {
         return Err(ProfileError::new("invalid binary registry magic"));
@@ -623,49 +378,9 @@ pub(super) fn decode_bundle(bytes: &[u8]) -> Result<Bundle, ProfileError> {
         });
     }
 
-    let contract_count = dec.read_usize()?;
-    let mut contracts = BTreeMap::new();
-    for _ in 0..contract_count {
-        let id = dec.read_hash()?;
-        let arch = decode_arch(dec.read_u8()?)?;
-        let opcode = dec.read_u16()?;
-        let base = dec.read_contract_side()?;
-        let derived = dec.read_contract_side()?;
-        let rules = ContractRules {
-            extractor: dec.read_hash()?,
-            context: dec.read_hash()?,
-            mappings: dec.read_hash()?,
-            summaries: dec.read_hash()?,
-        };
-        let report_sha256 = dec.read_hash()?;
-        let map_count = dec.read_usize()?;
-        let mut mappings_used = Vec::with_capacity(map_count);
-        for _ in 0..map_count {
-            mappings_used.push(dec.read_str()?);
-        }
-        let sum_count = dec.read_usize()?;
-        let mut summaries_used = Vec::with_capacity(sum_count);
-        for _ in 0..sum_count {
-            summaries_used.push(dec.read_str()?);
-        }
-        contracts.insert(
-            id,
-            ContractProof {
-                arch,
-                opcode,
-                base,
-                derived,
-                rules,
-                report_sha256,
-                mappings_used,
-                summaries_used,
-            },
-        );
-    }
-
     if !dec.0.is_empty() {
         return Err(ProfileError::new("trailing bytes in binary registry"));
     }
 
-    Ok((profiles, games, contracts))
+    Ok((profiles, games))
 }

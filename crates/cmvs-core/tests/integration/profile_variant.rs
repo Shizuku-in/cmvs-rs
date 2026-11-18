@@ -93,6 +93,12 @@ fn inspected_early_queries_use_the_down_edge_and_extra_actions_can_be_consumed()
         ),
     ] {
         let profile = Registry::builtin().profile(id).unwrap();
+        assert!(
+            profile
+                .binaries
+                .iter()
+                .any(|binary| to_hex(&binary.sha256) == hash)
+        );
         let queries = [
             0x19c, 0x19e, 0x1a0, 0x1a2, 0x1a4, 0x1a6, 0x1a8, 0x1aa, 0x1ac, 0x1ae, 0x1b0, 0x1b2,
             0x1b4, 0x1b6, 0x1b8, 0x1ba, 0x1bc, 0x2f0, 0x2f2, 0x2f4,
@@ -101,9 +107,10 @@ fn inspected_early_queries_use_the_down_edge_and_extra_actions_can_be_consumed()
             15, 16, 0, 1, 7, 8, 6, 9, 10, 11, 12, 13, 14, 2, 3, 4, 5, 17, 18, 19,
         ];
         for (query, action) in queries.into_iter().zip(actions) {
-            let binding = profile.variant(query).unwrap();
-            assert_eq!(binding.id, VariantId::InputPress);
-            assert_eq!(to_hex(&binding.binary_sha256), hash);
+            assert_eq!(
+                profile.semantics(query),
+                Semantics::Variant(VariantId::InputPress)
+            );
             for (pressed, released, held) in [
                 (true, false, true),
                 (false, true, false),
@@ -193,10 +200,16 @@ fn font_cells_bindings_are_limited_to_the_inspected_commands() {
         ),
     ] {
         let profile = Registry::builtin().profile(id).unwrap();
-        let bindings: Vec<_> = profile
-            .variant_bindings()
-            .filter(|(_, binding)| binding.id == VariantId::FontCells)
-            .map(|(command, _)| command)
+        assert!(
+            profile
+                .binaries
+                .iter()
+                .any(|binary| to_hex(&binary.sha256) == hash)
+        );
+        let bindings: Vec<_> = (0..profile.statuses().len() as u16)
+            .filter(|&command| {
+                profile.semantics(command) == Semantics::Variant(VariantId::FontCells)
+            })
             .collect();
         assert_eq!(
             bindings,
@@ -211,8 +224,6 @@ fn font_cells_bindings_are_limited_to_the_inspected_commands() {
                 Semantics::Variant(VariantId::FontCells)
             );
         }
-        let binding = profile.variant(0x3ac).unwrap();
-        assert_eq!(to_hex(&binding.binary_sha256), hash);
         let mut code = vec![];
         command(&mut code, 0x23ac, &[u32::MAX]);
         let script = script(&code);

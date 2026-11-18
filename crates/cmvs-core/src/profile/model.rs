@@ -144,7 +144,10 @@ pub struct MachineProof {
     pub digest: [u8; 32],
 }
 
-/// One analysed executable of a build; every address is relative to this file only.
+/// Executable identity and, in research profiles, the inspected dispatch table.
+///
+/// Playback profiles retain the architecture, name and hash. Their case list is
+/// empty and their remaining PE fields are zero.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binary {
     pub arch: Arch,
@@ -170,6 +173,8 @@ pub struct EngineProfile {
     /// Review records, as paths relative to `docs/` of a section headed by the command.
     pub(super) reviews: Vec<(u16, String)>,
     pub(super) variant: Vec<(u16, VariantBinding)>,
+    /// Compact playback profiles carry only the selected implementation IDs.
+    pub(super) variant_ids: Vec<(u16, VariantId)>,
     /// CVNS only: reviewed command to the runtime command whose semantics it shares.
     pub(super) maps: Vec<(u16, u16)>,
 }
@@ -183,12 +188,16 @@ pub(super) fn lookup_sorted<T>(entries: &[(u16, T)], command: u16) -> Option<&T>
 
 impl EngineProfile {
     pub fn semantics(&self, command: u16) -> Semantics {
-        self.variant(command)
-            .map_or(Semantics::Root, |entry| Semantics::Variant(entry.id))
+        lookup_sorted(&self.variant_ids, command)
+            .copied()
+            .or_else(|| self.variant(command).map(|entry| entry.id))
+            .map_or(Semantics::Root, Semantics::Variant)
     }
+    /// The executable-bound evidence, when this is a research profile.
     pub fn variant(&self, command: u16) -> Option<&VariantBinding> {
         lookup_sorted(&self.variant, command)
     }
+    /// Executable-bound variant evidence. Use `semantics` for playback dispatch.
     pub fn variant_bindings(&self) -> impl Iterator<Item = (u16, &VariantBinding)> {
         self.variant
             .iter()
