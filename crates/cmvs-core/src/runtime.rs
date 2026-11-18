@@ -101,6 +101,7 @@ use std::{
     sync::Arc,
 };
 
+mod color_picker;
 mod frame;
 pub use frame::{FrameBudget, FrameDriver, FrameOutcome};
 mod lifecycle;
@@ -412,6 +413,8 @@ pub struct Runtime {
     main_script_name: &'static [u8],
     quit: bool,
     focused: bool,
+    in_game_color_picker: bool,
+    color_picker: Option<color_picker::ColorPicker>,
     machine: Machine,
     gate: CommandGate,
     /// Unreviewed commands first let through since the last `take_unreviewed_notices`.
@@ -668,6 +671,8 @@ impl Runtime {
             capture: ScreenCapture::default(),
             // No verified key bindings yet: no action is active (see `input`).
             input: ActionInput::default(),
+            in_game_color_picker: false,
+            color_picker: None,
             effects,
             timers: VmTimers::default(),
             resume_run: true,
@@ -872,6 +877,9 @@ impl Runtime {
             return Ok(());
         }
         self.audio_backend.update()?;
+        if self.color_picker.is_some() {
+            return Ok(());
+        }
         let clock = self.audio_backend.movie_clock()?;
         let had_movie = self.movies.has_player();
         let was_cvns_modal = self.movies.has_cvns_modal_player();
@@ -995,7 +1003,7 @@ impl Runtime {
     /// use its movie clock. Scene movies and MGV playback still advance. The VM timer
     /// delta is consumed once after yield, never per instruction or budget slice.
     pub fn advance_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
-        if self.quit {
+        if self.quit || self.color_picker.is_some() {
             return Ok(());
         }
         let was_cvns_modal = self.movies.has_cvns_modal_player();
@@ -1252,6 +1260,10 @@ impl Runtime {
         if !self.frame_running() {
             return Ok(RuntimeEvent::Inactive);
         }
+        if self.color_picker.is_some() {
+            self.advance_color_picker().map_err(RuntimeError::Other)?;
+            return Ok(RuntimeEvent::Yield);
+        }
         if std::mem::take(&mut self.capture_due) {
             self.draw_capture()?;
         }
@@ -1312,6 +1324,15 @@ impl Runtime {
                 label_slot,
                 text_slot,
             } => self.handle_cvns_slot_info(&request, slot, img_slot, label_slot, text_slot)?,
+            CvnsColorPicker { swatches } => {
+                if self.in_game_color_picker {
+                    self.open_color_picker(request, swatches)?;
+                    return Ok(RuntimeEvent::Yield);
+                }
+                let color = backend.choose_color(swatches)?;
+                request.complete(&mut self.machine, 0x4008)?;
+                crate::dispatch::store_color_result(self.machine.state_mut(), color);
+            }
             CvnsCaptureScreen { slot } => {
                 let frame = self.render_scene_frame()?;
                 self.scene.cvns_mut().install_captured_image(slot, frame)?;

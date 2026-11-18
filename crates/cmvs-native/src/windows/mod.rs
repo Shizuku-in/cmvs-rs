@@ -14,45 +14,6 @@ pub fn choose_font(owner: RawWindowHandle, current: &str) -> Result<Option<Strin
     font_dialog::choose_font(handle.hwnd, current).map_err(NativeError::Failed)
 }
 
-pub fn choose_color(
-    owner: RawWindowHandle,
-    swatches: [u32; 2],
-) -> Result<Option<u32>, NativeError> {
-    use windows_sys::Win32::UI::Controls::Dialogs::{
-        CC_RGBINIT, CHOOSECOLORW, ChooseColorW, CommDlgExtendedError,
-    };
-    let RawWindowHandle::Win32(handle) = owner else {
-        return Err(NativeError::Unsupported(
-            "the color dialog for a non-Win32 window",
-        ));
-    };
-    let to_colorref = |rgb: u32| (rgb & 0xff_ffff).swap_bytes() >> 8;
-    let mut custom = [0; 16];
-    custom[..2].copy_from_slice(&swatches.map(to_colorref));
-    let mut dialog = CHOOSECOLORW {
-        lStructSize: size_of::<CHOOSECOLORW>() as u32,
-        hwndOwner: handle.hwnd.get() as _,
-        lpCustColors: custom.as_mut_ptr(),
-        Flags: CC_RGBINIT,
-        ..Default::default()
-    };
-    // SAFETY: the modal call borrows the initialized structure and its 16 writable swatches.
-    #[allow(unsafe_code)]
-    if unsafe { ChooseColorW(&mut dialog) } != 0 {
-        return Ok(Some(to_colorref(dialog.rgbResult)));
-    }
-    // SAFETY: reads the calling thread's common-dialog error.
-    #[allow(unsafe_code)]
-    let error = unsafe { CommDlgExtendedError() };
-    if error == 0 {
-        Ok(None)
-    } else {
-        Err(NativeError::Failed(format!(
-            "ChooseColorW failed with common dialog error {error:#x}"
-        )))
-    }
-}
-
 /// The system font folder, then the per-user folder of fonts installed without
 /// administrator rights.
 pub fn font_directories() -> Vec<PathBuf> {

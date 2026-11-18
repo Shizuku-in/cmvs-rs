@@ -38,58 +38,6 @@ pub fn choose_font(owner: RawWindowHandle, current: &str) -> Result<Option<Strin
     decode_selection(output.status.success(), &output.stdout)
 }
 
-#[cfg(target_os = "macos")]
-pub fn choose_color(
-    owner: RawWindowHandle,
-    swatches: [u32; 2],
-) -> Result<Option<u32>, NativeError> {
-    if !matches!(owner, RawWindowHandle::AppKit(_)) {
-        return Err(NativeError::Unsupported(
-            "the color dialog for this window kind",
-        ));
-    }
-    const PICKER: &str = r#"
-on run argv
-    try
-        set picked to choose color default color {item 1 of argv as integer, item 2 of argv as integer, item 3 of argv as integer}
-        return (item 1 of picked as text) & " " & (item 2 of picked as text) & " " & (item 3 of picked as text)
-    on error number -128
-        return "CANCEL"
-    end try
-end run
-"#;
-    let [_, r, g, b] = swatches[0].to_be_bytes();
-    let channels = [r, g, b].map(|c| (u16::from(c) * 257).to_string());
-    let output = Command::new("/usr/bin/osascript")
-        .args(["-e", PICKER, "--"])
-        .args(channels)
-        .output()
-        .map_err(|e| NativeError::Failed(format!("cannot open macOS color dialog: {e}")))?;
-    if !output.status.success() {
-        return Err(NativeError::Failed("macOS color dialog failed".into()));
-    }
-    let text = std::str::from_utf8(&output.stdout)
-        .unwrap_or_default()
-        .trim();
-    if text == "CANCEL" {
-        return Ok(None);
-    }
-    let mut channels = text.split_ascii_whitespace();
-    let [r, g, b] = std::array::from_fn(|_| {
-        channels
-            .next()?
-            .parse::<u16>()
-            .ok()
-            .map(|wide| ((u32::from(wide) + 128) / 257) as u8)
-    });
-    if let (Some(r), Some(g), Some(b), None) = (r, g, b, channels.next()) {
-        return Ok(Some(u32::from_be_bytes([0, r, g, b])));
-    }
-    Err(NativeError::Failed(
-        "macOS color dialog returned an invalid color".into(),
-    ))
-}
-
 /// The system Standard Additions input dialog runs independently of the host NSWindow.
 pub fn edit_text(
     owner: RawWindowHandle,

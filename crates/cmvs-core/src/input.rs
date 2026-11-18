@@ -201,6 +201,13 @@ impl CodeInput {
                 0
             };
         }
+        for (counter, code) in input.arrow_holds.iter_mut().zip([35, 36]) {
+            *counter = if now[code] {
+                counter.saturating_add(1)
+            } else {
+                0
+            };
+        }
         let fn_pressed = (0..12).fold(0u16, |mask, bit| {
             mask | (u16::from(now[52 + bit] && !self.previous[52 + bit]) << bit)
         });
@@ -253,6 +260,8 @@ pub struct ActionInput {
     cvns_edges: u32,
     /// CVNS `sub_46E800` hold frame counters for Ctrl, Shift, Esc, Enter, Space, PgUp, PgDn.
     cvns_holds: [u32; 7],
+    /// Left and right hold durations for the in-game RGB sliders.
+    arrow_holds: [u32; 2],
     /// Positive hit rectangles queried via `0x20ca` / `0x2031` during the current frame.
     hit_rects: Vec<[i32; 4]>,
 }
@@ -375,6 +384,17 @@ impl ActionInput {
             }
         }
         hit
+    }
+    pub(crate) fn repeat_horizontal(&self) -> i8 {
+        // Give single presses pixel precision and accelerate sustained adjustment.
+        let [left, right] = self.arrow_holds.map(|frames| {
+            if frames >= 18 && frames.is_multiple_of(2) {
+                4
+            } else {
+                0
+            }
+        });
+        right - left
     }
     /// CVNS `sub_46f6e0` wait interrupt mask check with optional edge consumption.
     pub(crate) fn cvns_wait_interrupt(&mut self, mask: u32, consume: bool) -> bool {

@@ -957,7 +957,7 @@ pub fn prepare_scene<'a>(
         return Err(FormatError("invalid scene surface dimensions"));
     }
     if let Some(cvns) = scene.cvns() {
-        return cvns::prepare_gpu(cvns::prepare(
+        let mut frame = cvns::prepare(
             cvns,
             scene.clear_enabled(),
             scene.clear().color,
@@ -965,7 +965,28 @@ pub fn prepare_scene<'a>(
             additional,
             width,
             height,
-        ));
+        );
+        if let Some(([x, y, w, h], image)) = &scene.color_picker_panel {
+            frame.commands.push(Layer::Solid {
+                rect: [0, 0, i64::from(width), i64::from(height)],
+                color: [8, 11, 18],
+                alpha: 144,
+                blend: Blend::Alpha,
+            });
+            frame.commands.push(Layer::Projected {
+                image,
+                rect: [
+                    0,
+                    0,
+                    i64::from(image.pixels.width()),
+                    i64::from(image.pixels.height()),
+                ],
+                quad: [*x, *y, x + w, y + h].map(|v| v as f32 - 0.5),
+                alpha: 255,
+                blend: Blend::Replace,
+            });
+        }
+        return cvns::prepare_gpu(frame);
     }
     // Validate the entire scene before rasterizing. Slot order is the stable tie-breaker.
     let mut entries = Vec::new();

@@ -722,3 +722,93 @@ fn cvns_color_dialog_preserves_rgb_and_commits_only_after_the_host_answers() {
         }
     }
 }
+
+#[test]
+fn cvns_in_game_color_picker_previews_edits_and_keeps_the_script_paused() {
+    use cmvs_core::{
+        host::input::{CodeInput, KeyBindings},
+        host::platform::RecordingBackend,
+        profile::Registry,
+        runtime::{Runtime, RuntimeEvent},
+    };
+
+    let (root, _) = cvns_movie_fixture("color-picker", 0);
+    let mut code = Vec::new();
+    for _ in 0..2 {
+        push_const(&mut code, 0x200, 0x100, 0xff112233);
+        push_const(&mut code, 0x200, 0x100, 0xff445566);
+        word(&mut code, 0x21b7);
+    }
+    word(&mut code, 0x2000);
+    let start = Script::decode(&script(&code, &[])).unwrap();
+    let game = Registry::builtin()
+        .identify_game(&root, Some("cvns-20040730"))
+        .unwrap();
+    let mut run = Runtime::new(&start, &root, &game, 0).unwrap();
+    run.enable_in_game_color_picker();
+    let mut platform = RecordingBackend::default();
+    let mut codes = CodeInput::default();
+    let bindings = KeyBindings::default();
+    let [width, height] = run.screen_size().map(|v| v as i32);
+    let [x, y] = [(width - 400) / 2, (height - 234) / 2];
+    let pixel = |run: &Runtime, dx, dy| {
+        let frame = run.render_scene_frame().unwrap();
+        let offset = ((y + dy) * width + x + dx) as usize * 4;
+        <[u8; 4]>::try_from(&frame.pixels()[offset..offset + 4]).unwrap()
+    };
+    let mut input_frame =
+        |run: &mut Runtime, platform: &mut RecordingBackend, dx, dy, code: Option<usize>| {
+            let mut keys = [false; 128];
+            if let Some(code) = code {
+                keys[code] = true;
+            }
+            let input = run.input_mut();
+            input.set_pointer(x + dx, y + dy);
+            codes.update(&bindings, &keys, input);
+            assert_eq!(run.tick(platform).unwrap(), RuntimeEvent::Yield);
+            run.advance_playback(16).unwrap();
+        };
+    let open = |run: &mut Runtime, platform: &mut RecordingBackend| {
+        loop {
+            match run.tick(platform).unwrap() {
+                RuntimeEvent::Yield => break,
+                RuntimeEvent::Progress => {}
+                other => panic!("unexpected runtime event: {other:?}"),
+            }
+        }
+        assert_eq!(run.machine().stack().len_bytes(), 8);
+        assert_eq!(pixel(run, 260, 26), [0, 0, 0, 255]);
+    };
+    let clear = pixel(&run, 260, 26);
+    let original = run.machine().state().system_integer(4);
+    open(&mut run, &mut platform);
+    let steps = run.steps();
+    input_frame(&mut run, &mut platform, 36, 200, Some(1));
+    input_frame(&mut run, &mut platform, 36, 200, None);
+    assert_eq!(pixel(&run, 260, 26), [0x44, 0x55, 0x66, 255]);
+
+    input_frame(&mut run, &mut platform, 80, 74, Some(1));
+    input_frame(&mut run, &mut platform, 248, 74, Some(1));
+    input_frame(&mut run, &mut platform, 248, 74, None);
+    input_frame(&mut run, &mut platform, 248, 74, Some(36)); // Right adjusts red by one.
+    assert_eq!(pixel(&run, 260, 26), [201, 0x55, 0x66, 255]);
+    assert_eq!(run.steps(), steps);
+    assert_eq!(run.machine().stack().len_bytes(), 8);
+    assert_eq!(run.machine().state().system_integer(4), original);
+
+    input_frame(&mut run, &mut platform, 248, 74, Some(22)); // Return confirms.
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    assert_eq!(run.machine().state().system_integer(0), Some(1));
+    assert_eq!(run.machine().state().system_integer(4), Some(0xc95566));
+    assert_eq!(pixel(&run, 260, 26), clear);
+
+    open(&mut run, &mut platform);
+    input_frame(&mut run, &mut platform, 83, 200, Some(1));
+    input_frame(&mut run, &mut platform, 83, 200, None);
+    assert_eq!(pixel(&run, 260, 26), [0x11, 0x22, 0x33, 255]);
+    input_frame(&mut run, &mut platform, 83, 200, Some(25)); // Escape cancels.
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    assert_eq!(run.machine().state().system_integer(0), Some(0));
+    assert_eq!(run.machine().state().system_integer(4), Some(0xc95566));
+    assert_eq!(pixel(&run, 260, 26), clear);
+}

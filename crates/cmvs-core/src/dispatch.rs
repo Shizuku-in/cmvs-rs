@@ -12,6 +12,7 @@
 //! metadata alone does not authorize a command or establish host capabilities.
 mod call;
 mod handlers;
+pub(crate) use handlers::platform::store_color_result;
 mod hosts;
 pub mod ownership;
 mod registry;

@@ -1,5 +1,5 @@
 //! Window services, dialogs, and frame capture.
-use crate::dispatch::{Call, Flow, Hosts};
+use crate::dispatch::{Call, Flow, Hosts, RuntimeOperation};
 use std::error::Error;
 
 pub(in super::super) fn root_platform(
@@ -191,13 +191,20 @@ pub(in super::super) fn cvns_color_dialog(
         call.argument(4, "first custom color")? & 0xff_ffff,
         call.argument(8, "second custom color")? & 0xff_ffff,
     ];
+    if hosts.runtime {
+        return Ok(call.defer(RuntimeOperation::CvnsColorPicker { swatches }, 8)?);
+    }
     let color = hosts
         .device_frame
         .as_deref_mut()
         .expect("color dialog backend checked")
         .choose_color(swatches)?;
     call.complete(0x4008)?;
-    let state = call.vm.state_mut();
+    store_color_result(call.vm.state_mut(), color);
+    Ok(Flow::Done)
+}
+
+pub(crate) fn store_color_result(state: &mut crate::evaluate::State, color: Option<u32>) {
     state
         .set_system_integer(0, u32::from(color.is_some()))
         .expect("slot zero exists");
@@ -206,7 +213,6 @@ pub(in super::super) fn cvns_color_dialog(
             .set_system_integer(4, color & 0xff_ffff)
             .expect("slot four exists");
     }
-    Ok(Flow::Done)
 }
 
 /// 0x213d / 0x140081520 seeds the modal dialog with the global face (+3160).

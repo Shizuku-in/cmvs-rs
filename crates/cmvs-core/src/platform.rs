@@ -230,8 +230,8 @@ pub trait PlatformBackend {
     ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement the text dialog".into())
     }
-    /// CVNS `0x21b7` seeds two custom `0xRRGGBB` swatches. Hosts without a
-    /// color chooser return cancellation.
+    /// Fallback for CVNS `0x21b7` when the in-game picker is disabled.
+    /// The two swatches use `0xRRGGBB` order. The default response is cancellation.
     fn choose_color(
         &mut self,
         _swatches: [u32; 2],

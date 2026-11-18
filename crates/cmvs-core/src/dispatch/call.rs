@@ -53,6 +53,9 @@ pub enum RuntimeOperation {
         duration_ms: u32,
         ramp_ms: u32,
     },
+    CvnsColorPicker {
+        swatches: [u32; 2],
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -254,6 +254,7 @@ impl GameBootstrap {
                 ..Default::default()
             },
         )?;
+        runtime.enable_in_game_color_picker();
         match config.movie {
             MovieConfig::Synchronous => {
                 runtime.set_mgv_factory(Box::new(cmvs_video::TheoraFactory));
