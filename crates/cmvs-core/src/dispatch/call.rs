@@ -56,6 +56,9 @@ pub enum RuntimeOperation {
     CvnsColorPicker {
         swatches: [u32; 2],
     },
+    CvnsMessageDialog {
+        arguments: Option<[u32; 3]>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

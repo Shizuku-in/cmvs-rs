@@ -122,47 +122,21 @@ pub(in super::super) fn cvns_message_dialog(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_>,
 ) -> Result<Flow, Box<dyn Error + Send + Sync>> {
-    use crate::platform::{MessageDialogKind, MessageDialogRequest, MessageDialogResult};
-
-    let (complete_code, request) = if call.command == 0x5b0 {
-        let (caption, text) = match call.vm.text_encoding() {
-            crate::TextEncoding::Utf8 => (
-                "ゲーム終了の確認".as_bytes().to_vec(),
-                "ゲームを終了させますか？".as_bytes().to_vec(),
-            ),
-            _ => (
-                b"\x83\x51\x81\x5b\x83\x80\x8f\x49\x97\xb9\x82\xcc\x8a\x6d\x94\x46".to_vec(),
-                b"\x83\x51\x81\x5b\x83\x80\x82\xf0\x8f\x49\x97\xb9\x82\xb3\x82\xb9\x82\xdc\x82\xb7\x82\xa9\x81\x48".to_vec(),
-            ),
-        };
-        (
-            0x4000,
-            MessageDialogRequest {
-                kind: MessageDialogKind::Confirm,
-                caption,
-                text,
-            },
-        )
+    use crate::platform::MessageDialogResult;
+    let arguments = if call.command == 0x5b0 {
+        None
     } else {
-        let mode = call.argument(4, "dialog mode")?;
-        let cap_ref = call.argument(8, "dialog caption")?;
-        let text_ref = call.argument(12, "dialog text")?;
-        let caption = call.vm.resolve_string(cap_ref)?;
-        let text = call.vm.resolve_string(text_ref)?;
-        let kind = if mode == 0 {
-            MessageDialogKind::Alert
-        } else {
-            MessageDialogKind::Confirm
-        };
-        (
-            0x400c,
-            MessageDialogRequest {
-                kind,
-                caption,
-                text,
-            },
-        )
+        Some([
+            call.argument(4, "dialog mode")?,
+            call.argument(8, "dialog caption")?,
+            call.argument(12, "dialog text")?,
+        ])
     };
+    let bytes = if arguments.is_some() { 12 } else { 0 };
+    if hosts.in_game_message_dialogs {
+        return Ok(call.defer(RuntimeOperation::CvnsMessageDialog { arguments }, bytes)?);
+    }
+    let request = cvns_message_request(call.vm, arguments)?;
     let answer = hosts
         .device_frame
         .as_deref_mut()
@@ -173,12 +147,50 @@ pub(in super::super) fn cvns_message_dialog(
         MessageDialogResult::Cancelled => false,
         MessageDialogResult::Accepted => true,
     };
-    call.complete(complete_code)?;
+    call.complete(0x4000 | bytes as u16)?;
     call.vm
         .state_mut()
         .set_system_integer(0, u32::from(accepted))
         .expect("slot zero exists");
     Ok(Flow::Done)
+}
+
+pub(crate) fn cvns_message_request(
+    vm: &crate::machine::Machine,
+    arguments: Option<[u32; 3]>,
+) -> Result<crate::platform::MessageDialogRequest, crate::bytecode::DecodeError> {
+    use crate::platform::{MessageDialogKind, MessageDialogRequest};
+    if let Some([mode, caption, text]) = arguments {
+        return Ok(MessageDialogRequest {
+            kind: if mode == 0 {
+                MessageDialogKind::Alert
+            } else {
+                MessageDialogKind::Confirm
+            },
+            caption: vm.resolve_string(caption)?,
+            text: vm.resolve_string(text)?,
+        });
+    }
+    let (caption, text): (&[u8], &[u8]) = match vm.text_encoding() {
+        crate::TextEncoding::Utf8 => (
+            "ゲーム終了の確認".as_bytes(),
+            "ゲームを終了させますか？".as_bytes(),
+        ),
+        // 退出确认 / 确定退出游戏吗？
+        crate::TextEncoding::Gbk => (
+            b"\xcd\xcb\xb3\xf6\xc8\xb7\xc8\xcf",
+            b"\xc8\xb7\xb6\xa8\xcd\xcb\xb3\xf6\xd3\xce\xcf\xb7\xc2\xf0\xa3\xbf",
+        ),
+        crate::TextEncoding::ShiftJis => (
+            b"\x83\x51\x81\x5b\x83\x80\x8f\x49\x97\xb9\x82\xcc\x8a\x6d\x94\x46",
+            b"\x83\x51\x81\x5b\x83\x80\x82\xf0\x8f\x49\x97\xb9\x82\xb3\x82\xb9\x82\xdc\x82\xb7\x82\xa9\x81\x48",
+        ),
+    };
+    Ok(MessageDialogRequest {
+        kind: MessageDialogKind::Confirm,
+        caption: caption.to_vec(),
+        text: text.to_vec(),
+    })
 }
 
 /// CVNS 0x21b7 (cvns-20040730 0x430820 -> ChooseColorA): the two RGB words seed

@@ -102,7 +102,9 @@ use std::{
 };
 
 mod color_picker;
+mod dialog;
 mod frame;
+mod message_dialog;
 pub use frame::{FrameBudget, FrameDriver, FrameOutcome};
 mod lifecycle;
 mod preferences;
@@ -414,7 +416,9 @@ pub struct Runtime {
     quit: bool,
     focused: bool,
     in_game_color_picker: bool,
-    color_picker: Option<color_picker::ColorPicker>,
+    in_game_message_dialogs: bool,
+    dialog_font: Option<Box<dyn crate::message::GlyphRasterizer + Send>>,
+    dialog: Option<dialog::Dialog>,
     machine: Machine,
     gate: CommandGate,
     /// Unreviewed commands first let through since the last `take_unreviewed_notices`.
@@ -672,7 +676,9 @@ impl Runtime {
             // No verified key bindings yet: no action is active (see `input`).
             input: ActionInput::default(),
             in_game_color_picker: false,
-            color_picker: None,
+            in_game_message_dialogs: false,
+            dialog_font: None,
+            dialog: None,
             effects,
             timers: VmTimers::default(),
             resume_run: true,
@@ -877,7 +883,7 @@ impl Runtime {
             return Ok(());
         }
         self.audio_backend.update()?;
-        if self.color_picker.is_some() {
+        if self.dialog.is_some() {
             return Ok(());
         }
         let clock = self.audio_backend.movie_clock()?;
@@ -1003,7 +1009,7 @@ impl Runtime {
     /// use its movie clock. Scene movies and MGV playback still advance. The VM timer
     /// delta is consumed once after yield, never per instruction or budget slice.
     pub fn advance_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
-        if self.quit || self.color_picker.is_some() {
+        if self.quit || self.dialog.is_some() {
             return Ok(());
         }
         let was_cvns_modal = self.movies.has_cvns_modal_player();
@@ -1260,8 +1266,8 @@ impl Runtime {
         if !self.frame_running() {
             return Ok(RuntimeEvent::Inactive);
         }
-        if self.color_picker.is_some() {
-            self.advance_color_picker().map_err(RuntimeError::Other)?;
+        if self.dialog.is_some() {
+            self.advance_dialog()?;
             return Ok(RuntimeEvent::Yield);
         }
         if std::mem::take(&mut self.capture_due) {
@@ -1326,12 +1332,26 @@ impl Runtime {
             } => self.handle_cvns_slot_info(&request, slot, img_slot, label_slot, text_slot)?,
             CvnsColorPicker { swatches } => {
                 if self.in_game_color_picker {
-                    self.open_color_picker(request, swatches)?;
+                    self.open_dialog(
+                        request,
+                        dialog::Content::Color(color_picker::ColorPicker::new(swatches)),
+                    )?;
                     return Ok(RuntimeEvent::Yield);
                 }
                 let color = backend.choose_color(swatches)?;
                 request.complete(&mut self.machine, 0x4008)?;
                 crate::dispatch::store_color_result(self.machine.state_mut(), color);
+            }
+            CvnsMessageDialog { arguments } => {
+                let message = crate::dispatch::cvns_message_request(&self.machine, arguments)?;
+                let dialog = message_dialog::MessageDialog::new(
+                    message,
+                    self.machine.text_encoding(),
+                    arguments.is_none(),
+                    self.dialog_font.is_some(),
+                );
+                self.open_dialog(request, dialog::Content::Message(dialog))?;
+                return Ok(RuntimeEvent::Yield);
             }
             CvnsCaptureScreen { slot } => {
                 let frame = self.render_scene_frame()?;
@@ -1671,6 +1691,7 @@ impl Runtime {
         let mut sequence_messages = Some(&mut self.messages);
         let mut hosts = crate::dispatch::Hosts {
             runtime: true,
+            in_game_message_dialogs: self.in_game_message_dialogs,
             message_wait: None,
             snapshot: Some(crate::dispatch::SnapshotHosts {
                 image: &mut self.save_image,

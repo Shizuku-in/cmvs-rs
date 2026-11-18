@@ -969,8 +969,7 @@ impl Runtime {
             self.write_slot(LOAD_BACKUP_SLOT, true)?;
         }
         self.machine.install_restore(vm);
-        self.color_picker = None;
-        self.scene.color_picker_panel = None;
+        self.clear_dialog();
         self.history = history;
         self.sequence = Default::default();
         self.camera = Default::default();

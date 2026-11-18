@@ -812,3 +812,95 @@ fn cvns_in_game_color_picker_previews_edits_and_keeps_the_script_paused() {
     assert_eq!(run.machine().state().system_integer(4), Some(0xc95566));
     assert_eq!(pixel(&run, 260, 26), clear);
 }
+
+#[test]
+fn cvns_in_game_message_dialogs_wait_for_the_player_and_return_the_answer() {
+    use cmvs_core::{
+        host::input::{CodeInput, KeyBindings},
+        host::platform::RecordingBackend,
+        profile::Registry,
+        runtime::{Runtime, RuntimeEvent},
+    };
+
+    let (root, _) = cvns_movie_fixture("message-dialog", 0);
+    let mut code = Vec::new();
+    word(&mut code, 0x21b0);
+    for mode in [0, 1] {
+        push_const(&mut code, 0x201, 0x120, 6);
+        push_const(&mut code, 0x201, 0x120, 0);
+        push_const(&mut code, 0x200, 0x100, mode);
+        word(&mut code, 0x21b1);
+    }
+    word(&mut code, 0x2000);
+    let start = Script::decode(&script(&code, b"TITLE\0BODY\0")).unwrap();
+    let game = Registry::builtin()
+        .identify_game(&root, Some("cvns-20040730"))
+        .unwrap();
+    let mut run = Runtime::new(&start, &root, &game, 0).unwrap();
+    run.enable_in_game_dialogs(None);
+    let mut platform = RecordingBackend::default();
+    let mut codes = CodeInput::default();
+    let bindings = KeyBindings::default();
+    let [width, height] = run.screen_size().map(|v| v as i32);
+    let [x, y] = [(width - 400) / 2, (height - 234) / 2];
+
+    let mut frame = |run: &mut Runtime, point: [i32; 2], code: Option<usize>| {
+        let mut keys = [false; 128];
+        if let Some(code) = code {
+            keys[code] = true;
+        }
+        codes.update(&bindings, &keys, run.input_mut());
+        run.input_mut().set_pointer(x + point[0], y + point[1]);
+        loop {
+            match run.tick(&mut platform).unwrap() {
+                RuntimeEvent::Yield => break,
+                RuntimeEvent::Progress => {}
+                event => panic!("unexpected runtime event: {event:?}"),
+            }
+        }
+        run.advance_playback(16).unwrap();
+    };
+    let clear = run.render_scene_frame().unwrap();
+    frame(&mut run, [0, 0], Some(22)); // Opening Return is consumed.
+    let exit_call = run.machine().pending_system();
+    assert_eq!(exit_call.map(|(_, command)| command), Some(0x5b0));
+    let steps = run.steps();
+    assert_ne!(run.render_scene_frame().unwrap(), clear);
+    frame(&mut run, [0, 0], Some(22));
+    assert_eq!(run.steps(), steps);
+    assert_eq!(run.machine().pending_system(), exit_call);
+    frame(&mut run, [0, 0], None);
+    frame(&mut run, [0, 0], Some(22)); // Default button is Cancel.
+    assert_eq!(run.machine().state().system_integer(0), Some(0));
+    assert_eq!(run.render_scene_frame().unwrap(), clear);
+
+    frame(&mut run, [0, 0], Some(3)); // An opening right click must not dismiss the alert.
+    assert_eq!(
+        run.machine().pending_system().map(|(_, cmd)| cmd),
+        Some(0x5b1)
+    );
+    frame(&mut run, [0, 0], None);
+    assert_eq!(run.machine().stack().len_bytes(), 12);
+    let alert = run.render_scene_frame().unwrap();
+    // The first letter of the script's title and body are both drawn.
+    for (dx, dy) in [(18, 18), (18, 106)] {
+        let i = (4 * ((y + dy) * width + x + dx)) as usize;
+        assert_eq!(alert.pixels()[i..i + 3], [238, 242, 249]);
+    }
+    frame(&mut run, [330, 200], Some(1));
+    assert_eq!(run.machine().stack().len_bytes(), 12);
+    frame(&mut run, [330, 200], None);
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    assert_eq!(run.machine().state().system_integer(0), Some(1));
+
+    frame(&mut run, [0, 0], None);
+    assert_eq!(
+        run.machine().pending_system().map(|(_, cmd)| cmd),
+        Some(0x5b1)
+    );
+    frame(&mut run, [0, 0], Some(25)); // Escape cancels a two-button prompt.
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    assert_eq!(run.machine().state().system_integer(0), Some(0));
+    assert_eq!(run.render_scene_frame().unwrap(), clear);
+    assert!(platform.message_dialogs().is_empty());
+}

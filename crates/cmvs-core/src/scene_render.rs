@@ -966,7 +966,7 @@ pub fn prepare_scene<'a>(
             width,
             height,
         );
-        if let Some(([x, y, w, h], image)) = &scene.color_picker_panel {
+        if let Some(([x, y, w, h], image)) = &scene.modal_panel {
             frame.commands.push(Layer::Solid {
                 rect: [0, 0, i64::from(width), i64::from(height)],
                 color: [8, 11, 18],

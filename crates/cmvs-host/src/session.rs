@@ -254,7 +254,9 @@ impl GameBootstrap {
                 ..Default::default()
             },
         )?;
-        runtime.enable_in_game_color_picker();
+        runtime.enable_in_game_dialogs(font.map(|font| {
+            Box::new(font.clone()) as Box<dyn cmvs_core::render::message::GlyphRasterizer + Send>
+        }));
         match config.movie {
             MovieConfig::Synchronous => {
                 runtime.set_mgv_factory(Box::new(cmvs_video::TheoraFactory));

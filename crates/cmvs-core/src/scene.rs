@@ -753,7 +753,7 @@ pub struct SceneHost {
     /// CVNS (`cvns-20090203`) 2D image buffers, 1536 sprites, fade, mask wipe, and quake.
     cvns: Option<Box<cvns::CvnsScene>>,
     /// Transient UI drawn over CVNS layers, outside the game's sprite slots.
-    pub(crate) color_picker_panel: Option<([i64; 4], ObjectImage)>,
+    pub(crate) modal_panel: Option<([i64; 4], ObjectImage)>,
 }
 impl SceneHost {
     /// Construct runtime hosts for the independently inspected child-table layout
@@ -1781,7 +1781,7 @@ impl SceneHost {
             cvns_backdrop_disabled: false,
             cvns_layer_fade_alpha: None,
             cvns: None,
-            color_picker_panel: None,
+            modal_panel: None,
         };
     }
 }

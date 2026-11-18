@@ -124,6 +124,7 @@ pub struct TextHosts<'a> {
 #[derive(Default)]
 pub struct Hosts<'a> {
     pub runtime: bool,
+    pub in_game_message_dialogs: bool,
     pub snapshot: Option<SnapshotHosts<'a>>,
     pub message_wait: Option<MessageWaitHosts<'a>>,
     pub scripts: Option<ScriptHosts<'a>>,
