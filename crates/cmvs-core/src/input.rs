@@ -819,6 +819,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("cmvs-key-cfg-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
 
         assert_eq!(
             KeyBindings::load_for_profile(&root, cvns).unwrap(),

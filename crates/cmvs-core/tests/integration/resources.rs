@@ -27,7 +27,7 @@ impl Root {
         for dir in ["a", "b", "c"] {
             fs::create_dir(root.join(dir)).unwrap();
         }
-        Self(root)
+        Self(root.canonicalize().unwrap())
     }
     fn put(&self, path: &str, bytes: &[u8]) {
         fs::write(self.0.join(path), bytes).unwrap();
@@ -267,13 +267,13 @@ fn resolve_under_distinguishes_missing_files_from_invalid_paths() {
 
 #[test]
 fn resolve_under_and_loose_directory_reads_fold_ascii_case_without_escaping_root() {
-    use cmvs_core::{host::filesystem::PathError, host::filesystem::resolve_under};
+    use cmvs_core::host::filesystem::resolve_under;
     let root = Root::new();
     fs::create_dir_all(root.0.join("DATA/Music")).unwrap();
     fs::write(root.0.join("DATA/Music/BGM30.ogg"), b"vorbis").unwrap();
 
     let resolved = resolve_under(&root.0, br"data\music\bgm30.ogg").unwrap();
-    assert!(resolved.ends_with("DATA/Music/BGM30.ogg"));
+    assert_eq!(fs::read(resolved).unwrap(), b"vorbis");
 
     let mut archives = ResourceArchives::new(&root.0).unwrap();
     let paths = BTreeMap::from([((0x2013, 0), b"data\\music\\".to_vec())]);
@@ -288,6 +288,8 @@ fn resolve_under_and_loose_directory_reads_fold_ascii_case_without_escaping_root
 
     #[cfg(unix)]
     {
+        use cmvs_core::host::filesystem::PathError;
+
         let outside = crate::support::temp_dir::TempDir::new("escape");
         fs::write(outside.join("SECRET.txt"), b"x").unwrap();
         std::os::unix::fs::symlink(&outside, root.0.join("LINKDIR")).unwrap();
