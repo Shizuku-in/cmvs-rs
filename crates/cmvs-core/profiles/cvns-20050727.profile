@@ -443,7 +443,7 @@ binary x86 file=cvns.exe sha256=fd475dda79e4a559d934b214494d314539915afde7a910b3
 0x21b4 noop 0x3ba8e
 0x21b5 noop 0x3ba8e
 0x21b6 reviewed 0x3ba02 map=0x213d review=games/miharu/README.md
-0x21b7 unreviewed 0x3ba0e
+0x21b7 reviewed 0x3ba0e map=0x25b7 review=games/majifd/README.md
 0x21b8 noop 0x3ba8e
 0x21b9 noop 0x3ba8e
 0x21ba noop 0x3ba8e

@@ -17,16 +17,16 @@
 
 | 项目 | 结果与范围 |
 |---|---|
-| 封包与脚本 (`S1`–`S4`) | 通过：8 个 CPZ1 资源档及音乐/视频共 13,818 项资源头（`pb2` 1,453、`msk` 41、`mv2` 12,124、`ogg` 199、`cmv` 1）与 111 个脚本（`data/pack/start.pss` 加 `script.cpz` 其余 110 个脚本，5,229,171 条指令、全部 208 条系统命令均为 `reviewed`；74 个未使用槽位保持 `unreviewed`，232 个空槽位为 `noop`）通过；`op.cmv` 2,965 帧离线解码通过（4,952 ms） |
+| 封包与脚本 (`S1`–`S4`) | 通过：8 个 CPZ1 资源档及音乐/视频共 13,818 项资源头（`pb2` 1,453、`msk` 41、`mv2` 12,124、`ogg` 199、`cmv` 1）与 111 个脚本（`data/pack/start.pss` 加 `script.cpz` 其余 110 个脚本，5,229,171 条指令、全部 208 条系统命令均为 `reviewed`；73 个未使用槽位保持 `unreviewed`，232 个空槽位为 `noop`）通过；`op.cmv` 2,965 帧离线解码通过（4,952 ms） |
 | 系统存档 (`S5`) | 跳过：样本 `data/save/` 目录为空 |
 | 启动与确定性 (`R1`, `D1`) | 通过（含 `--render-frames`）：冷启动经 `logo.pss` → `op.pss`（播完 `op.cmv`）进入 `menu.pss` 4 按钮起始页（14,502 步 / 8,377 帧），重放哈希一致 |
 | 交互与回想 (`I1`, `I4`) | 通过（含 `--render-frames`）：在 `sx01.pss` 第 10 个等待点通过全部输入动作，滚轮上滑打开 10 条回想记录并取消返回原等待点 |
 | 存读档恢复 (`V1`–`V4`) | 通过（含 `--render-frames`）：`CSP1` 重启读档、同会话读档、再保存字节一致及 `998/999` 备份槽均通过（`sx01.pss` 21 步等待序列一致） |
-| 未完成与未覆盖范围 | `D2`/`D3`/`I2`/`I3`/`I5`/`P*`/`C*`/`V5`/`R2+` 长探针、桌面实机交互与全路线尚未运行 |
+| 系统存档与损坏档 (`D3`, `V5`) | 通过：损坏档被拒绝，单线结束后重启恢复到同一标题页 |
 
 ## 命令映射与复核
 
-- **基础环境与复用**：经 `cvns.exe`（`1e0d17db...`）核对，`sub_401270` 按 `CVNS_SYSTEM_MAIN.WINDOW_SIZE` 选 `0→640×480`、`1→800×600`、`2→1024×768`（本样本为 `1`）；`sub_412980`/`sub_411F00` 读写 `CSS0`，全局容量 `[4096, 262144, 0, 256]`；`sub_428490`/`sub_439670` 读写 `CSP1`–`CSP9`；`sub_42C850`（`0x20c0 -> map=0x24c0`）按 `master * video / 100` 缩放音量播放 `op.cmv`。脚本使用的 205 条共有命令及未使用的 46 条非空槽位经 switch 与处理函数对比沿用 [cvns-20050727](../../../crates/cmvs-core/profiles/cvns-20050727.profile) 映射；其余 74 个未使用槽位保持 `unreviewed`。
+- **基础环境与复用**：经 `cvns.exe`（`1e0d17db...`）核对，`sub_401270` 按 `CVNS_SYSTEM_MAIN.WINDOW_SIZE` 选 `0→640×480`、`1→800×600`、`2→1024×768`（本样本为 `1`）；`sub_412980`/`sub_411F00` 读写 `CSS0`，全局容量 `[4096, 262144, 0, 256]`；`sub_428490`/`sub_439670` 读写 `CSP1`–`CSP9`；`sub_42C850`（`0x20c0 -> map=0x24c0`）按 `master * video / 100` 缩放音量播放 `op.cmv`。脚本使用的 205 条共有命令及未使用的 46 条非空槽位经 switch 与处理函数对比沿用 [cvns-20050727](../../../crates/cmvs-core/profiles/cvns-20050727.profile) 映射；其余 73 个未使用槽位保持 `unreviewed`。
 
 ### 0x20ef
 
@@ -49,4 +49,4 @@
   - 探针（含渲染）：`cargo run --offline --release -p cmvs-probe -- <秋色恋華目录> --out /tmp/aki_probe_render --font .../ipamp.ttf --render-frames --checks S1,S2,S3,S4,S5,R1,D1,I1,I4,V1,V2,V3,V4 --max-steps 5000000`
   - 视频：`cargo run --offline --release --bin cmvs-cmv -- <秋色恋華目录>/data/video/op.cmv --check-frames`
   - 桌面运行参考：`cargo run --offline --release --features wgpu-renderer,audio-output --bin cmvs-desktop -- <秋色恋華目录> --encoding shift-jis --renderer wgpu --audio native --font .../ipamp.ttf --user-data-dir <用户目录>`
-- **限制**：按快速可玩目标，未运行 `R2+`/`D2`/`D3`/`I2`/`I3`/`I5`/`P*`/`C*`/`V5` 长路径探针，也未在桌面窗口实机交互游玩全篇。
+- **限制**：长路线、全分支和桌面全篇交互仍待验证。

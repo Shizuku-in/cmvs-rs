@@ -1399,7 +1399,7 @@ pub static CVNS: &[Entry] = &[
     Entry {
         command: 0x5b7,
         name: "CVNS color picker dialog",
-        capability: Capability::Runtime,
+        capability: Capability::ColorDialog,
         handler: cvns_color_dialog,
     },
     Entry {

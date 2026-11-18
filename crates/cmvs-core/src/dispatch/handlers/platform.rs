@@ -181,19 +181,31 @@ pub(in super::super) fn cvns_message_dialog(
     Ok(Flow::Done)
 }
 
-/// CVNS 0x21b7 (cvns-20040730 0x430820 -> ChooseColorA): pops two color words (`0x4008`)
-/// and writes `system_integer(0) = 0` when no interactive color dialog is picked.
+/// CVNS 0x21b7 (cvns-20040730 0x430820 -> ChooseColorA): the two RGB words seed
+/// custom swatches, and only confirmation replaces system integer 4.
 pub(in super::super) fn cvns_color_dialog(
-    _hosts: &mut Hosts<'_>,
+    hosts: &mut Hosts<'_>,
     call: &mut Call<'_>,
 ) -> Result<Flow, Box<dyn Error + Send + Sync>> {
-    call.ignore_argument(4, "initial color")?;
-    call.ignore_argument(8, "custom color")?;
+    let swatches = [
+        call.argument(4, "first custom color")? & 0xff_ffff,
+        call.argument(8, "second custom color")? & 0xff_ffff,
+    ];
+    let color = hosts
+        .device_frame
+        .as_deref_mut()
+        .expect("color dialog backend checked")
+        .choose_color(swatches)?;
     call.complete(0x4008)?;
-    call.vm
-        .state_mut()
-        .set_system_integer(0, 0)
+    let state = call.vm.state_mut();
+    state
+        .set_system_integer(0, u32::from(color.is_some()))
         .expect("slot zero exists");
+    if let Some(color) = color {
+        state
+            .set_system_integer(4, color & 0xff_ffff)
+            .expect("slot four exists");
+    }
     Ok(Flow::Done)
 }
 

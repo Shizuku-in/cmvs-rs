@@ -230,6 +230,14 @@ pub trait PlatformBackend {
     ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement the text dialog".into())
     }
+    /// CVNS `0x21b7` seeds two custom `0xRRGGBB` swatches. Hosts without a
+    /// color chooser return cancellation.
+    fn choose_color(
+        &mut self,
+        _swatches: [u32; 2],
+    ) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
+        Ok(None)
+    }
     /// 0x213d's modal font dialog, seeded with the global face in the game encoding.
     /// Ok(None) is a cancelled dialog; Ok(Some) the chosen face in the game encoding.
     fn choose_font(

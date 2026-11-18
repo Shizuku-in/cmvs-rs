@@ -83,6 +83,7 @@ const ROOT_CLAIM: Claim = Claim {
                         | super::Capability::SystemWrite
                         | super::Capability::FontDialog
                         | super::Capability::TextDialog
+                        | super::Capability::ColorDialog
                         | super::Capability::Capture
                         | super::Capability::CaptureDevice
                         | super::Capability::MovieScene

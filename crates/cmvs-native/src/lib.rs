@@ -61,6 +61,14 @@ pub fn choose_font(owner: RawWindowHandle, current: &str) -> Result<Option<Strin
     platform::choose_font(owner, current)
 }
 
+/// Modal color chooser. Colors are packed as `0xRRGGBB`, and `None` means cancel.
+pub fn choose_color(
+    owner: RawWindowHandle,
+    swatches: [u32; 2],
+) -> Result<Option<u32>, NativeError> {
+    platform::choose_color(owner, swatches)
+}
+
 /// Modal comment editor. Text is Unicode at the OS boundary; None means cancel.
 pub fn edit_text(
     owner: RawWindowHandle,

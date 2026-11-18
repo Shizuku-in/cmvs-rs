@@ -8,7 +8,7 @@ use crate::{
     evaluate::error,
     image::{self, ImageSource},
     input::ActionInput,
-    message::{AutoAdvanceContext, RecordedGlyph, TextObject},
+    message::{AutoAdvanceContext, GlyphMask, RecordedGlyph, TextObject},
     message_flags::MessageFlags,
     scene::{
         DrawState, ObjectImage, SceneObject,
@@ -16,7 +16,7 @@ use crate::{
     },
     settings::TextOutputSettings,
 };
-use std::{error::Error, sync::Arc};
+use std::{collections::BTreeMap, error::Error, sync::Arc};
 
 /// Eight independently configurable CVNS text window surfaces (`*(this + 3460..3468)`).
 pub const CVNS_WINDOWS: usize = 8;
@@ -211,7 +211,7 @@ pub(crate) struct ExternalGlyphSheet {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ExternalGlyphBank {
     sheets: Vec<ExternalGlyphSheet>,
-    glyphs: std::collections::BTreeMap<(u16, u32), Vec<u8>>,
+    glyphs: BTreeMap<u16, BTreeMap<u32, GlyphMask>>,
 }
 
 impl ExternalGlyphBank {
@@ -225,13 +225,18 @@ impl ExternalGlyphBank {
     }
 
     pub(crate) fn extract_glyph(&mut self, tile_index: u32, sjis_code: u16) {
+        // The original lookup stops at the first matching character, then searches its sizes.
+        if self.glyphs.contains_key(&sjis_code) {
+            return;
+        }
+        let mut sizes = BTreeMap::new();
         for sheet in &self.sheets {
             let size = sheet.glyph_size;
             if size == 0 || sheet.width < size || sheet.height < size {
                 continue;
             }
             let cols = sheet.width / size;
-            if tile_index / cols >= sheet.height / size {
+            if tile_index / cols >= sheet.height / size || sizes.contains_key(&size) {
                 continue;
             }
             let tx = (tile_index % cols) * size;
@@ -241,13 +246,15 @@ impl ExternalGlyphBank {
                 let row = ((ty + y) * sheet.width + tx) as usize;
                 tile.extend_from_slice(&sheet.mask[row..row + size as usize]);
             }
-            self.glyphs.entry((sjis_code, size)).or_insert(tile);
+            sizes.insert(size, GlyphMask::new(tile));
+        }
+        if !sizes.is_empty() {
+            self.glyphs.insert(sjis_code, sizes);
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn glyph(&self, sjis_code: u16, glyph_size: u32) -> Option<&[u8]> {
-        self.glyphs.get(&(sjis_code, glyph_size)).map(Vec::as_slice)
+    pub(crate) fn glyph(&self, sjis_code: u16, glyph_size: u32) -> Option<&GlyphMask> {
+        self.glyphs.get(&sjis_code)?.get(&glyph_size)
     }
 }
 
@@ -3060,16 +3067,20 @@ mod tests {
         );
         exec_msg(&mut msg, 0x601, &[Arg::Int(1), Arg::Int(0x8197)]);
         assert_eq!(
-            msg.external_glyphs.glyph(0x8197, 2),
+            msg.external_glyphs
+                .glyph(0x8197, 2)
+                .map(GlyphMask::coverage),
             Some([10, 11, 12, 13].as_slice())
         );
         for index in [4, 5, u32::MAX] {
             exec_msg(&mut msg, 0x601, &[Arg::Int(index), Arg::Int(0x8198)]);
-            assert_eq!(msg.external_glyphs.glyph(0x8198, 2), None);
+            assert!(msg.external_glyphs.glyph(0x8198, 2).is_none());
         }
         exec_msg(&mut msg, 0x601, &[Arg::Int(3), Arg::Int(0x8198)]);
         assert_eq!(
-            msg.external_glyphs.glyph(0x8198, 2),
+            msg.external_glyphs
+                .glyph(0x8198, 2)
+                .map(GlyphMask::coverage),
             Some([14, 15, 16, 17].as_slice())
         );
     }

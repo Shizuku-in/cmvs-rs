@@ -21,8 +21,9 @@
 | 系统存档 (`S5`) | 跳过：样本 `data/save/` 目录为空 |
 | 启动与确定性 (`R1`, `D1`) | 通过（含 `--render-frames`）：冷启动经 `start.pss` → `logo.pss` → `menu.pss` 5 按钮起始页（15,522 步 / 687 帧，状态哈希 `c83041f670a462dbe8921c8ae12261fbfd024f1a217bc8faf5bcbc13a3a889da`），重放 687 帧轨迹与末状态哈希一致 |
 | 交互与回想 (`I1`, `I4`) | 通过（含 `--render-frames`）：进入 `fdnn7.pss` 后通过全部等待点输入动作，滚轮上滑打开 10 条回想记录并右键返回 `fdnn7.pss` `0x92e66` 原等待点 |
-| 存读档探针 (`V1`–`V4`) | `inconclusive`：自动探查入口进入 `fdnn7.pss` 后在连续 30 个等待点（`SAVE_AFTER = 30`）前结束，未触发存档点（无报错）；运行时配置为 `SnapshotLayout::CvnsCsp1` |
-| 未完成与未覆盖范围 | `V1`–`V4` 实机存档点、`D2`/`D3`/`I2`/`I3`/`I5`/`P*`/`C*`/`V5`/`R2+` 长探针、`0x2200`/`0x2201` 外挂 `MSK0` 字形向文本渲染器的实际替换显示及桌面实机全篇尚未运行 |
+| `MSK0` 字形 | `fde01.pss`、`fdb01.pss` 的 22 像素爱心已在真实游戏帧中绘制，字形透明度与素材图块对照通过 |
+| 存读档探针 (`D3`, `V1`–`V5`) | 通过（含 `--render-frames`）：短路线 `fdnn7.pss` 存档后重启及同会话恢复均对照 14 个等待点，重存字节、备份槽及系统存档检查通过 |
+| 待验证 | 完整分支、设置和鉴赏、桌面全篇交互 |
 
 ## 命令映射与复核
 
@@ -41,7 +42,8 @@
 ### 0x21b7
 
 - **映射**：`0x21b7 reviewed 0x34e95 map=0x25b7`（同上 x86 身份，switch case `0x434e95` → `sub_430820`）。
-- **语义**：弹出 `SP-4` 与 `SP-8` 两个 RGB 颜色字（返回 `0x4008`），原版弹出 Windows `ChooseColorA` 选色框并在取消时写 `system_integer(0) = 0`（确认时写 `1` 与所选色到 `system_integer(4)`）；无交互选色框时按取消写回 `system_integer(0) = 0`。
+- **语义**：`SP-4`、`SP-8` 的 RGB 值依次放入 `ChooseColorA` 的前两格自定义色，初始选中黑色。回收 8 字节并返回 `0x4008`。确认写 `system_integer(0) = 1` 和 `system_integer(4) = 0xRRGGBB`，取消只把 `system_integer(0)` 清零。
+- **构建复核**：三个 Windows x86 样本的参数、色序转换、结果槽和回收量一致，均映射到 `0x25b7`。`cvns-20050216` 为 `0x436446 → 0x431cd0`，`cvns-20050727` 为 `0x43ba0e → 0x436f20`，`cvns-20090203` 为 `0x465560`。 [秋色恋華样本](../aki/README.md#样本身份) · [秋色謳華样本](../akifd/README.md#样本身份) · [あるみ箱样本](../miharu/README.md#样本身份)
 
 ### 0x2200
 
@@ -52,10 +54,9 @@
 
 - **映射**：`0x2201 reviewed 0x34f44 map=0x2601`（同上 x86 身份，switch case `0x434f44` → `sub_432C10` → `sub_407D90`）。
 - **语义**：弹出 `SP-4`（图块序号）与 `SP-8`（16 位 Shift-JIS 字符编码，如 `33175` / `0x8197`），返回 `0x4008`，从已登记的外挂字形表中按各表字号切出对应正方形 8 位透明通道字模并登记到字形缓存。
+- **绘制**：`sub_423550` 经 `sub_407E90` 按字符编码和字号查找图块。`sub_407410` 直接使用图块透明度，启用阴影时向右下偏移一像素。
 
 ## 重现与限制
 
-- **验证命令（2026-11-17，分支 `feat/cvns`）**：
-  - 探针（含渲染）：`cargo run --offline --release -p cmvs-probe -- "<まじぷりＦＤ根目录>/fd" --out /tmp/majifd_probe --font /usr/share/fonts/opentype/ipafont-mincho/ipamp.ttf --render-frames --checks S1,S2,S3,S4,S5,R1,D1,I1,I4,V1,V2,V3,V4 --max-steps 5000000`
-  - 桌面运行参考：`cargo run --offline --release --features wgpu-renderer,audio-output --bin cmvs-desktop -- "<まじぷりＦＤ根目录>/fd" --encoding shift-jis --renderer wgpu --audio native --font /usr/share/fonts/opentype/ipafont-mincho/ipamp.ttf --user-data-dir <用户目录>`
-- **限制**：按快速可玩目标，未运行 `D2`/`D3`/`I2`/`I3`/`I5`/`P*`/`C*`/`V5`/`R2+` 等长探针；自动探索入口未触发 `SAVE_AFTER = 30` 后的存档点故 `V1`–`V4` 为 `inconclusive`；`0x2200`/`0x2201` 已完成 `MSK0` 解码与切块登记，但 `cmvs-font` 文本绘制暂未接入外挂图块替换（仍按系统字体渲染）。
+- 探针（含渲染）：`cargo run --offline --release -p cmvs-probe -- "<游戏目录>/fd" --out <报告目录> --font <日文字体> --render-frames --checks R1,D1,D3,I1,I4,V1,V2,V3,V4,V5`
+- [桌面运行指南](../../guides/running.md)

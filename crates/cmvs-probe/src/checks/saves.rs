@@ -158,9 +158,26 @@ fn run(runner: &Runner<'_>, entry: (usize, usize)) -> Result<Vec<CheckResult>, O
     let mut scenario = Scenario::begin(&mut a, entry, false).map_err(stop_outcome)?;
     let before = follow(&mut a, &mut scenario, SAVE_AFTER).map_err(stop_outcome)?;
     if before.len() < SAVE_AFTER {
-        return Err(Outcome::Inconclusive(
-            "the scenario ended before a save point".into(),
-        ));
+        if before.len() < 3 {
+            return Err(Outcome::Inconclusive(
+                "too few message waits to check a save and resume".into(),
+            ));
+        }
+        // Leave enough dialogue to compare after a save in a short scenario.
+        a = runner
+            .session("save-short-route", None)
+            .map_err(Outcome::Fail)?;
+        scenario = Scenario::begin(&mut a, entry, false).map_err(stop_outcome)?;
+        let midpoint = before.len() / 2;
+        if follow(&mut a, &mut scenario, midpoint)
+            .map_err(stop_outcome)?
+            .len()
+            != midpoint
+        {
+            return Err(Outcome::Fail(
+                "the short scenario did not replay to the save point".into(),
+            ));
+        }
     }
     let mut saved = false;
     for _ in 0..SAVE_TRIES {

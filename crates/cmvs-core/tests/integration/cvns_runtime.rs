@@ -640,35 +640,85 @@ fn cvns_0x21ab_save_comment_updates_csp_slot_and_skips_slot_zero() {
 }
 
 #[test]
-fn cvns_2004_color_dialog_pops_args_and_clears_accept_flag() {
-    use cmvs_core::{profile::Registry, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts};
-    for id in ["cvns-20040515", "cvns-20040730"] {
-        let profile = Registry::builtin().profile(id).unwrap();
-        let mut code = Vec::new();
-        push_const(&mut code, 0x200, 0x100, 0x112233);
-        push_const(&mut code, 0x200, 0x100, 0x445566);
-        word(&mut code, 0x21b7);
-        word(&mut code, 0x2000);
-        let sc = Script::decode(&script(&code, &[])).unwrap();
-        let mut vm = Machine::new(&sc).unwrap();
-        vm.set_command_map(profile.command_map());
-        vm.state_mut().set_system_integer(0, 99).unwrap();
+fn cvns_color_dialog_preserves_rgb_and_commits_only_after_the_host_answers() {
+    use cmvs_core::{
+        host::platform::{PlatformBackend, PlatformRequest},
+        profile::Registry,
+        vm::dispatch::{self, Flow, Hosts},
+    };
 
-        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
-        let (_, cmd) = vm.pending_system().unwrap();
-        assert_eq!(
-            dispatch::run(
-                profile.semantics(cmd),
-                &mut vm,
-                &mut Hosts {
-                    runtime: true,
-                    ..Default::default()
-                }
-            )
-            .unwrap(),
-            Some(Flow::Done)
-        );
-        assert_eq!(vm.stack().len_bytes(), 0);
-        assert_eq!(vm.state().system_integer(0), Some(0));
+    struct Picker {
+        answer: Option<u32>,
+        fail: bool,
+    }
+
+    impl PlatformBackend for Picker {
+        fn apply(
+            &mut self,
+            _: &PlatformRequest,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            unreachable!()
+        }
+
+        fn choose_color(
+            &mut self,
+            swatches: [u32; 2],
+        ) -> Result<Option<u32>, Box<dyn std::error::Error + Send + Sync>> {
+            assert_eq!(swatches, [0x445566, 0x112233]);
+            if self.fail {
+                return Err("color picker failed".into());
+            }
+            Ok(self.answer)
+        }
+    }
+
+    let mut code = Vec::new();
+    push_const(&mut code, 0x200, 0x100, 0xff112233);
+    push_const(&mut code, 0x200, 0x100, 0xff445566);
+    word(&mut code, 0x21b7);
+    word(&mut code, 0x2000);
+    let script = Script::decode(&script(&code, &[])).unwrap();
+
+    for id in [
+        "cvns-20040515",
+        "cvns-20040730",
+        "cvns-20050216",
+        "cvns-20050727",
+        "cvns-20090203",
+    ] {
+        let profile = Registry::builtin().profile(id).unwrap();
+        for (answer, result, color) in [(Some(0xdb8127), 1, 0xdb8127), (None, 0, 0x00aaaa)] {
+            let mut vm = Machine::new(&script).unwrap();
+            vm.set_command_map(profile.command_map());
+            vm.state_mut().set_system_integer(0, 99).unwrap();
+            vm.state_mut().set_system_integer(4, 0x00aaaa).unwrap();
+            while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            let location = vm.pending_system();
+            let (_, cmd) = location.unwrap();
+            assert_eq!(cmd, 0x5b7);
+            let mut picker = Picker { answer, fail: true };
+            let run = |vm: &mut Machine, picker: &mut Picker| {
+                dispatch::run(
+                    profile.semantics(cmd),
+                    vm,
+                    &mut Hosts {
+                        device_frame: Some(picker),
+                        ..Default::default()
+                    },
+                )
+            };
+            assert!(run(&mut vm, &mut picker).is_err());
+            assert_eq!(vm.pending_system(), location);
+            assert_eq!(vm.stack().len_bytes(), 8);
+            assert_eq!(vm.state().system_integer(0), Some(99));
+            assert_eq!(vm.state().system_integer(4), Some(0x00aaaa));
+
+            picker.fail = false;
+            assert_eq!(run(&mut vm, &mut picker).unwrap(), Some(Flow::Done));
+            assert_eq!(vm.pending_system(), None);
+            assert_eq!(vm.stack().len_bytes(), 0);
+            assert_eq!(vm.state().system_integer(0), Some(result));
+            assert_eq!(vm.state().system_integer(4), Some(color));
+        }
     }
 }

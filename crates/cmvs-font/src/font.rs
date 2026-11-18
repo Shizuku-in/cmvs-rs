@@ -7,7 +7,9 @@ use ab_glyph::{Font, FontVec, ScaleFont, point};
 use cmvs_core::{
     FormatError, TextEncoding,
     render::camera::CameraHost,
-    render::message::{AUXILIARY_TEXTS, GlyphRasterizer, MessageHost, RecordedGlyph, TEXT_OBJECTS},
+    render::message::{
+        AUXILIARY_TEXTS, GlyphMask, GlyphRasterizer, MessageHost, RecordedGlyph, TEXT_OBJECTS,
+    },
     render::raster::RgbaImage,
     render::scene::{SceneHost, SceneObject},
 };
@@ -299,6 +301,7 @@ fn paint(
     colors: [u32; 2],
     gradient: u32,
     outline: [u32; 2],
+    offset_shadow: bool,
 ) -> Result<RgbaImage, FormatError> {
     let radius = match outline[0] {
         0 => 0,
@@ -307,7 +310,13 @@ fn paint(
         _ => return Err(FormatError("unsupported glyph outline mode")),
     };
     let mut dilation = vec![0u8; mask.len()];
-    if radius != 0 {
+    if radius != 0 && offset_shadow {
+        // CVNS draws the same bitmap shifted one pixel down and right for the shadow.
+        for y in 1..side {
+            let row = (y - 1) * side;
+            dilation[y * side + 1..(y + 1) * side].copy_from_slice(&mask[row..row + side - 1]);
+        }
+    } else if radius != 0 {
         for y in 0..side {
             for x in 0..side {
                 let value = mask[y * side + x];
@@ -499,7 +508,11 @@ impl FontRenderer {
         self.library_generation.fetch_add(1, Ordering::Relaxed);
         Ok(out)
     }
-    fn glyph(&mut self, glyph: &RecordedGlyph) -> Result<RgbaImage, FormatError> {
+    fn glyph(
+        &mut self,
+        glyph: &RecordedGlyph,
+        external: Option<&GlyphMask>,
+    ) -> Result<RgbaImage, FormatError> {
         self.sync_library_generation();
         if !(1..=128).contains(&glyph.size) {
             return Err(FormatError("glyph size outside 1..128 preview range"));
@@ -521,10 +534,52 @@ impl FontRenderer {
             u32::from(glyph.bold),
             u32::from(glyph.revision_alpha),
         ];
-        let key = (glyph.face.clone(), key);
+        let key = (
+            glyph.face.clone(),
+            key,
+            external.map(GlyphMask::content_digest),
+        );
         if let Some(image) = self.cache.get(&key) {
             return Ok(image.clone());
         }
+        let size = glyph.size as usize;
+        let side = size + 4;
+        let mut mask = vec![0u8; side * side];
+        let cacheable = if let Some(external) = external {
+            let coverage = external.coverage();
+            if coverage.len() != size * size {
+                return Err(FormatError("bitmap glyph coverage does not match its size"));
+            }
+            for (y, row) in coverage.chunks_exact(size).enumerate() {
+                let start = (y + 2) * side + 2;
+                mask[start..start + size].copy_from_slice(row);
+            }
+            true
+        } else {
+            self.outline_mask(glyph, side, &mut mask)?
+        };
+        let image = paint(
+            &mask,
+            side,
+            glyph.colors,
+            glyph.gradient,
+            glyph.outline,
+            external.is_some(),
+        )?;
+        if cacheable {
+            self.cache.insert(key, image.clone());
+        } else {
+            self.scene_used_transient_fallback = true;
+        }
+        Ok(image)
+    }
+
+    fn outline_mask(
+        &self,
+        glyph: &RecordedGlyph,
+        side: usize,
+        mask: &mut [u8],
+    ) -> Result<bool, FormatError> {
         let ch = character(self.encoding, glyph.code)?;
         let (font, cacheable) = self
             .library
@@ -534,8 +589,6 @@ impl FontRenderer {
         let id = font.glyph_id(ch);
         let scale = glyph.size as f32;
         let baseline = font.as_scaled(scale).ascent();
-        let side = glyph.size as usize + 4;
-        let mut mask = vec![0u8; side * side];
         if let Some(outline) =
             font.outline_glyph(id.with_scale_and_position(scale, point(0.0, baseline)))
         {
@@ -561,20 +614,14 @@ impl FontRenderer {
             ));
         }
         if glyph.revision_alpha {
-            for alpha in &mut mask {
+            for alpha in mask.iter_mut() {
                 *alpha = revise_alpha(*alpha);
             }
         }
         if glyph.bold {
-            embolden(&mut mask, side);
+            embolden(mask, side);
         }
-        let image = paint(&mask, side, glyph.colors, glyph.gradient, glyph.outline)?;
-        if cacheable {
-            self.cache.insert(key, image.clone());
-        } else {
-            self.scene_used_transient_fallback = true;
-        }
-        Ok(image)
+        Ok(cacheable)
     }
 
     /// Adds glyph images and visible message-window objects to the core's layer queue.
@@ -692,6 +739,9 @@ impl FontRenderer {
                     glyph.reveal_width,
                 )
                     .hash(&mut h);
+                if let Some(mask) = messages.glyph_mask(glyph) {
+                    (0x13u8, mask.content_digest()).hash(&mut h);
+                }
             }
             0x1fu8.hash(&mut h);
         }
@@ -749,7 +799,15 @@ impl FontRenderer {
 
 impl GlyphRasterizer for FontRenderer {
     fn rasterize_glyph(&mut self, glyph: &RecordedGlyph) -> Result<RgbaImage, FormatError> {
-        self.glyph(glyph)
+        self.glyph(glyph, None)
+    }
+
+    fn rasterize_bitmap_glyph(
+        &mut self,
+        glyph: &RecordedGlyph,
+        mask: &GlyphMask,
+    ) -> Result<RgbaImage, FormatError> {
+        self.glyph(glyph, Some(mask))
     }
 }
 
@@ -830,9 +888,9 @@ mod tests {
         let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
         let mut font = FontRenderer::read(Path::new(&path), 0).unwrap();
         let mut glyph = recorded_glyph(0x82a0);
-        let normal = font.glyph(&glyph).unwrap();
+        let normal = font.rasterize_glyph(&glyph).unwrap();
         glyph.bold = true;
-        let bold = font.glyph(&glyph).unwrap();
+        let bold = font.rasterize_glyph(&glyph).unwrap();
         let ink = |image: &RgbaImage| {
             image
                 .pixels()
@@ -853,12 +911,12 @@ mod tests {
             assert!(after[3] >= before[3]);
         }
         glyph.revision_alpha = true;
-        let revised = font.glyph(&glyph).unwrap();
+        let revised = font.rasterize_glyph(&glyph).unwrap();
         assert!(ink(&revised) > ink(&bold));
         glyph.revision_alpha = false;
-        assert_eq!(font.glyph(&glyph).unwrap(), bold);
+        assert_eq!(font.rasterize_glyph(&glyph).unwrap(), bold);
         glyph.bold = false;
-        assert_eq!(font.glyph(&glyph).unwrap(), normal);
+        assert_eq!(font.rasterize_glyph(&glyph).unwrap(), normal);
         assert_eq!(font.cache.len(), 3);
         let metrics = font.metrics();
         let face = cmvs_core::host::settings::DEFAULT_FONT_FACE;
@@ -871,19 +929,19 @@ mod tests {
         // An unavailable selected face must use the same fallback for measuring
         // and painting, including glyphs already cached under the default face.
         glyph.face = Arc::from(&b"CMVS unavailable regression font"[..]);
-        assert_eq!(font.glyph(&glyph).unwrap(), normal);
+        assert_eq!(font.rasterize_glyph(&glyph).unwrap(), normal);
         assert_eq!(
             metrics.ink_width(&glyph.face, glyph.code, glyph.size),
             metrics.ink_width(face, glyph.code, glyph.size)
         );
         // Keep one style hot while more than a cacheful of other colors is painted.
         // Sharing its original pixel allocation proves it was not rasterized again.
-        let hot = font.glyph(&glyph).unwrap();
+        let hot = font.rasterize_glyph(&glyph).unwrap();
         for color in 0..1024 {
             glyph.colors = [color; 2];
-            font.glyph(&glyph).unwrap();
+            font.rasterize_glyph(&glyph).unwrap();
             glyph.colors = [0xffffff; 2];
-            let hit = font.glyph(&glyph).unwrap();
+            let hit = font.rasterize_glyph(&glyph).unwrap();
             assert!(std::ptr::eq(hit.pixels(), hot.pixels()));
         }
         assert_eq!(font.cache.len(), 512);
@@ -898,13 +956,13 @@ mod tests {
         let originals: Vec<_> = (0..512)
             .map(|color| {
                 glyph.colors = [color; 2];
-                font.glyph(&glyph).unwrap()
+                font.rasterize_glyph(&glyph).unwrap()
             })
             .collect();
         for _ in 0..3 {
             for (color, original) in originals.iter().enumerate() {
                 glyph.colors = [color as u32; 2];
-                let hit = font.glyph(&glyph).unwrap();
+                let hit = font.rasterize_glyph(&glyph).unwrap();
                 assert!(std::ptr::eq(hit.pixels(), original.pixels()));
             }
         }
@@ -960,11 +1018,11 @@ mod tests {
     fn synthetic_mask_has_transparent_padding_and_a_one_pixel_outline() {
         let mut mask = vec![0; 25];
         mask[12] = 255;
-        let image = paint(&mask, 5, [0xffffff; 2], 0, [1, 0x123456]).unwrap();
+        let image = paint(&mask, 5, [0xffffff; 2], 0, [1, 0x123456], false).unwrap();
         assert_eq!(&image.pixels()[48..52], &[255, 255, 255, 255]);
         assert_eq!(&image.pixels()[24..28], &[0x12, 0x34, 0x56, 255]);
         assert_eq!(&image.pixels()[..4], &[0, 0, 0, 0]);
-        assert!(paint(&mask, 5, [0; 2], 0, [3, 0]).is_err());
+        assert!(paint(&mask, 5, [0; 2], 0, [3, 0], false).is_err());
     }
     #[test]
     fn invalid_font_data_or_collection_face_is_an_error() {
@@ -1168,6 +1226,85 @@ mod tests {
     }
 
     #[test]
+    fn cvns_bitmap_glyph_replaces_only_the_registered_size() {
+        use cmvs_core::{
+            host::image::{DecodeThreads, ImageSource},
+            profile::Semantics,
+            vm::dispatch::{self, Flow, Hosts},
+            vm::machine::{Machine, Step},
+        };
+
+        struct Sheet;
+        impl ImageSource for Sheet {
+            fn read(
+                &mut self,
+                name: &[u8],
+            ) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
+                assert_eq!(name, b"font.msk");
+                let mut bytes = b"MSK0".to_vec();
+                bytes.extend([16u32, 2, 2].into_iter().flat_map(u32::to_le_bytes));
+                bytes.extend([0, 70, 170, 255]);
+                Ok(Some(bytes))
+            }
+
+            fn decode_threads(&self) -> DecodeThreads {
+                DecodeThreads::default()
+            }
+        }
+
+        let mut font =
+            FontRenderer::from_bytes(crate::font_library::tests::minimal_ttf("BitmapTest"), 0)
+                .unwrap();
+        let render = |font: &mut FontRenderer, register: bool| {
+            let mut code = Vec::new();
+            if register {
+                push_call(&mut code, 0x2600, &[2, 0]);
+                push_call(&mut code, 0x2601, &[u32::from(b'A'), 0]);
+            }
+            for (slot, size) in [(0, 2), (1, 3)] {
+                push_call(&mut code, 0x24d0, &[slot]);
+                push_call(&mut code, 0x24d6, &[0, 0, size, slot]);
+                push_call(&mut code, 0x24df, &[9, slot]);
+            }
+            push_call(&mut code, 0x2000, &[]);
+            let script = ps2_script(&code, b"font.msk\0A\0");
+            let mut vm = Machine::new(&script).unwrap();
+            let mut messages = MessageHost::default();
+            messages.enable_cvns();
+            loop {
+                match vm.step().unwrap() {
+                    Step::System { .. } => {
+                        let mut hosts = Hosts {
+                            messages: Some(&mut messages),
+                            window_images: Some(&mut Sheet),
+                            ..Hosts::default()
+                        };
+                        assert_eq!(
+                            dispatch::run(Semantics::Root, &mut vm, &mut hosts).unwrap(),
+                            Some(Flow::Done)
+                        );
+                    }
+                    Step::Yield => break,
+                    Step::Continue => {}
+                }
+            }
+            font.prepare_objects(&messages).unwrap()
+        };
+
+        let ordinary = render(&mut font, false);
+        let replaced = render(&mut font, true);
+        let pixels = &replaced[0].children[&0].image.as_ref().unwrap().pixels;
+        let (pixels_rgba, _) = pixels.pixels().as_chunks::<4>();
+        let alpha: Vec<_> = pixels_rgba.iter().map(|p| p[3]).collect();
+        assert_eq!([pixels.width(), pixels.height()], [6, 6]);
+        assert_eq!(&alpha[14..16], &[0, 70]);
+        assert_eq!(&alpha[20..22], &[170, 255]);
+        assert_ne!(ordinary[0], replaced[0]);
+        assert_eq!(ordinary[1], replaced[1]);
+        assert_eq!(ordinary, render(&mut font, false));
+    }
+
+    #[test]
     fn idle_glyph_scene_cache_hits_and_invalidates_on_reveal_opacity_and_visibility_changes() {
         use cmvs_core::{
             host::input::ActionInput,
@@ -1364,7 +1501,7 @@ mod gradient_tests {
         let mut mask = vec![0; 64];
         mask[2 * 8 + 2] = 255;
         mask[5 * 8 + 2] = 255;
-        let image = paint(&mask, 8, [0xff0000, 0x0000ff], 1, [1, 0x123456]).unwrap();
+        let image = paint(&mask, 8, [0xff0000, 0x0000ff], 1, [1, 0x123456], false).unwrap();
         let pixel = |x: usize, y: usize| &image.pixels()[(y * 8 + x) * 4..(y * 8 + x + 1) * 4];
         assert_eq!(pixel(2, 2), [255, 0, 0, 255]);
         assert_eq!(pixel(2, 5), [63, 0, 191, 255]);

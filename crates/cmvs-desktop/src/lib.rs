@@ -259,6 +259,18 @@ impl PlatformBackend for NativeBackend<'_> {
             },
         )
     }
+    fn choose_color(
+        &mut self,
+        swatches: [u32; 2],
+    ) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
+        use winit::raw_window_handle::HasWindowHandle;
+        let owner = self.window.window_handle()?.as_raw();
+        match cmvs_native::choose_color(owner, swatches) {
+            Ok(color) => Ok(color),
+            Err(cmvs_native::NativeError::Unsupported(_)) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
     fn choose_font(
         &mut self,
         current: &[u8],

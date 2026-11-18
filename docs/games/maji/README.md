@@ -22,7 +22,7 @@
 | 启动与确定性 (`R1`, `D1`) | 通过（含 `--render-frames`）：无 `save000.dat` 冷启动经 `logo.pss` → `pro.pss` → `1kyo00.pss` 首个 3 按钮选择页（`0x78e70`，877,564 步 / 16,034 帧 / 89 次推进，状态哈希 `d204e3d7c07aff1d7a9f4917d9f2c7612456837cdd2c97fb3e240825ba68dfa1`），重放 16,034 帧轨迹与末状态哈希一致 |
 | 交互与回想 (`I1`, `I4`) | 通过（含 `--render-frames`）：在 `1kyo00.pss` 等待点通过全部输入动作，滚轮上滑打开 99 条回想记录并右键返回 `1kyo00.pss` `0x79fac` 原等待点 |
 | 存读档恢复 (`V1`–`V4`) | 通过（含 `--render-frames`）：`CSP1` 重启读档（带 `save000.dat` 经 `menu.pss` 读回 `1kyo00.pss`）、再保存字节一致、同会话读档及 `998/999` 备份槽均通过（`1kyo00.pss` 21 步等待序列一致） |
-| 未完成与未覆盖范围 | `D2`/`D3`/`I2`/`I3`/`I5`/`P*`/`C*`/`V5`/`R2+` 长探针与桌面实机交互尚未运行 |
+| 系统存档与损坏档 (`D3`, `V5`) | `D3` 通过。`V5` 探针在观察到路线结束时未收到系统存档 |
 
 ## 命令映射与复核
 
@@ -34,4 +34,4 @@
   - 探针（含渲染）：`cargo run --offline --release -p cmvs-probe -- "<まじぷり根目录>" --out /tmp/maji_probe_final --font /usr/share/fonts/opentype/ipafont-mincho/ipamp.ttf --render-frames --checks S1,S2,S3,S4,S5,R1,D1,I1,I4,V1,V2,V3,V4 --max-steps 5000000`
   - 视频：`cargo run --offline --release --bin cmvs-cmv -- "<まじぷり根目录>/data/video/op.cmv" --check-frames`
   - 桌面运行参考：`cargo run --offline --release --features wgpu-renderer,audio-output --bin cmvs-desktop -- "<まじぷり根目录>" --encoding shift-jis --renderer wgpu --audio native --font /usr/share/fonts/opentype/ipafont-mincho/ipamp.ttf --user-data-dir <用户目录>`
-- **限制**：按快速可玩目标，未运行 `D2`/`D3`/`I2`/`I3`/`I5`/`P*`/`C*`/`V5`/`R2+` 等长探针，也未在桌面窗口实机交互游玩。
+- **限制**：长路线、系统存档持久化及桌面实机交互仍待验证。

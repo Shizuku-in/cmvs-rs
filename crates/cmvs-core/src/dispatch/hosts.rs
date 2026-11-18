@@ -182,6 +182,7 @@ pub enum Capability {
     Platform,
     FontDialog,
     TextDialog,
+    ColorDialog,
     Capture,
     CaptureDevice,
     Sequence,
@@ -273,7 +274,7 @@ impl Capability {
     pub(crate) fn uses_device_frame(self) -> bool {
         matches!(
             self,
-            Self::CaptureDevice | Self::FontDialog | Self::TextDialog
+            Self::CaptureDevice | Self::FontDialog | Self::TextDialog | Self::ColorDialog
         )
     }
 
@@ -310,7 +311,7 @@ impl Hosts<'_> {
             Capability::Bootstrap => self.bootstrap.is_some(),
             Capability::FunctionKeys => self.function_keys.is_some(),
             Capability::Platform => self.platform.is_some(),
-            Capability::TextDialog => self.device_frame.is_some(),
+            Capability::TextDialog | Capability::ColorDialog => self.device_frame.is_some(),
             Capability::FontDialog => {
                 self.device_frame.is_some() && self.settings.is_some() && self.messages.is_some()
             }

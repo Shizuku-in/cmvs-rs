@@ -7,6 +7,13 @@ pub fn choose_font(_owner: RawWindowHandle, _current: &str) -> Result<Option<Str
     Err(NativeError::Unsupported("the native font dialog"))
 }
 
+pub fn choose_color(
+    _owner: RawWindowHandle,
+    _swatches: [u32; 2],
+) -> Result<Option<u32>, NativeError> {
+    Err(NativeError::Unsupported("the native color dialog"))
+}
+
 pub fn font_directories() -> Vec<PathBuf> {
     Vec::new()
 }

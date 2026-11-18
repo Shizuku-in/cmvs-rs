@@ -271,6 +271,39 @@ pub trait GlyphRasterizer {
         &mut self,
         glyph: &RecordedGlyph,
     ) -> Result<crate::raster::RgbaImage, crate::FormatError>;
+
+    /// Draw a glyph whose coverage comes from a game-supplied bitmap.
+    fn rasterize_bitmap_glyph(
+        &mut self,
+        _glyph: &RecordedGlyph,
+        _mask: &GlyphMask,
+    ) -> Result<crate::raster::RgbaImage, crate::FormatError> {
+        Err(crate::FormatError(
+            "font backend does not implement bitmap glyphs",
+        ))
+    }
+}
+
+/// Immutable, unpadded alpha coverage for a square CVNS glyph.
+#[derive(Debug, Clone)]
+pub struct GlyphMask {
+    coverage: Vec<u8>,
+    digest: u128,
+}
+
+impl GlyphMask {
+    fn new(coverage: Vec<u8>) -> Self {
+        let digest = crate::raster::content_hash(&coverage);
+        Self { coverage, digest }
+    }
+
+    pub fn coverage(&self) -> &[u8] {
+        &self.coverage
+    }
+
+    pub fn content_digest(&self) -> u128 {
+        self.digest
+    }
 }
 
 /// Window, text, and font-slot state updated by message commands.
@@ -500,6 +533,12 @@ impl MessageHost {
             .map(|window| &window.object)
             .chain(self.cvns.iter().flat_map(|cvns| cvns.visible_objects()))
     }
+
+    /// Returns the CVNS bitmap registered for this character and exact size, if any.
+    pub fn glyph_mask(&self, glyph: &RecordedGlyph) -> Option<&GlyphMask> {
+        self.external_glyphs.glyph(glyph.code, glyph.size)
+    }
+
     /// Build drawable scene objects for all visible text and auxiliary-text glyphs.
     ///
     /// Visible message windows are returned separately by [`Self::visible_window_objects`].
@@ -558,7 +597,10 @@ impl MessageHost {
                     ));
                 }
                 visible_glyphs += 1;
-                let pixels = rasterizer.rasterize_glyph(glyph)?;
+                let pixels = match self.glyph_mask(glyph) {
+                    Some(mask) => rasterizer.rasterize_bitmap_glyph(glyph, mask)?,
+                    None => rasterizer.rasterize_glyph(glyph)?,
+                };
                 let mut draw = crate::scene::DrawState::default();
                 draw.words[4] = glyph.reveal_width.min(pixels.width());
                 draw.words[5] = pixels.height();
