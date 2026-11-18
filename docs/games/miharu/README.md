@@ -38,7 +38,7 @@ CMVS_CVNS_GAME_ROOT="<样本目录>" cargo test --offline --release -p cmvs-cli 
 
 ## 命令映射
 
-档案绑定本页 x86 样本，使用根语义与 `0x24xx`–`0x26xx` CVNS 专用处理器。 [cvns-20090203.profile](../../../crates/cmvs-core/profiles/cvns-20090203.profile)
+档案绑定本页 x86 样本，使用根语义与 `0x24xx`–`0x26xx` CVNS 专用处理器。 [cvns-20090203.profile](../../../research/profiles/cvns-20090203.profile)
 
 - 整数 4096、位 262144、字符串 256 槽。持久起点由 `0x210b`–`0x210d` 设定。`save000.dat` 保留给 CSS0，`0x21a1` 从菜单索引 N 查找 `save(N+1).dat`。 [剧情存档格式](../../formats/save-format.md#cvns-csp1)
 - **场景、消息与表达式**：128 槽 16 层图像缓冲区（`0x205e`/`0x205f`/`0x2061`/`0x2063`/`0x2067`/`0x2218` 对有效槽内的空子图层及 `layer >= 16` 遍历遇首个空图层均静默无操作）、1536 精灵、8 文本窗与 4 消息框（4096 字形图集、`0x446660` 自动回调 `10..=13` 按 `messages[0..3].visible` 触发）；`0x2137` 将 `arg1` 写入动态正文 `strings[2]`、`arg2` 写入 32 字节字段 `strings[1]`；表达式支持 `0x107`/`0x10a`/`0x10b`/`0x111`–`0x113` 一维/二维步长数组与帧标量。

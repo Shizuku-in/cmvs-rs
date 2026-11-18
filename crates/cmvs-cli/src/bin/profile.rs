@@ -1,22 +1,33 @@
 use cmvs_core::{
     format::digest::sha256, format::digest::to_hex, format::exe::Arch, format::exe::PeImage,
-    format::exe::find_dispatch, profile::CommandStatus, profile::EXECUTABLE_NAMES,
-    profile::EngineProfile, profile::Family, profile::Registry,
+    format::exe::find_dispatch, profile::CommandStatus, profile::ContractRules,
+    profile::EXECUTABLE_NAMES, profile::EngineProfile, profile::Family, profile::Registry,
 };
-use std::{env, error::Error, fs, path::Path};
+use std::{
+    env,
+    error::Error,
+    fs,
+    io::{self, Write},
+    path::Path,
+};
+
+#[path = "profile/generate.rs"]
+mod generate;
 
 const USAGE: &str = "\
 Usage:
-  cmvs-profile identify <game-root> [--profile <id>]
+  cmvs-profile identify <game-root> [--profile <id>] [--profiles-dir <dir>]
       Hash the start script, script archive and executables read-only, locate each
-      executable's system-command switch, check it against the embedded profile tables
+      executable's system-command switch, check it against the research profiles
       and report the profile selection.
   cmvs-profile table <game-root> --id <id> [--base <id>]
       Print a new profile from the executables in a game root. Present commands become
       base for a root profile, or unreviewed with --base. A root with cvns.exe gives a
       CVNS profile, which needs --base naming a CMVS root profile.
-  cmvs-profile show <id>
-      Summarise an embedded profile.
+  cmvs-profile show <id> [--profiles-dir <dir>]
+      Summarise a research profile.
+  cmvs-profile generate-playback [--profiles-dir <dir>] [--output <path>]
+      Validate research profiles and generate Rust playback tables. Defaults to stdout.
   cmvs-profile owners [<command>]
       Print the read-only handler inventory, in runner/trace chain order.
       Candidates are not evidence approval or runtime capability guarantees.
@@ -24,12 +35,49 @@ Usage:
 
 Options:
   -h, --help  show this help (also after a subcommand)
+  --profiles-dir <dir>  override the checkout's research/profiles directory
 
 Example: cmvs-profile identify game-root
 Example: cmvs-profile owners 0x2140";
 
 /// Signatures of an earlier predecessor engine, reported but not supported.
 const PVNS_HINTS: [&str; 1] = ["pvns.exe"];
+
+fn load_research(directory: Option<&str>) -> Result<Registry, Box<dyn Error + Send + Sync>> {
+    let directory = Path::new(directory.unwrap_or(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../research/profiles"
+    )));
+    let entries = fs::read_dir(directory).map_err(|err| {
+        format!(
+            "cannot open research profiles at {}: {err}; use --profiles-dir to locate them",
+            directory.display()
+        )
+    })?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "profile") {
+            paths.push(path);
+        }
+    }
+    if paths.is_empty() {
+        return Err(format!("no .profile files in {}", directory.display()).into());
+    }
+    paths.sort_unstable();
+    let profiles = paths
+        .iter()
+        .map(fs::read_to_string)
+        .collect::<io::Result<Vec<_>>>()?;
+    let profiles = profiles.iter().map(String::as_str).collect::<Vec<_>>();
+    let rules = ContractRules::parse(&fs::read_to_string(directory.join("contract_rules.txt"))?)?;
+    Ok(Registry::parse_with_contracts(
+        &profiles,
+        &fs::read_to_string(directory.join("games.txt"))?,
+        &fs::read_to_string(directory.join("contracts.txt"))?,
+        &[rules],
+    )?)
+}
 
 fn magic(path: &Path) -> String {
     match fs::read(path) {
@@ -41,8 +89,11 @@ fn magic(path: &Path) -> String {
     }
 }
 
-fn identify(root: &Path, explicit: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let registry = Registry::builtin_research();
+fn identify(
+    registry: &Registry,
+    root: &Path,
+    explicit: Option<&str>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("# read-only identification of {}", root.display());
     for name in [
         "data/pack/start.ps3",
@@ -111,7 +162,7 @@ fn identify(root: &Path, explicit: Option<&str>) -> Result<(), Box<dyn Error + S
                         binary.arch.name()
                     );
                     if !binary.matches(&image, &dispatch) {
-                        return Err("embedded profile table disagrees with the executable".into());
+                        return Err("research profile table disagrees with the executable".into());
                     }
                 }
             }
@@ -203,8 +254,7 @@ fn range(start: usize, end: usize) -> String {
     }
 }
 
-fn show(id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let registry = Registry::builtin_research();
+fn show(registry: &Registry, id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let profile = registry
         .profile(id)
         .ok_or_else(|| format!("unknown engine profile {id}"))?;
@@ -331,7 +381,9 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         positional_only = true;
     }
     let Some(command) = args.next() else {
-        return Err("missing subcommand: identify, table, show or owners".into());
+        return Err(
+            "missing subcommand: identify, table, show, generate-playback or owners".into(),
+        );
     };
     if !positional_only && command.to_string_lossy().starts_with('-') {
         return Err(format!("unknown option {}", command.to_string_lossy()).into());
@@ -379,11 +431,16 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     };
     match command.as_str() {
         "identify" => {
-            let (positionals, options) = parse_rest(&mut args, &["--profile"])?;
+            let (positionals, options) = parse_rest(&mut args, &["--profile", "--profiles-dir"])?;
             let [root]: [_; 1] = positionals
                 .try_into()
                 .map_err(|_| "invalid arguments for identify")?;
-            identify(Path::new(&root), find(&options, "--profile").as_deref())
+            let registry = load_research(find(&options, "--profiles-dir").as_deref())?;
+            identify(
+                &registry,
+                Path::new(&root),
+                find(&options, "--profile").as_deref(),
+            )
         }
         "table" => {
             let (positionals, options) = parse_rest(&mut args, &["--id", "--base"])?;
@@ -394,14 +451,30 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             table(Path::new(&root), &id, find(&options, "--base").as_deref())
         }
         "show" => {
-            let (positionals, _) = parse_rest(&mut args, &[])?;
+            let (positionals, options) = parse_rest(&mut args, &["--profiles-dir"])?;
             let [id]: [_; 1] = positionals
                 .try_into()
                 .map_err(|_| "invalid arguments for show")?;
             let id = id
                 .into_string()
                 .map_err(|_| "arguments must be valid UTF-8")?;
-            show(&id)
+            let registry = load_research(find(&options, "--profiles-dir").as_deref())?;
+            show(&registry, &id)
+        }
+        "generate-playback" => {
+            let (positionals, options) = parse_rest(&mut args, &["--profiles-dir", "--output"])?;
+            if !positionals.is_empty() {
+                return Err("invalid arguments for generate-playback".into());
+            }
+            let registry = load_research(find(&options, "--profiles-dir").as_deref())?;
+            let mut source = String::new();
+            generate::write_playback(&mut source, &registry)?;
+            if let Some(output) = find(&options, "--output") {
+                generate::replace_table(Path::new(&output), source.as_bytes())?;
+            } else {
+                io::stdout().lock().write_all(source.as_bytes())?;
+            }
+            Ok(())
         }
         "owners" => {
             let (positionals, _) = parse_rest(&mut args, &[])?;

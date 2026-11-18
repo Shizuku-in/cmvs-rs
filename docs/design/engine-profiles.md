@@ -1,8 +1,15 @@
 # 引擎档案
 
-档案对应具体引擎构建，游戏记录绑定启动脚本、脚本包和可执行文件身份。数据位于 [`crates/cmvs-core/profiles`](../../crates/cmvs-core/profiles/)，解析和选择由 `profile::Registry` 完成。
+档案对应具体引擎构建，游戏记录绑定启动脚本、脚本包和可执行文件身份。数据位于 [`research/profiles`](../../research/profiles/)，解析和选择由 `profile::Registry` 完成。
 
-构建校验完整源档案。播放器内嵌游戏与构建身份、命令状态、变体 ID 和 CVNS 映射。分派地址、证据引用和证书由 `cmvs-profile` 使用的研究档案提供。
+`cmvs-profile` 校验完整源档案，并生成播放器的 Rust 静态表。静态表包含游戏与构建身份、命令状态、变体 ID 和 CVNS 映射。播放器构建只读取静态表。
+
+修改源档案后，在仓库根目录重新生成。CI 会校对生成结果。
+
+```sh
+cargo run --offline -p cmvs-cli --bin cmvs-profile -- generate-playback \
+  --output crates/cmvs-core/src/profile/playback/data.rs
+```
 
 ## 选择与闸门
 
@@ -39,8 +46,8 @@
 ```sh
 python3 -I tools/profile_compare.py local/base.json local/derived.json \
   --report local/comparison.tsv \
-  --base-profile crates/cmvs-core/profiles/cmvs-20160201.profile \
-  --profile crates/cmvs-core/profiles/cmvs-20150405.profile \
+  --base-profile research/profiles/cmvs-20160201.profile \
+  --profile research/profiles/cmvs-20150405.profile \
   --output-profile local/derived.profile
 ```
 

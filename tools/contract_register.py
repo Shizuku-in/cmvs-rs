@@ -16,7 +16,7 @@ ce = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ce)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONTRACT_RULES = REPO_ROOT / "crates/cmvs-core/profiles/contract_rules.txt"
+DEFAULT_CONTRACT_RULES = REPO_ROOT / "research/profiles/contract_rules.txt"
 RULE_KEYS = ("extractor", "context", "mappings", "summaries")
 RULE_FIELDS = (
     ("extractor", "extractor_revision"),

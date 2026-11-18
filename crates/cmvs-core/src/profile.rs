@@ -9,10 +9,10 @@
 //! are rejected; unreviewed and presumed commands are allowed by default and can be
 //! blocked through the gate policy. Authorization does not imply a handler exists
 //! or that a complete game has been validated.
-mod binary;
 mod contract;
 mod gate;
 mod model;
+mod playback;
 mod quirks;
 mod select;
 mod text;
@@ -33,15 +33,6 @@ pub use validate::SAME_BUILD_SECONDS;
 
 use crate::exe::{Case, Dispatch, PeImage};
 use std::{collections::BTreeMap, sync::OnceLock};
-
-#[cfg(feature = "profile-research")]
-impl ContractRules {
-    /// Active rules for the built-in research registry.
-    pub fn builtin() -> Self {
-        Self::parse(include_str!("../profiles/contract_rules.txt"))
-            .expect("prevalidated contract rules")
-    }
-}
 
 pub struct ResolvedCommand {
     pub semantics: Semantics,
@@ -179,17 +170,6 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_REGISTRY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin_registry.bin"));
-
-fn unpack_builtin(blob: &[u8]) -> Result<Vec<u8>, ProfileError> {
-    let (raw_len, compressed) = blob
-        .split_at_checked(4)
-        .ok_or_else(|| ProfileError::new("embedded registry missing length header"))?;
-    let raw_len = u32::from_le_bytes(raw_len.try_into().expect("four-byte header")) as usize;
-    crate::lzss::decode(compressed, raw_len)
-        .map_err(|_| ProfileError::new("invalid embedded registry LZSS payload"))
-}
-
 impl Registry {
     pub fn parse(profiles: &[&str], games: &str) -> Result<Self, ProfileError> {
         Self::parse_with_contracts(profiles, games, "", &[])
@@ -218,44 +198,11 @@ impl Registry {
         registry.validate()?;
         Ok(registry)
     }
-    /// Decodes the runtime projection of already validated research profiles.
-    fn decode_prevalidated(blob: &[u8]) -> Result<Self, ProfileError> {
-        let (profiles, games) = binary::decode_bundle(&unpack_builtin(blob)?)?;
-        Ok(Self {
-            profiles,
-            games,
-            contracts: BTreeMap::new(),
-        })
-    }
     /// Built-in playback data for game identification, command dispatch and build quirks.
-    /// Command statuses are validated at build time. PE dispatch tables, variant
-    /// evidence, machine proofs and contract certificates are kept in research profiles.
+    /// The generated tables contain the runtime fields of the validated source profiles.
     pub fn builtin() -> &'static Self {
         static REGISTRY: OnceLock<Registry> = OnceLock::new();
-        REGISTRY.get_or_init(|| {
-            Self::decode_prevalidated(BUILTIN_REGISTRY)
-                .expect("prevalidated embedded registry bundle is valid")
-        })
-    }
-    /// Full built-in profiles and proofs for offline tools that inspect executable tables.
-    #[cfg(feature = "profile-research")]
-    pub fn builtin_research() -> &'static Self {
-        static REGISTRY: OnceLock<Registry> = OnceLock::new();
-        REGISTRY.get_or_init(|| {
-            let blob = include_bytes!(concat!(env!("OUT_DIR"), "/builtin_research_profiles.bin"));
-            let raw = unpack_builtin(blob).expect("unpack validated research profiles");
-            let profiles: Vec<_> = std::str::from_utf8(&raw)
-                .expect("embedded profile sources are UTF-8")
-                .split('\0')
-                .collect();
-            Self::parse_with_contracts(
-                &profiles,
-                include_str!("../profiles/games.txt"),
-                include_str!("../profiles/contracts.txt"),
-                &[ContractRules::builtin()],
-            )
-            .expect("prevalidated research profiles are valid")
-        })
+        REGISTRY.get_or_init(playback::registry)
     }
     pub fn profiles(&self) -> &[EngineProfile] {
         &self.profiles
@@ -288,8 +235,8 @@ mod tests {
     use std::{fs, path::Path};
 
     #[test]
-    fn playback_bundle_preserves_runtime_fields_from_validated_profiles() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("profiles");
+    fn playback_tables_preserve_runtime_fields_from_validated_profiles() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../research/profiles");
         let mut profile_paths = fs::read_dir(&dir)
             .expect("read profiles directory")
             .map(|entry| entry.expect("dir entry").path())
@@ -309,9 +256,6 @@ mod tests {
         let rules = ContractRules::parse(&rules_text).expect("parse contract_rules.txt");
         let parsed = Registry::parse_with_contracts(&profile_refs, &games, &contracts, &[rules])
             .expect("parse raw profile files");
-
-        #[cfg(feature = "profile-research")]
-        assert_eq!(Registry::builtin_research(), &parsed);
 
         let playback = Registry::builtin();
         assert_eq!(playback.games(), parsed.games());
@@ -368,7 +312,12 @@ mod tests {
 
     #[test]
     fn contract_rules_roundtrip_and_reject_invalid_lines() {
-        let builtin = ContractRules::parse(include_str!("../profiles/contract_rules.txt")).unwrap();
+        let builtin = ContractRules {
+            extractor: [0x0f; 32],
+            context: [0x24; 32],
+            mappings: [0x83; 32],
+            summaries: [0xde; 32],
+        };
         let canonical = builtin.to_text();
         assert_eq!(ContractRules::parse(&canonical), Ok(builtin.clone()));
         assert_eq!(
@@ -380,37 +329,5 @@ mod tests {
         assert!(ContractRules::parse(&canonical.replace("extractor ", "other ")).is_err());
         assert!(ContractRules::parse(&canonical.replace("0f", "ZZ")).is_err());
         assert!(ContractRules::parse(&format!("{canonical}extra 00\n")).is_err());
-    }
-
-    #[test]
-    fn prevalidated_blob_roundtrips_and_rejects_corrupt_envelopes() {
-        let decoded = Registry::decode_prevalidated(BUILTIN_REGISTRY).expect("decode builtin blob");
-        assert_eq!(&decoded, Registry::builtin());
-
-        assert!(Registry::decode_prevalidated(b"").is_err());
-        assert!(Registry::decode_prevalidated(b"\x01\x02\x03").is_err());
-        assert!(Registry::decode_prevalidated(b"\xff\x00\x00\x00\xff").is_err());
-
-        let invalid_bundle = crate::lzss::encode(b"CMVB\x01");
-        let mut framed = (5u32).to_le_bytes().to_vec();
-        framed.extend_from_slice(&invalid_bundle);
-        assert!(Registry::decode_prevalidated(&framed).is_err());
-    }
-
-    #[test]
-    fn binary_bundle_roundtrips_and_rejects_corrupt_inputs() {
-        let builtin = Registry::builtin();
-        let encoded = binary::encode_bundle(&builtin.profiles, &builtin.games);
-        let decoded = binary::decode_bundle(&encoded).expect("decode builtin bundle");
-        assert_eq!(decoded.0, builtin.profiles);
-        assert_eq!(decoded.1, builtin.games);
-
-        assert!(binary::decode_bundle(b"").is_err());
-        assert!(binary::decode_bundle(b"CMVB\x01").is_err());
-        assert!(binary::decode_bundle(&encoded[..encoded.len() - 1]).is_err());
-
-        let mut with_trailing = encoded;
-        with_trailing.push(0);
-        assert!(binary::decode_bundle(&with_trailing).is_err());
     }
 }

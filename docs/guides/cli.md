@@ -46,7 +46,7 @@ cargo run --offline --release --bin cmvs-profile -- table "<游戏目录>" --id 
 cargo run --offline --release --bin cmvs-profile -- show cmvs-20150405
 ```
 
-`identify` 根据启动脚本、脚本包及 exe 识别档案，校验已登记的分派表。`table` 将候选档案输出到标准输出，带 `--base` 时命令标为 `unreviewed`，CVNS 构建须指定 CMVS 基准。`show` 列出内嵌档案的状态与命令映射。 [档案登记与复核](../design/engine-profiles.md)
+`identify` 根据启动脚本、脚本包及 exe 识别档案，校验已登记的分派表。`table` 将候选档案输出到标准输出，带 `--base` 时命令标为 `unreviewed`，CVNS 构建须指定 CMVS 基准。`show` 列出研究档案的状态与命令映射。可用 `--profiles-dir` 指定研究档案目录。 [档案登记与复核](../design/engine-profiles.md)
 
 ## 归档与资源
 
@@ -126,7 +126,7 @@ Remove-Item Env:CMVS_SCRIPT_TEST_INPUTS, Env:CMVS_SCRIPT_TEST_REPORT
 $env:CMVS_COMMAND_INVENTORY = "local/inventory/dispatch.tsv"
 cargo test --offline --release -p cmvs-core --test integration command_inventory::command_inventory -- --ignored --exact
 Remove-Item Env:CMVS_COMMAND_INVENTORY
-python -I tools/command_inventory.py local/script-validation-sites.tsv local/inventory/dispatch.tsv crates/cmvs-core/profiles/cmvs-20160201.profile local/inventory/joined.tsv
+python -I tools/command_inventory.py local/script-validation-sites.tsv local/inventory/dispatch.tsv research/profiles/cmvs-20160201.profile local/inventory/joined.tsv
 ```
 
 

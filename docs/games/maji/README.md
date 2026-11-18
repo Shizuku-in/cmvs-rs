@@ -17,7 +17,7 @@
 
 | 项目 | 结果与范围 |
 |---|---|
-| 封包与脚本 (`S1`–`S4`) | 通过（`--render-frames`）：9 个资源封包及音乐/视频共 19,846 项资源（`cmv` 1、`msk` 43、`mv2` 13,436、`ogg` 276、`pb2` 6,090）与全部 89 个脚本（7,210,901 条指令、209 条已去重系统命令全部为 `reviewed`；[cvns-20040515.profile](../../../crates/cmvs-core/profiles/cvns-20040515.profile) 共 246 `reviewed` / 69 `unreviewed` / 229 `noop`）通过；`op.cmv` 3,359 帧离线解码通过（3,968 ms）；`04.cur` 4-bit `BI_RGB` 导出 4,096 字节 RGBA 与 Pillow 逐字节一致 |
+| 封包与脚本 (`S1`–`S4`) | 通过（`--render-frames`）：9 个资源封包及音乐/视频共 19,846 项资源（`cmv` 1、`msk` 43、`mv2` 13,436、`ogg` 276、`pb2` 6,090）与全部 89 个脚本（7,210,901 条指令、209 条已去重系统命令全部为 `reviewed`；[cvns-20040515.profile](../../../research/profiles/cvns-20040515.profile) 共 246 `reviewed` / 69 `unreviewed` / 229 `noop`）通过；`op.cmv` 3,359 帧离线解码通过（3,968 ms）；`04.cur` 4-bit `BI_RGB` 导出 4,096 字节 RGBA 与 Pillow 逐字节一致 |
 | 系统存档 (`S5`) | 跳过：游戏根目录无 `save/` 目录 |
 | 启动与确定性 (`R1`, `D1`) | 通过（含 `--render-frames`）：无 `save000.dat` 冷启动经 `logo.pss` → `pro.pss` → `1kyo00.pss` 首个 3 按钮选择页（`0x78e70`，877,564 步 / 16,034 帧 / 89 次推进，状态哈希 `d204e3d7c07aff1d7a9f4917d9f2c7612456837cdd2c97fb3e240825ba68dfa1`），重放 16,034 帧轨迹与末状态哈希一致 |
 | 交互与回想 (`I1`, `I4`) | 通过（含 `--render-frames`）：在 `1kyo00.pss` 等待点通过全部输入动作，滚轮上滑打开 99 条回想记录并右键返回 `1kyo00.pss` `0x79fac` 原等待点 |
@@ -26,7 +26,7 @@
 
 ## 命令映射与复核
 
-- **基础环境与复用**：经 `cvns.exe`（`8d5abea3...`）核对，`sub_401250` 按 `CVNS_SYSTEM_MAIN.WINDOW_SIZE` 选 `0→640×480`、`1→800×600`、`2→1024×768`（本样本为 `0`）；`sub_411670` / `sub_412170` 读写 `CSS0` 与 `[4096, 262144, 0, 256]` 全局变量；`sub_4312E0` 读写 `CSP1`；`sub_424850` `case 0x413` 与 `sub_423CE0` 分别实现 `0x0413` 按 `LOWORD(4 * result)` 退栈与空 `0x0200 0x020f` 返回 `0`；`0x20e8`（`sub_42B3C0`）、`0x2143`（`sub_42D070`）、`0x21b7`（`sub_42EA20`）、`0x212c`（`sub_42EDF0` → `sub_4216E0`）、`0x2136`（`sub_42EFD0` → `sub_421440`）、`0x21ab`（`sub_42FE80`）、`0x2200`（`sub_430DA0`）、`0x2201`（`sub_430DF0`）与 `cvns-20040730` 一致；与 `cvns-20040730` 相比仅 `0x2064`/`0x2065` 在本构建为 `noop`（`0x32fd5`），其余 246 条已复核命令沿用 [cvns-20040730](../../../crates/cmvs-core/profiles/cvns-20040730.profile) 映射，69 个未使用槽位保持 `unreviewed`。
+- **基础环境与复用**：经 `cvns.exe`（`8d5abea3...`）核对，`sub_401250` 按 `CVNS_SYSTEM_MAIN.WINDOW_SIZE` 选 `0→640×480`、`1→800×600`、`2→1024×768`（本样本为 `0`）；`sub_411670` / `sub_412170` 读写 `CSS0` 与 `[4096, 262144, 0, 256]` 全局变量；`sub_4312E0` 读写 `CSP1`；`sub_424850` `case 0x413` 与 `sub_423CE0` 分别实现 `0x0413` 按 `LOWORD(4 * result)` 退栈与空 `0x0200 0x020f` 返回 `0`；`0x20e8`（`sub_42B3C0`）、`0x2143`（`sub_42D070`）、`0x21b7`（`sub_42EA20`）、`0x212c`（`sub_42EDF0` → `sub_4216E0`）、`0x2136`（`sub_42EFD0` → `sub_421440`）、`0x21ab`（`sub_42FE80`）、`0x2200`（`sub_430DA0`）、`0x2201`（`sub_430DF0`）与 `cvns-20040730` 一致；与 `cvns-20040730` 相比仅 `0x2064`/`0x2065` 在本构建为 `noop`（`0x32fd5`），其余 246 条已复核命令沿用 [cvns-20040730](../../../research/profiles/cvns-20040730.profile) 映射，69 个未使用槽位保持 `unreviewed`。
 
 ## 重现与限制
 

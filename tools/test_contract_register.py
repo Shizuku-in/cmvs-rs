@@ -19,7 +19,7 @@ def sibling(name):
 cr, fixtures = sibling("contract_register"), sibling("test_contract_extract")
 ce = cr.ce
 
-PROFILES_DIR = cr.REPO_ROOT / "crates/cmvs-core/profiles"
+PROFILES_DIR = cr.REPO_ROOT / "research/profiles"
 CHRONOCLOCK_DOCS = cr.REPO_ROOT / "docs/games/chronoclock"
 
 

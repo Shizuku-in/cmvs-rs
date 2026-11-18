@@ -1,4 +1,4 @@
-//! Profile and cross-registry semantic invariants shared by runtime parsing and `build.rs`.
+//! Semantic invariants for source profiles and their registry.
 use super::{
     CommandStatus, ContractProof, EngineProfile, Family, GameRecord, ProfileError, VariantId, text,
 };

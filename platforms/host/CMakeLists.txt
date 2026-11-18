@@ -84,11 +84,7 @@ endif()
 set(cmvs_library "${CMVS_CARGO_TARGET_DIR}/${cmvs_target}/release/libcmvs_host.a")
 file(GLOB_RECURSE cmvs_inputs CONFIGURE_DEPENDS
     "${CMVS_ROOT}/crates/*/src/*.rs" "${CMVS_ROOT}/crates/*/Cargo.toml"
-    "${CMVS_ROOT}/crates/*/build.rs"
-    "${CMVS_ROOT}/crates/cmvs-core/profiles/*.txt"
-    "${CMVS_ROOT}/crates/cmvs-core/profiles/*.profile"
-    "${CMVS_ROOT}/tools/*.py"
-    "${CMVS_ROOT}/docs/games/chronoclock/contract-*.json")
+    "${CMVS_ROOT}/crates/*/build.rs")
 list(APPEND cmvs_inputs "${CMVS_ROOT}/Cargo.toml" "${CMVS_ROOT}/Cargo.lock")
 # The compositor needs optimization even in a Debug application. Keep symbols.
 add_custom_command(OUTPUT "${cmvs_library}"

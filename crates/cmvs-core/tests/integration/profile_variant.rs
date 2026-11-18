@@ -6,8 +6,8 @@ use cmvs_core::{
 };
 use support::bytecode::{command, pending, script};
 
-const ROOT: &str = include_str!("../../profiles/cmvs-20160201.profile");
-const DERIVED: &str = include_str!("../../profiles/cmvs-20171114.profile");
+const ROOT: &str = include_str!("../../../../research/profiles/cmvs-20160201.profile");
+const DERIVED: &str = include_str!("../../../../research/profiles/cmvs-20171114.profile");
 const HASH: &str = "3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0";
 
 #[test]
