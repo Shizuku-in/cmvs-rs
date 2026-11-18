@@ -19,24 +19,21 @@ Usage:
   cmvs-cpz [settings] --script <archive> <ASCII-basename>
   cmvs-cpz [settings] --extract <archive> <ASCII-basename> <new-file>
 
-Modes:
-  <archive> [...]  print headers only; indexes/checksums are not verified
-  --list           list index entries and stored checksums
-  --script         decode and summarise one PS2A script
-  --extract        decode one entry to a new file; refuses overwrite
+Without a mode, read headers only. --list prints the index, --script
+summarises a decoded script, and --extract decodes an entry to a new file.
 
-Settings (choose at most one; place before the mode):
-  --start-script <file>   read CPZ5/7 settings from start.ps2 or start.ps3
+Settings (at most one, before the mode):
+  --start-script <file>   read CPZ5/7 settings from a startup script
   --packing-mode <5..9>   select a CPZ5 packing mode
-  --keys <k0,k1,k2,k3>    four CPZ7 keys, each decimal or 0x-prefixed
+  --keys <k0,k1,k2,k3>    set CPZ7 keys in decimal or 0x-prefixed hex
   -h, --help             show this help
 
-CPZ5/7 automatically read adjacent startup scripts unless settings are explicit.
-Without startup settings, CPZ5 detects the mode from its index and CPZ7 uses zero parameters.
-Index modes verify CPZ3 index and CPZ5/7 header/index integrity.
-Resource checksums are not verified. Input archives are read only.
-Example: cmvs-cpz --list data/pack/script.cpz
-Example: cmvs-cpz --packing-mode 5 --extract script.cpz main.ps3 main.ps3";
+By default, CPZ5 and CPZ7 look for an adjacent start.ps3. CPZ5 also tries start.ps2.
+If none is found, CPZ5 detects the mode and CPZ7 uses zero parameters.
+Index modes check CPZ2/3 indexes and CPZ5/7 header/index integrity.
+Resource checksums are listed only.
+
+Example: cmvs-cpz --list data/pack/script.cpz";
 
 fn read_start(file: File) -> Result<Script, Box<dyn Error + Send + Sync>> {
     let mut raw = Vec::new();

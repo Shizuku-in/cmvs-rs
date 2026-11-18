@@ -37,14 +37,12 @@ Runtime 与 trace 共用 [dispatch](../../crates/cmvs-core/src/dispatch.rs)。�
 
 ## 验证
 
-在仓库根目录运行；核心集成测试位于根包，仅测 core 不足以覆盖分派行为。
+核心分派的单元与集成测试都在 `cmvs-core`。从仓库根目录运行：
 
 ```sh
-cargo fmt --all -- --check
-cargo test --offline
+cargo fmt --all --check
 cargo test --offline -p cmvs-core
-cargo clippy --offline --all-targets -- -D warnings
 cargo clippy --offline -p cmvs-core --all-targets -- -D warnings
 ```
 
-涉及真实执行路径时补充对应游戏回归。档案与复核记录格式见[引擎档案](../design/engine-profiles.md#复核与变体)。
+工作区检查见[开发检查](../architecture.md#检查)。涉及真实执行路径时补充对应游戏回归；档案格式见[引擎档案](../design/engine-profiles.md#复核与变体)。

@@ -65,3 +65,22 @@ fn profile_cli_shows_research_profiles_and_handler_owners() {
             .success()
     );
 }
+
+#[test]
+fn profile_cli_shows_the_same_profiles_by_game_alias() {
+    let show = |selector| {
+        let output = Command::new(env!("CARGO_BIN_EXE_cmvs-profile"))
+            .args(["show", selector])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    };
+    for (alias, id) in [("aki", "cvns-20050216"), ("akifd", "cvns-20050727")] {
+        assert_eq!(show(alias), show(id), "{alias}");
+    }
+}

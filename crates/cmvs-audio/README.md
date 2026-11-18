@@ -1,12 +1,12 @@
 # cmvs-audio
 
-Audio for CMVS hosts: streaming Ogg Vorbis (`lewton`) and PCM WAVE decoders, an engine mixer and native device output (`rodio`).
+Audio for CMVS and CVNS hosts: Ogg Vorbis (`lewton`), PCM WAVE and MV2X decoding, an engine mixer and native device output (`rodio`).
 
 ## Features
 
 | Feature | Adds |
 |---|---|
-| none | `vorbis` and `pcm_wave` decoders only |
+| none | Device-independent decoding through `AudioProgram` |
 | `mixer` | Engine channel state, envelopes and software mixing. The host pulls PCM through `PcmOutput::fill_i16`, which is how the Switch and PS Vita players feed their audio ports |
 | `native` (default) | `mixer` output through the default system device (`NativeAudio`) |
 

@@ -1,12 +1,12 @@
 # 桌面后端
 
-`cmvs-desktop` 提供窗口、键鼠输入、呈现和运行入口；游戏状态与脚本语义由 `cmvs-core` 管理。启动命令、字体、音频和用户目录配置见[运行指南](../guides/running.md)，完整参数见[CLI 指南](../guides/cli.md)。
+`cmvs-desktop` 提供窗口、键鼠输入和呈现，游戏状态与脚本语义由 `cmvs-core` 管理。启动命令和参数入口见[运行指南](../guides/running.md)。
 
 ## 服务
 
 | 功能 | 当前实现 |
 |---|---|
-| 窗口与输入 | winit 窗口、焦点、标题、图标和光标；按 `key.cfg` 转换键鼠事件 |
+| 窗口与输入 | winit 窗口、焦点、标题、图标和光标；CMVS 使用 `key.cfg`，CVNS 使用固定键鼠码 |
 | CPU 呈现 | 软件场景合成，经 softbuffer 显示 |
 | GPU 呈现 | 可选 `wgpu-renderer`，消费同一绘制队列；见 [wgpu 后端](wgpu.md) |
 | 文字 | `cmvs-font` 提供字体度量、光栅化与合成；见[字体后端](font-output.md) |
@@ -29,6 +29,12 @@ CVNS 选色使用各平台共用的游戏内窗口，提供两个脚本预设色
 普通窗口按比例内接；全屏使用独立的缩放开关与比例模式。绘制、指针命中和导航坐标转换使用同一视口。全屏采用无边框窗口，不改变显示器的独占分辨率。窗口尺寸恢复、缩放和滤镜契约见[平台宿主](platform-host.md)。
 
 Wayland 导航使用内部指针坐标；失焦、短按锁存、光标自动隐藏和后台运行策略见[输入](input.md)。
+
+诊断停机后可用 F1 恢复默认光标，F2–F5 预览已登记的光标。
+
+## 设置保存
+
+指定用户目录后，正常退出保存设置。系统档在完成首次读取或载入模板后才会写入，与配置分开提交。配置保留未知键，显示偏好使用 `[CMVS_RS_DESKTOP]`，比例滤镜沿用 `[GRAPHIC_CONFIG]` 的 `ASPECT_RATIO_FILTER`（0 线性、1 点采样）。无窗口宿主可调用 `Runtime::save_preferences` 或 `Player::save_preferences`。
 
 ## 支持边界
 

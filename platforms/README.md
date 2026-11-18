@@ -3,13 +3,13 @@
 | Platform | Target | Status | Build |
 |---|---|---|---|
 | Windows / Linux / [macOS](apple/README.md) | Host | Supported | `cargo build --release --features desktop,audio-output --bin cmvs-desktop` |
-| [iOS](apple/README.md) | `aarch64-apple-ios` | Experimental | `python3 platforms/apple/build.py ios` |
-| Android | `aarch64-linux-android`, `x86_64-linux-android` | Supported | `platforms/android/gradlew assembleDebug` |
-| [Web](web/README.md) | `wasm32-unknown-unknown` | Preview | `platforms/web/build.sh` |
-| [Switch](switch/README.md) | `aarch64-switch` | Experimental | `platforms/switch/scripts/build-player.sh` |
-| [PS Vita](psvita/README.md) | `armv7-sony-vita-newlibeabihf` | Experimental | `platforms/psvita/scripts/build-player.sh` |
+| [iOS](apple/README.md) | `aarch64-apple-ios` | Experimental | `python3 platforms/apple/build.py ios --font font.otf` |
+| Android | `aarch64-linux-android`, `x86_64-linux-android` | Supported | From `platforms/android`, run `sh gradlew assembleDebug` |
+| [Web](web/README.md) | `wasm32-unknown-unknown` | Preview | `sh platforms/web/build.sh` |
+| [Switch](switch/README.md) | `aarch64-switch` | Experimental | `sh platforms/switch/scripts/build-player.sh` |
+| [PS Vita](psvita/README.md) | `armv7-sony-vita-newlibeabihf` | Experimental | `sh platforms/psvita/scripts/build-player.sh` |
 
-Run commands from the repository root.
+Run commands from the repository root unless a different directory is listed.
 
 - Linux requires `libfreetype-dev libfontconfig-dev libasound2-dev`.
 - iOS requires `--font <path>`; the device app is unsigned. Use `ios-simulator` for the simulator.

@@ -235,10 +235,10 @@ impl Registry {
                 game.game, game.profile
             ));
         }
-        if let Some(id) = explicit {
+        if let Some(selector) = explicit {
             let profile = self
-                .profile(id)
-                .ok_or_else(|| SelectionError::UnknownProfile(id.to_owned()))?;
+                .resolve_profile(selector)
+                .ok_or_else(|| SelectionError::UnknownProfile(selector.to_owned()))?;
             let record = data.filter(|g| g.profile == profile.id);
             if data.is_some() && record.is_none() {
                 notes.push("explicit profile differs; game record not applied".into());
@@ -344,7 +344,7 @@ impl Registry {
 
     /// Identify a game directory using startup-script, archive, and executable hashes.
     ///
-    /// `explicit` optionally names an engine profile instead of automatic selection.
+    /// `explicit` optionally selects an engine profile by ID or registered game name.
     /// Reads files without executing or modifying them. Returns an error for missing
     /// or ambiguous files, inconsistent evidence, an unknown profile, or I/O failures.
     #[cfg(feature = "std-fs")]

@@ -13,12 +13,13 @@
 | `cmvs-desktop` | 桌面窗口、输入、呈现与运行入口 |
 | `cmvs-console` | Switch / Vita 共用的手柄、页面与 GPU 合成策略 |
 | `cmvs-cli` | 格式检查、反汇编、VM trace 与桌面 CLI 入口 |
+| `cmvs-profile-research` | 源档案校验、PE 分派分析与运行表生成 |
 | `cmvs-patch` | 补丁资产提取、重编码与转换 |
 | `cmvs-probe` / `cmvs-bench` | 无头运行、路线、输入与存读档检查；热路径微基准测试 |
 | `platforms/*` | 各平台宿主和构建入口，见[平台总览](../platforms/README.md) |
 | 根包 `cmvs-rs` | `cmvs_rs` 兼容导出门面 |
 
-核心定义语义和后端契约，宿主提供窗口、设备、字体和输出。核心在桌面目标仅依赖标准库，Android / Web 使用文件系统适配依赖。具体依赖与 feature 以各包 `Cargo.toml` 为准。
+核心定义语义和后端契约，仅依赖 Rust 标准库。宿主提供窗口、设备、字体和输出；Android 和 Web 的文件系统适配位于宿主层。
 
 根包默认仅依赖 core；`desktop`、`audio-output`、`wgpu-renderer` 按需接入后端。共享依赖在根 `Cargo.toml` 声明，精确版本由 `Cargo.lock` 固定。
 
@@ -57,4 +58,4 @@ cargo clippy --offline --workspace --all-targets --all-features -- -D warnings
 cargo check --offline -p cmvs-desktop --no-default-features
 ```
 
-默认根包测试不能覆盖所有子包，全 workspace 检查也不能替代平台目标构建和硬件验证。系统依赖见[平台总览](../platforms/README.md)。测试只提交合成数据；解码变更还需仓库外真实样本与独立实现对照，见[研究约定](research.md)。
+默认命令检查 workspace 的默认成员及功能；`-p <包名>` 可仅检查相关包。跨平台变更还需对应目标构建和硬件验证。系统依赖见[平台总览](../platforms/README.md)，外部样本检查见[研究约定](research.md)。

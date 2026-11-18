@@ -24,7 +24,31 @@
 4. 分开报告结构检查、VM 记录重放、画面检查、原生窗口/音轨、存档和平台验证。只保留复现所需的参数和输入状态；失败停点只记录尚未解决的问题。
 5. 把通用实现说明更新到架构、格式或后端文档；游戏专属差异和验证默认集中在一个 README；游戏目录只保留简要索引，不重复维护详细矩阵。
 
-结构解码通过不等于运行通过；执行地址覆盖不等于条件边覆盖，也不等于游戏完成度。可复用外部样本检查命令见[CLI 指南](guides/cli.md#外部样本审计)。
+## 外部样本审计
+
+从仓库根目录运行。以下示例使用 Unix shell，读取独立脚本及归档中的 `.ps3` 条目，并校验所读条目的资源校验和。归档须能用默认参数读取。可省略 `CMVS_SCRIPT_TEST_REPORT`，仅做断言。
+
+```sh
+mkdir -p local
+CMVS_SCRIPT_TEST_INPUTS='game/data/pack/script.cpz:game/data/pack/start.ps3' \
+CMVS_SCRIPT_TEST_REPORT=local/script-sites.tsv \
+  cargo test --offline --release -p cmvs-core --test integration \
+  script_validation::external_script_structure -- --ignored --exact --nocapture
+```
+
+PowerShell 中用 `$env:变量名 = '值'` 设置同名变量，输入路径间改用分号，运行后用 `Remove-Item Env:变量名` 清除。独立脚本或失败条目可能在报告中带有本机路径，报告留在仓库外或忽略的 `local/`。
+
+需要对照实际分派入口时，再运行合成探针并合并两份报告。输出文件须是新路径。
+
+```sh
+CMVS_COMMAND_INVENTORY=local/dispatch.tsv \
+  cargo test --offline --release -p cmvs-core --test integration \
+  command_inventory::command_inventory -- --ignored --exact
+python3 -I tools/command_inventory.py local/script-sites.tsv local/dispatch.tsv \
+  research/profiles/cmvs-20160201.profile local/joined.tsv
+```
+
+汇总时分别记录结构、命令入口和执行地址覆盖。路线覆盖只汇总成功结束的路线；条件分支和游戏完成度需要各自的证据。
 
 ## 检查
 

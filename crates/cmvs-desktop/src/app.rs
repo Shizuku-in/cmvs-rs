@@ -32,6 +32,47 @@ use winit::{
     window::{Window, WindowId},
 };
 
+const USAGE: &str = "\
+Usage: cmvs-desktop <game-root> --encoding <auto|shift-jis|gbk|utf-8> [options]
+
+Run a game in a native window. Game files are read only.
+
+Text, audio and display:
+  --encoding <name>           required; auto infers from script text and reports the result
+  --font <file>               OpenType font or collection for message rendering
+  --font-face <index>         zero-based collection face (default 0); requires --font
+  --record-text               log glyphs and timing without drawing text; alternative to --font
+  --audio <record|native>     record is the default; native needs the audio-output feature
+  --input <native|record>     native is the default; record disables live input
+  --renderer <cpu|wgpu>       cpu is the default; wgpu needs the wgpu-renderer feature
+  --save-frame <new.png>      export the last fully presented frame to a new file on exit
+  --image-archive <cpz> --preview-image <name>
+                              preview an ASCII-named PB3 image
+
+Saves:
+  --user-data-dir <dir>       writable directory outside the game root; locked during use
+                              CMVS uses system.dat and cmvs.cfg; CVNS uses save000.dat and cvns.cfg
+  --system-save-output <new.dat>
+                              export a system save once; excludes --user-data-dir
+  --skip-auto-resume          skip startup auto-load for a recognised game with a known guard
+  --continue-without-snapshot
+                              apply live state at snapshot points; disables gameplay saving
+
+Diagnostics:
+  --exit-after <seconds>      exit after 1 to 3600 seconds
+  --rand-seed <seed>          decimal u32 CRT seed (defaults to wall-clock milliseconds)
+  --profile <id|alias>        select an engine profile by ID or registered game alias
+  --block-presumed            stop at commands with only presumed evidence
+  --block-unreviewed          stop at unreviewed commands
+  -h, --help                  show this help
+
+Use --font or --record-text to pass message output. If auto detection is
+ambiguous, choose the encoding explicitly. Close the window to exit.
+
+Build: cargo build --release -p cmvs-cli --features desktop --bin cmvs-desktop
+Example: cmvs-desktop game-root --encoding auto --font font.ttf --user-data-dir user-data
+See docs/guides/running.md for save behavior and platform details.";
+
 fn warp_native_cursor(
     window: &Window,
     event_loop: &ActiveEventLoop,
@@ -55,66 +96,6 @@ fn warp_native_cursor(
     let _ = event_loop;
     window.set_cursor_position(winit::dpi::PhysicalPosition::new(point[0], point[1]))
 }
-
-const USAGE: &str = "\
-Usage: cmvs-desktop <game-root> --encoding <auto|shift-jis|gbk|utf-8> [options]
-
-Open a native research preview. Game files are read only.
-
-Required:
-  --encoding <name>       auto, shift-jis, gbk or utf-8
-                         auto infers from game script text and prints the result;
-                         ambiguous samples require an explicit encoding
-
-Display, text and audio:
-  --renderer <name>       cpu (default) or wgpu (needs wgpu-renderer build feature)
-  --font <file>           OpenType font file or collection for message rendering
-                         supports shift-jis, gbk and utf-8; cannot combine with --record-text
-  --font-face <index>     zero-based collection face; requires --font (default 0)
-  --record-text          record glyphs and reveal timing without drawing text
-  --audio <name>          record (default) or native (needs audio-output build feature)
-  --input <name>          native (default, reads key.cfg) or record (no live input)
-  --save-frame <new.png>  export the displayed frame on exit; refuses overwrite
-  --image-archive <CPZ> --preview-image <name>
-                         show an ASCII-named PB3 image instead of the VM scene
-
-Saves:
-  --user-data-dir <dir>   keep system.dat, save slots and cmvs.cfg in this directory
-                         directory is locked during use; existing user saves update
-  --system-save-output <new.dat>
-                         export a CSS1 save; refuses overwrite; excludes --user-data-dir
-  --skip-auto-resume      disable startup auto-load in memory
-  --continue-without-snapshot
-                         research: continue without save images; saving unavailable
-
-Run control and research:
-  --exit-after <seconds>  exit after 1..3600 seconds
-  --rand-seed <seed>      CRT random seed, decimal u32 (defaults to wall-clock ms)
-  --profile <id>          force an engine profile; otherwise identify the game build
-  --block-presumed       stop at commands with only legacy presumed evidence
-  --block-unreviewed     stop at unreviewed commands
-  -h, --help             show this help
-
-Examples (quote paths containing spaces):
-  cmvs-desktop game-root --encoding auto --font font.ttf --user-data-dir user-data
-  cmvs-desktop game-root --encoding auto --record-text --exit-after 10
-
-Build:
-  cargo build --release --features desktop --bin cmvs-desktop
-  Add audio-output and/or wgpu-renderer to enable native audio and GPU rendering.
-
-Notes:
-  Without --font or --record-text, message output stops at a barrier.
-  Playback supports Shift-JIS, GBK and UTF-8, including message rendering.
-  Glyph pixels differ from the original GDI backend.
-  Auto detection samples startup text, then up to 32 archived scripts if uncertain.
-  Known game builds are identified from scripts, archives and executable hashes.
-  Presumed/unreviewed commands run by default; absent/no-op commands always stop.
-  Save snapshots are built at main entry and scenario points. Unsupported snapshot
-  state stops with an error. Gameplay saving requires --user-data-dir.
-  Runtime auto-load is enabled unless --skip-auto-resume is specified.
-  Close the window to exit. Esc follows the game's bindings.
-  F1 selects the default cursor; F2..F5 preview registered cursors after a stop.";
 
 #[cfg(feature = "wgpu-renderer")]
 struct GpuDesktop {

@@ -107,6 +107,13 @@ impl Registry {
     pub fn profile(&self, id: &str) -> Option<&EngineProfile> {
         self.profiles.iter().find(|p| p.id == id)
     }
+    /// Resolve an explicit selector by profile ID first, then by a registered game name.
+    pub fn resolve_profile(&self, selector: &str) -> Option<&EngineProfile> {
+        self.profile(selector).or_else(|| {
+            let game = self.games.iter().find(|game| game.game == selector)?;
+            self.profile(&game.profile)
+        })
+    }
     /// Look up the executable's profile and identity by hash.
     pub fn binary(&self, sha256: &[u8; 32]) -> Option<(&EngineProfile, &Binary)> {
         self.profiles

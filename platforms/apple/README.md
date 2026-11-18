@@ -48,10 +48,7 @@ Apple Silicon macOS release compilation, a native Amatsutsumi 1.03 title run
 with a 48 kHz stereo output device, and iOS arm64 device/simulator linking were
 tested. The iOS 18.3 simulator ran the same installation for 600 completed
 frames and exported a non-black 1280x720 title frame. Device execution has not
-been tested. 1,050 core/CLI/host tests pass (14 external-data tests skipped).
-The host also passes Clippy with `--no-deps -D warnings`. Whole-dependency strict
-Clippy encounters the pre-existing `manual_range_contains` warning in
-`cmvs-core/src/camera/view.rs` with Rust 1.96.
+been tested.
 
 The real-installation probe passes R1, I4 and V1-V4: fresh startup, backlog
 round-trip, save/restart/load continuation through 20 message waits, snapshot

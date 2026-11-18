@@ -1,6 +1,6 @@
 use cmvs_core::{
     format::digest::{sha256, to_hex},
-    profile::{CommandStatus, EXECUTABLE_NAMES, Family},
+    profile::{CommandStatus, EXECUTABLE_NAMES, Family, Registry},
 };
 use cmvs_profile_research::{
     ResearchProfile, ResearchRegistry,
@@ -19,29 +19,27 @@ mod generate;
 
 const USAGE: &str = "\
 Usage:
-  cmvs-profile identify <game-root> [--profile <id>] [--profiles-dir <dir>]
-      Hash the start script, script archive and executables read-only, locate each
-      executable's system-command switch, check it against the research profiles
-      and report the profile selection.
-  cmvs-profile table <game-root> --id <id> [--base <id>]
-      Print a new profile from the executables in a game root. Present commands become
-      base for a root profile, or unreviewed with --base. A root with cvns.exe gives a
-      CVNS profile, which needs --base naming a CMVS root profile.
-  cmvs-profile show <id> [--profiles-dir <dir>]
-      Summarise a research profile.
+  cmvs-profile identify <game-root> [--profile <id|alias>] [--profiles-dir <dir>]
+  cmvs-profile table <game-root> --id <new-id> [--base <id|alias>]
+  cmvs-profile show <id|alias> [--profiles-dir <dir>]
   cmvs-profile generate-playback [--profiles-dir <dir>] [--output <path>]
-      Validate research profiles and generate Rust playback tables. Defaults to stdout.
   cmvs-profile owners [<command>]
-      Print the read-only handler inventory, in runner/trace chain order.
-      Candidates are not evidence approval or runtime capability guarantees.
-      Command must be 0x-prefixed hexadecimal in 0x2000..0x23ff.
 
-Options:
-  -h, --help  show this help (also after a subcommand)
-  --profiles-dir <dir>  override the checkout's research/profiles directory
+Commands:
+  identify           hash game files, identify the build and check executable dispatch tables
+  table              print a candidate profile from the game's executables
+  show               list profile statuses and mappings
+  generate-playback  validate research data and generate Rust playback tables
+  owners             list candidate runner/trace handlers; command is 0x2000 through 0x23ff
 
-Example: cmvs-profile identify game-root
-Example: cmvs-profile owners 0x2140";
+Aliases are registered game names such as aki. For table, --base creates a
+derived profile with unreviewed commands. CVNS needs a CMVS root as its base.
+
+--profiles-dir defaults to the checkout's research/profiles directory.
+generate-playback writes to stdout by default. --output replaces the target file.
+Use -h or --help to show this help.
+
+Example: cmvs-profile show aki";
 
 /// Signatures of an earlier predecessor engine, reported but not supported.
 const PVNS_HINTS: [&str; 1] = ["pvns.exe"];
@@ -168,6 +166,11 @@ fn identify(
 }
 
 fn table(root: &Path, id: &str, base: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let base = base.map(|selector| {
+        Registry::builtin()
+            .resolve_profile(selector)
+            .map_or(selector, |profile| profile.id.as_str())
+    });
     let mut found = Vec::new();
     for name in EXECUTABLE_NAMES {
         let path = root.join(name);
@@ -232,10 +235,12 @@ fn range(start: usize, end: usize) -> String {
     }
 }
 
-fn show(registry: &ResearchRegistry, id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn show(registry: &ResearchRegistry, selector: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let profile = registry
-        .profile(id)
-        .ok_or_else(|| format!("unknown engine profile {id}"))?;
+        .playback()
+        .resolve_profile(selector)
+        .and_then(|profile| registry.profile(&profile.id))
+        .ok_or_else(|| format!("unknown engine profile {selector}"))?;
     println!(
         "profile {} family={:?} base={}",
         profile.id,

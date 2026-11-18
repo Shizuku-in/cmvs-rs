@@ -11,24 +11,21 @@ use std::{
 
 const USAGE: &str = "\
 Usage:
-  cmvs-save <save.dat>
+  cmvs-save <save.dat> [--records | --vm-state | --visual-state]
   cmvs-save --section <0|1|2> <save.dat> <new-file>
-  cmvs-save --records <save.dat>
-  cmvs-save --vm-state <save.dat>
-  cmvs-save --visual-state <save.dat>
 
-Modes (choose one):
-  <save.dat>      print the CSV2 header and sections
-  --section      export one decoded section; output must not already exist
-  --records      list snapshot record framing
-  --vm-state     validate typed VM fields; does not install engine state
-  --visual-state validate supported text, window and scene records; reads no resources
+Decode a CMVS CSV2 gameplay save and print its header and section sizes.
+
+Options:
+  --records       list snapshot records
+  --vm-state      inspect VM state; PC validation is limited to the main script
+  --visual-state  inspect supported text, window and scene records
+  --section       export one section to a new file
   -h, --help      show this help
 
-Sections: 0 snapshot, 1 auxiliary, 2 script memory image. Only section 0 has the
-original additive checksum, which does not authenticate the whole file.
---visual-state covers the supported subset and reads no resources.
-Read only: these commands never install engine state.
+Section 0 is the snapshot and carries the additive checksum. Section 1 is
+auxiliary data; section 2 is the script memory image.
+
 Example: cmvs-save --section 0 save/save000.dat snapshot.bin";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {

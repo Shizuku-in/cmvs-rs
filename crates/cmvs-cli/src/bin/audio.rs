@@ -1,4 +1,4 @@
-//! Read-only bounded Vorbis verification; no audio device is opened.
+//! Read-only bounded audio inspection without opening a device.
 use cmvs_audio::AudioProgram;
 use cmvs_core::{MAX_PAYLOAD, format::cmv::CmvIndex};
 use std::{
@@ -9,10 +9,10 @@ use std::{
 };
 
 const USAGE: &str = "\
-Usage: cmvs-audio <file.ogg|movie.cmv> [--pcm <new.f32>]
+Usage: cmvs-audio <audio-or-movie> [--pcm <new.f32>]
 
-Decode Vorbis without opening an audio device. CMV input selects its Ogg resource.
-Report channels, sample rate, sample count, duration and peak amplitude.
+Inspect Ogg Vorbis, PCM WAVE, MV2X or a CMV6 Ogg soundtrack without opening
+an audio device. Print channel count, sample rate, duration and peak amplitude.
 
 Options:
   --pcm <new.f32>  export interleaved little-endian f32 PCM (no header)
@@ -48,7 +48,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             return Err("unexpected extra audio inspector argument".into());
         }
     }
-    let path = path.ok_or("usage: cmvs-audio <file.ogg|movie.cmv> [--pcm <new.f32>]")?;
+    let path = path.ok_or("missing audio or movie path")?;
     let mut file = File::open(path)?;
     let mut signature = [0; 4];
     file.read_exact(&mut signature)?;

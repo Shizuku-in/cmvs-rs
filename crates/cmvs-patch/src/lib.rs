@@ -15,12 +15,16 @@ use std::{ffi::OsString, path::Path};
 
 pub const USAGE: &str = "\
 Usage:
-  cmvs-patch <amatsutsumi|aoitori|chronoclock|hapymaher|kunado|realive> <original-game> <stage-dir> <encoding>
+  cmvs-patch <game> <original-game> <stage-dir> <encoding>
   cmvs-patch asukimi <original-game> <normalized-gbk-patch> <empty-output>
   cmvs-patch miranosu <original-game> <decoded-mirai> <empty-output> <encoding>
 
-Internal offline helper invoked by tools/fan_patch/*/convert_*_patch.py.
-See tools/fan_patch/README.md for end-user conversion workflows.";
+For the first form, <game> is amatsutsumi, aoitori, chronoclock, hapymaher,
+kunado or realive. <encoding> is gbk or utf-8 (also accepts utf8).
+Use -h or --help by itself to show this help.
+
+The Python converters prepare the inputs for this helper.
+See tools/fan_patch/README.md for conversion workflows.";
 
 pub fn run_cli<I: IntoIterator<Item = OsString>>(args: I) -> Result<()> {
     let args: Vec<OsString> = args.into_iter().collect();

@@ -1,8 +1,8 @@
 # 引擎档案
 
-档案对应具体引擎构建，游戏记录绑定启动脚本、脚本包和可执行文件身份。数据位于 [`research/profiles`](../../research/profiles/)，解析和选择由 `profile::Registry` 完成。
+档案对应具体引擎构建，游戏记录绑定启动脚本、脚本包和可执行文件身份。源数据位于 [`research/profiles`](../../research/profiles/)；核心的 `profile::Registry` 使用生成的静态表识别游戏。
 
-`cmvs-profile-research` 提供源档案解析、契约校验和 PE 分派分析，`cmvs-profile` 用它生成播放器的 Rust 静态表。静态表包含游戏与构建身份、命令状态、变体 ID 和 CVNS 映射。
+`cmvs-profile-research::ResearchRegistry` 解析源档案并校验证据和契约，`cmvs-profile` 提供 PE 分派分析及静态表生成。生成数据包含游戏与构建身份、命令状态、变体 ID 和 CVNS 映射。
 
 修改源档案后，在仓库根目录重新生成。CI 会校对生成结果。
 
@@ -13,7 +13,7 @@ cargo run --offline -p cmvs-profile-research --bin cmvs-profile -- generate-play
 
 ## 选择与闸门
 
-默认根据数据哈希和可执行文件身份识别游戏；未知或冲突身份报错。研究时可显式指定 `--profile`，但不会据此伪造匹配的游戏记录。脚本声明的游戏 ID 须与记录一致。
+默认根据数据哈希和可执行文件身份识别游戏。研究时可用 `--profile <档案ID或游戏别名>` 选档案。别名解析到对应的引擎构建，游戏记录和脚本声明的游戏 ID 仍按输入证据核对。
 
 | 命令状态 | 含义与运行处理 |
 |---|---|
@@ -35,9 +35,9 @@ cargo run --offline -p cmvs-profile-research --bin cmvs-profile -- generate-play
 0x201f reviewed 0x7ecd9 0x70d92 review=games/chronoclock/vm-semantics.md
 ```
 
-文档须有对应命令号标题，记录两侧 exe SHA-256、架构、函数地址、比较范围与结论。核心解析不读取文档内容；修改档案或文档时须核对引用和命令小节。
+文档须有对应命令号标题，记录两侧 exe SHA-256、架构、函数地址、比较范围与结论。修改档案或文档时须核对引用和命令小节。
 
-`variant=<实现ID>:<架构>:<exe SHA-256> evidence=<文档>` 在状态之外选择独立处理器；Registry 校验身份和实现。选中的变体不能回退根实现，宿主只执行已选语义。处理器约定见[分派指南](../guides/dispatch.md)。
+`variant=<实现ID>:<架构>:<exe SHA-256> evidence=<文档>` 声明独立处理器，由 `ResearchRegistry` 校验绑定。宿主执行静态表选定的变体。处理器约定见[分派指南](../guides/dispatch.md)。
 
 ## 指纹工具
 
@@ -51,7 +51,7 @@ python3 -I tools/profile_compare.py local/base.json local/derived.json \
   --output-profile local/derived.profile
 ```
 
-完整指纹保留指令、参数、控制流、调用与数据依赖。未知数据、间接控制流、递归和截断不能视为完整继承；形状比较只提供 `Presumed`。候选档案经 Registry 校验和证据复核后登记；人工复核行不能被自动比较覆盖。
+完整指纹保留指令、参数、控制流、调用与数据依赖。未知数据、间接控制流、递归和截断不能视为完整继承；形状比较只提供 `Presumed`。候选档案经源档案校验和证据复核后登记；人工复核行不能被自动比较覆盖。可加 `--group-differences` 聚合差异函数以安排复核，或列出命令号限定范围。分组沿相同函数体展开，遇到不同函数体即停止。
 
 新构建用 `cmvs-profile identify` / `table --base` 建立初始资料，见 [CLI](../guides/cli.md)。新增游戏遵循[研究约定](../research.md)。
 

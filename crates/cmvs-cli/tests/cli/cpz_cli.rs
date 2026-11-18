@@ -43,19 +43,23 @@ fn trace_cli_loads_and_steps_synthetic_ps3_directly_from_archive() {
         hex(include_str!("../../../../tests/fixtures/cpz6-script.hex")),
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
-        .arg(&path)
-        .args(["--script", "fixture.ps3", "--profile", "cmvs-20160201"])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let trace = |profile| {
+        let output = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
+            .arg(&path)
+            .args(["--script", "fixture.ps3", "--profile", profile])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let stdout = trace("cmvs-20160201");
     assert!(stdout.contains("pending system=0x201e"));
     assert!(stdout.contains("top_word=0x00000007"));
+    assert_eq!(trace("amatsutsumi"), stdout);
 }
 
 #[test]

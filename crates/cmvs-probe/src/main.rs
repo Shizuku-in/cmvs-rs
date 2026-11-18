@@ -10,62 +10,50 @@ use cmvs_probe::{
 };
 use std::{fs, path::PathBuf, process::ExitCode};
 
-const HEAD: &str = "Usage: cmvs-probe <game-root> --out <new-dir> [options]
+const USAGE: &str = "\
+Usage: cmvs-probe <game-root> --out <new-dir> [options]
 
-Runs game-agnostic checks against a read-only game root and writes summary.json and
-events.jsonl into a new output directory. Exit code 1 when any check fails or is blocked.
+Run headless checks on a read-only game directory and write summary.json and events.jsonl.
 
-Checks (--checks takes a comma-separated list):";
-
-const OPTIONS: &str = "Options:
-  --checks <ids>        checks to run, e.g. S2,R2,R3, or `all`
-  --out <new-dir>       required; create reports here (directory must not exist)
-  --profile <id>        force an engine profile instead of identifying one
-  --manifest <file>     per-game corrections to automatic recognition (optional)
-  --device <name>       mouse (default) or keyboard input
-  --font <file>         font for glyph metrics
-  --font-index <n>      collection face index; requires --font (default 0)
-  --render-frames       composite software device frames at VM yields; requires --font
-  --frame-ms <n>        positive virtual frame time in milliseconds (default 16)
-  --seed <n>            decimal u32 random seed (default 0)
-  --max-steps <n>       positive VM step budget per session (default 50000000)
-  --max-routes <n>      positive route limit per choice tree (default 16)
-  --max-rounds <n>      unlock rounds for R4, at least 2 (default 4)
-  --max-page-trials <n> positive action limit per page graph (default 400)
-  --no-route-skip       do not hold the skip key while exploring routes
-  --fork <mode>         replay (default) runs every route from the start; save starts
-                        branches from a checkpoint saved at the choice (needs saves)
-  --without-snapshots   research only: continue without save images; skips V1-V4
-  --block-presumed      stop at commands with only legacy presumed evidence
-  --block-unreviewed    stop at unreviewed commands
-  -h, --help           show this help
+Options:
+  --checks <ids>         comma-separated IDs or all; see the list below
+  --out <new-dir>        required; report directory must not exist
+  --profile <id|alias>   select a profile by ID or registered game alias
+  --manifest <file>      per-game corrections to automatic recognition
+  --device <name>        mouse (default) or keyboard input
+  --font <file>          font for glyph metrics
+  --font-index <n>       collection face index; requires --font (default 0)
+  --render-frames        composite software device frames at VM yields; requires --font
+  --frame-ms <n>         positive virtual frame time in milliseconds (default 16)
+  --seed <n>             decimal u32 random seed (default 0)
+  --max-steps <n>        positive VM step budget per session (default 50000000)
+  --max-routes <n>       positive route limit per choice tree (default 16)
+  --max-rounds <n>       unlock rounds for R4, at least 2 (default 4)
+  --max-page-trials <n>   positive action limit per page graph (default 400)
+  --no-route-skip        do not hold the skip key while exploring routes
+  --fork <replay|save>   replay from the start (default) or use saved checkpoints
+                         Falls back to replay on builds without snapshot support.
+  --without-snapshots    skip snapshot capture and V1-V4; excludes --fork save
+  --block-presumed       stop at commands with only legacy presumed evidence
+  --block-unreviewed     stop at unreviewed commands
+  -h, --help             show this help
 
 Example: cmvs-probe game-root --out new-report --checks S1,S2
-Exit codes: 0 completed, 1 failed/blocked checks, 2 argument or runtime error.";
+Exit codes: 0 no failures or blocks (may include skipped or inconclusive checks),
+            1 failed or blocked checks, 2 argument or run error.";
 
 /// The check list comes from the catalog, so it always matches what can run.
 fn usage() -> String {
-    let mut text = format!(
-        "{HEAD}
-"
-    );
+    let mut text = format!("{USAGE}\n\nChecks:\n");
     for (id, title) in checks::CATALOG {
         let default = if checks::DEFAULT.contains(&id) {
             " (default)"
         } else {
             ""
         };
-        text.push_str(&format!(
-            "  {id:<3} {title}{default}
-"
-        ));
+        text.push_str(&format!("  {id:<3} {title}{default}\n"));
     }
-    text.push_str(
-        "  Checks without (default) play the scenario and can take hours.
-
-",
-    );
-    text.push_str(OPTIONS);
+    text.push_str("\nFull-route checks can take hours.");
     text
 }
 

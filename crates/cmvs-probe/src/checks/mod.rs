@@ -53,8 +53,7 @@ pub const CATALOG: [(&str, &str); 32] = [
     ("R5", "a second pass with the first pass's system save is no slower"),
     ("L1", "live resource counts stay bounded over a whole route"),
 ];
-/// Checks that run when `--checks` is not given; everything else plays the scenario and
-/// is opt-in.
+/// Checks that run when `--checks` is omitted.
 pub const DEFAULT: [&str; 7] = ["S1", "S2", "S3", "S4", "S5", "R1", "D1"];
 
 pub fn known(id: &str) -> bool {

@@ -1,6 +1,8 @@
-# CSS1 系统存档
+# 系统存档
 
 CSS1 保存持久变量及名称列表，与 [CSV2 剧情存档](save-format.md)和引擎快照分开。当前支持模式 1 的读取、编码、新文件导出和独立用户目录重复保存。布局依据来自[Amatsutsumi 样本](../games/amatsutsumi/README.md#样本身份)，其他构建按档案选择。
+
+下文的布局与编码适用于 CMVS 的 CSS1（`system.dat`）。CVNS 使用 CSS0（`save000.dat`），独立用户目录中的备份为 `save000.bak`。CSS0 的持久变量范围由脚本配置，实测范围见[みはる档案](../games/miharu/README.md)。
 
 | 偏移 | 类型 | 用途 |
 |---|---|---|

@@ -28,4 +28,4 @@
 | [《ハピメア REGRET END》 / hapymaher_re](hapymaher_re/README.md) | `cmvs-20221105` | 首选路线回标题，存读档通过；仍有 15 个分支前缀待探索 |
 | [《ハピメア-Fragmentation Dream- REGRET END》 / hapymaherfd_re](hapymaherfd_re/README.md) | `cmvs-20221105` | 仅基础档案，尚未适配运行 |
 
-Profile 以[游戏登记](../../research/profiles/games.txt)为准。新增作品参照[档案模板](TEMPLATE.md)和[研究约定](../research.md)。
+游戏名后的简写可作 Profile 别名，例如 `--profile aki` 等同于 `--profile cvns-20050216`。Profile 以[游戏登记](../../research/profiles/games.txt)为准。新增作品参照[档案模板](TEMPLATE.md)和[研究约定](../research.md)。

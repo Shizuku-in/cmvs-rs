@@ -17,49 +17,40 @@ use cmvs_core::{
 use std::{collections::BTreeMap, env, error::Error, fs::File, io::Read};
 
 const USAGE: &str = "\
-Usage: cmvs-trace <script-or-archive> [options]
+Usage:
+  cmvs-trace <script> [options]
+  cmvs-trace <archive> --script <basename> [options]
 
-Runs the VM on a script or script archive and prints the trace. Read-only research tool.
+Execute a script and print a bounded VM trace. Game files are read only.
 
 Input and execution:
-  --script <name>              load this ASCII basename from the archive as the initial script
-  --script-archive <archive>   supply common and main scripts; enables control handling
+  --script <basename>          select the initial script by ASCII name in the input archive
+  --script-archive <archive>   enable script transfers using this archive
   --entry <pc>                 byte address, decimal or 0x-prefixed (default script entry)
-  --steps <budget>             VM step budget, 1..1000000 (default 10000)
-  --bootstrap                  apply the verified startup configuration
-  --virtual-tick <tick>        callback clock for control handling (default 0)
-  --frame-ms <delta>           positive engine frame time per wait/yield; default frozen
-  --rand-seed <seed>           enable 0x20d4 with CRT rand() from this seed
+  --steps <budget>             VM step budget, 1 to 1000000 (default 10000)
+  --bootstrap                  apply known startup settings
+  --virtual-tick <tick>        manual script-control callback tick (default 0)
+  --frame-ms <n>               advance time by this many milliseconds per wait/yield;
+                               the frame clock stays frozen by default
+  --rand-seed <seed>           enable CRT random requests with a fixed seed
 
 Saves and platform:
-  --save-dir <directory>       scan saveNNN.dat headers read-only for menu state
-  --system-save <file>         load CSS1 persistent state for 0x2128 (no gameplay restore)
-  --record-platform <root>     recording-only platform backend using that game root
-  --continue-without-snapshot  pass main entry and 0x22b2 without building a save image
+  --save-dir <dir>             scan gameplay save headers for menu state
+  --system-save <file>         supply persistent system state
+  --record-platform <root>     read game assets and record platform requests without a window
+  --continue-without-snapshot  pass main entry and snapshot points with live-state effects only
 
 Engine profile:
-  --profile <id>               force a profile; needed for synthetic or unrecorded scripts
-  --block-presumed             stop at commands with only legacy presumed evidence
+  --profile <id|alias>         select a profile by ID or registered game alias
+  --block-presumed             stop at commands with only presumed evidence
   --block-unreviewed           stop at unreviewed commands
   -h, --help                   show this help
 
-Example:
-  cmvs-trace data/pack/start.ps3 --steps 10000
+Profile detection uses the input, any supplied script archive, and executable
+hashes from --record-platform. Presumed and unreviewed commands run by default.
+Trace stops at snapshot points by default. Gameplay saves cannot be restored.
 
-Notes:
-  - The profile is identified from the input, --script-archive and, with --record-platform,
-    the executables in that root. Every system command passes the gate first: Base,
-    Inherited, Reviewed and ContractEquivalent run existing handlers; absent and no-op
-    commands always stop; presumed and unreviewed commands run by default, unless blocked
-    by --block-presumed and --block-unreviewed respectively.
-  - --record-platform reads cursor and icon assets, applies verified state (clear color,
-    save title, pointer-gesture configuration), records SE requests without audio output
-    and decodes 0x2030 object images from 0x2011 entries. No window, drawing or input.
-  - Without --continue-without-snapshot, main transfer and 0x22b2 stop at the engine save
-    snapshot; with it only the verified live-state effect applies and saving is unavailable.
-  - Callback ticks stay separate from --frame-ms; --script-archive schedules no callbacks.
-  - The original seeds rand() from timeGetTime and draws every frame, so its values are
-    not reproducible.";
+Example: cmvs-trace data/pack/start.ps3 --steps 10000";
 
 // Emit source diagnostics on every return path, including a handler error or budget stop.
 struct TraceGate(CommandGate);

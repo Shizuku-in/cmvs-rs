@@ -8,6 +8,21 @@ A **Rust** reimplementation of Purple SOFTWARE's CMVS/CVNS engine.
 
 <table>
   <tr>
+    <th colspan="2">Akiiro Renka (CVNS)</th>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/aki_switch.png" alt="Akiiro Renka on Switch" width="100%">
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/aki_vita.png" alt="Akiiro Renka on PS Vita" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Switch (Ryujinx)</strong></td>
+    <td align="center"><strong>PS Vita (Vita3K)</strong></td>
+  </tr>
+  <tr>
     <th colspan="2">Amatsutsumi</th>
   </tr>
   <tr>
@@ -65,14 +80,16 @@ A **Rust** reimplementation of Purple SOFTWARE's CMVS/CVNS engine.
 
 ## Getting Started
 
-Requires **Rust 1.90+ stable**.
+Requires **Rust 1.90+ stable**. To play a game, see the [Running Guide](docs/guides/running.md).
+
+Inspect a startup script and run the tests:
 
 ```bash
-cargo run --offline -p cmvs-cli -- "<game-directory>/data/pack/start.ps3"
-cargo test --offline
+cargo run --bin cmvs-inspect -- "game/data/pack/start.ps3"
+cargo test
 ```
 
-See the [Running Guide](docs/guides/running.md) for desktop previews, startup snapshot barriers, fonts, audio, and a separate user data directory. See the [CLI Guide](docs/guides/cli.md) for inspection tools.
+See the [CLI Guide](docs/guides/cli.md) for more tools.
 
 ## Platforms
 

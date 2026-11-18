@@ -31,6 +31,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+const USAGE: &str = "\
+Usage: cmvs-bench [--smoke|--quick] [FILTER]
+
+Options:
+  FILTER             Run benchmarks whose names contain this text
+  --smoke, --quick   Run with fewer iterations for a quick smoke check
+  -h, --help         Print this help message";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BenchMode {
     Standard,
@@ -586,14 +594,6 @@ fn run_suite(
     Ok(results)
 }
 
-fn print_usage() {
-    println!("Usage: cmvs-bench [--smoke|--quick] [FILTER]");
-    println!();
-    println!("Options:");
-    println!("  --smoke, --quick   Run minimal iteration counts for fast CI smoke checks");
-    println!("  -h, --help         Print this help message");
-}
-
 enum CliOutcome {
     Help,
     Run {
@@ -626,7 +626,7 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliOutcome, Str
 fn main() -> ExitCode {
     let parsed = match parse_args(std::env::args().skip(1)) {
         Ok(CliOutcome::Help) => {
-            print_usage();
+            println!("{USAGE}");
             return ExitCode::SUCCESS;
         }
         Ok(run) => run,

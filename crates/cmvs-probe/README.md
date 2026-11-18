@@ -1,6 +1,6 @@
 # cmvs-probe
 
-Headless whole-run checks for CMVS games. It drives the engine with virtual mouse or keyboard input and judges the results from engine-level observations. It contains no game names, script names or script addresses, and every result states the verdict level it reached.
+Headless checks for CMVS and CVNS games using virtual mouse or keyboard input. Each result records the engine-level observations used to judge it.
 
 ## Checks
 
@@ -13,14 +13,19 @@ Headless whole-run checks for CMVS games. It drives the engine with virtual mous
 | P | Page traversal, returning to pages, quit and return-to-title controls |
 | C | Settings controls, persistence across restarts, text speed |
 | V | Save, restart and load round-trips, system save across restarts |
+| L | Live resource counts over a complete route |
 
 ## Usage
 
 ```sh
-cargo run --release -p cmvs-probe -- <game-root> --out <new-dir> --checks all
+cargo run --release -p cmvs-probe -- game --out report --font font.ttf
 ```
 
-`--out` must name a directory that does not exist yet. `--help` lists every check and option, including the step and route budgets.
+`--out` must name a new directory. The default checks are S1–S5, R1 and D1. Use
+`--checks all` to include full-route checks or `--checks R2,R3` to select specific
+checks. `--help` lists all IDs, options and budgets. The output contains
+`summary.json` and `events.jsonl`. Compare report directories with
+`python3 -I tools/probe_matrix.py report1 report2 --markdown`.
 
 ## Results
 
@@ -28,7 +33,8 @@ Reports distinguish `pass`, `fail`, `blocked`, `skipped` and `inconclusive`.
 L0 means no execution error, gate stop or stall; L1 adds a round-trip or invariant
 check; L2 requires reference data from the original executable. Budget exhaustion
 is inconclusive. Instruction coverage is not branch coverage or game completion.
-The probe does not silently relax the selected command policy.
+The exit status is 1 for a failed or blocked check and 2 for an argument or
+run error. Exit status 0 can include skipped or inconclusive checks.
 
 ## Manifest
 

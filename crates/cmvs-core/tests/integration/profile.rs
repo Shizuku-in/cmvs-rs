@@ -67,6 +67,26 @@ fn both_amatsutsumi_startups_select_the_existing_save_identity() {
 }
 
 #[test]
+fn registered_game_aliases_select_the_same_profile_and_record_as_its_id() {
+    let registry = Registry::builtin();
+    for game in registry.games() {
+        let evidence = Evidence {
+            script_archive: Some(FileEvidence {
+                path: game.script_archive.path.clone(),
+                sha256: game.script_archive.sha256,
+            }),
+            ..Evidence::default()
+        };
+        let selected = registry.select(Some(&game.game), &evidence).unwrap();
+        assert_eq!(selected.record, Some(game));
+        assert_eq!(
+            selected,
+            registry.select(Some(&game.profile), &evidence).unwrap()
+        );
+    }
+}
+
+#[test]
 fn game_files_are_found_by_fixed_names_only() {
     use cmvs_core::profile::GameFiles;
     let root = crate::support::temp_dir::TempDir::new("profile-files");

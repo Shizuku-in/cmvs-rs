@@ -8,6 +8,21 @@
 
 <table>
   <tr>
+    <th colspan="2">Akiiro Renka (CVNS)</th>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/aki_switch.png" alt="Akiiro Renka on Switch" width="100%">
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/aki_vita.png" alt="Akiiro Renka on PS Vita" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Switch (Ryujinx)</strong></td>
+    <td align="center"><strong>PS Vita (Vita3K)</strong></td>
+  </tr>
+  <tr>
     <th colspan="2">Amatsutsumi</th>
   </tr>
   <tr>
@@ -65,14 +80,16 @@
 
 ## 开始使用
 
-需要 Rust **1.90+ stable**。
+需要 Rust **1.90+ stable**。播放游戏见[运行指南](docs/guides/running.md)。
+
+检查启动脚本和运行测试：
 
 ```bash
-cargo run --offline -p cmvs-cli -- "<游戏目录>/data/pack/start.ps3"
-cargo test --offline
+cargo run --bin cmvs-inspect -- "game/data/pack/start.ps3"
+cargo test
 ```
 
-桌面运行、字体、音频和独立用户目录配置见[运行指南](docs/guides/running.md)。检查工具见[CLI 指南](docs/guides/cli.md)。
+其他工具见[CLI 指南](docs/guides/cli.md)。
 
 ## 汉化补丁支持
 

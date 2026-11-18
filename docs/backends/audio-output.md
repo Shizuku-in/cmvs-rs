@@ -1,6 +1,6 @@
 # 音频输出
 
-`cmvs-audio` 提供流式解码、播放控制和可选原生设备输出。核心的 `AudioBackend` 定义契约；默认记录后端不打开设备。桌面启用 `audio-output` 并传入 `--audio native` 才实际发声，完整启动命令见[运行指南](../guides/running.md#原生音频)。设备或解码失败会报错，不自动退回静音。
+`cmvs-audio` 提供流式解码、播放控制和可选原生设备输出。核心的 `AudioBackend` 定义契约；默认记录后端不打开设备。桌面启用 `audio-output` 并传入 `--audio native` 才实际发声，命令见[运行指南](../guides/running.md#音频与图形)。设备或解码失败会报错。
 
 依赖与 feature 见 [`cmvs-audio`](../../crates/cmvs-audio/README.md) 和各包 `Cargo.toml`；浏览器输出见 [Web 后端](web.md#浏览器音频)。
 
@@ -20,7 +20,7 @@
 
 ## 设置与后端契约
 
-启动时读取 `cmvs.cfg` 的 `SOUND_INFO`。运行时音量、声音开关及语音压低 BGM 立即作用于后端，持久化规则见[设置保存](../guides/running.md#设置保存与重启)。
+启动时读取 `cmvs.cfg` 或 `cvns.cfg` 的 `SOUND_INFO`。运行时音量、声音开关及语音压低 BGM 立即作用于后端，持久化规则见[设置保存](desktop.md#设置保存)。
 
 - 整组增益更新必须全部接受或保留旧状态，不重置播放位置、暂停状态或淡变包络。
 
@@ -44,7 +44,7 @@
 
 ## 检查
 
-`cmvs-audio` CLI 可在不打开设备的情况下检查 Ogg / 影片音轨及导出 PCM，见[CLI 指南](../guides/cli.md)。默认测试只使用合成音频；真实资源对照与设备消费的范围见[游戏档案](../games/README.md)。
+`cmvs-audio` CLI 可在不打开设备的情况下检查音频并导出 PCM，见[CLI 指南](../guides/cli.md#归档与资源)。真实资源对照与设备消费的范围见[游戏档案](../games/README.md)。
 
 有音频设备时，可显式执行合成播放检查：
 

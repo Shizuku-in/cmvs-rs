@@ -13,7 +13,7 @@ Platform-independent core of the CMVS engine reimplementation. Every host and to
 | `host` | `filesystem` (`HostFs`, `PathError`, `resolve_under*`), `resources`, `image`, `audio`, `movie`, `platform`, `input`, `gesture`, `random`, `settings`, `text_encoding` |
 | `runtime` | `Runtime` (`'static + Send` session and frame loop), `bootstrap`, `script_control`, `save_menu`, and session-owned state types |
 
-Engine builds are described by the files in [`profiles/`](profiles); see [engine profiles](../../docs/design/engine-profiles.md). Unknown games, unimplemented commands and unsupported codecs return errors instead of being guessed.
+Engine builds use static playback tables generated from [`research/profiles/`](../../research/profiles/). See [engine profiles](../../docs/design/engine-profiles.md). Unknown games, unimplemented commands and unsupported codecs return errors.
 
 ## Platforms
 
