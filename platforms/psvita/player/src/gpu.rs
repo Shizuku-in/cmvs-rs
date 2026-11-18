@@ -4,7 +4,10 @@
 //! device frame.
 use crate::sys::VitaGpu;
 use cmvs_console::{backend::ConsoleGpu, gpu::Compositor};
-use cmvs_core::{render::raster::RgbaImage, render::scene_render::RenderFrame};
+use cmvs_core::{
+    render::raster::RgbaImage,
+    render::scene_render::{Layer, RenderFrame},
+};
 use std::error::Error;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -24,8 +27,13 @@ impl GpuRenderer {
         self.0.clear_cache();
     }
 
-    pub fn render(&mut self, frame: &RenderFrame<'_>) -> Result<()> {
-        self.0.render(frame)
+    pub fn render(&mut self, frame: RenderFrame<'_>) -> Result<()> {
+        // The bundled GXM shader only supports the CMVS queue.
+        if matches!(frame.commands().first(), Some(Layer::Cvns(_))) {
+            let frame = RenderFrame::from_precomposited(frame.render_cpu()?);
+            return self.0.render(&frame);
+        }
+        self.0.render(&frame)
     }
 
     /// Shows the canvas scaled into `view` (screen pixels) with an optional crosshair

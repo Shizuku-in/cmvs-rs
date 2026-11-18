@@ -26,6 +26,31 @@ fn div255(x: f32) -> f32 {
 @fragment fn fs(in: Vertex) -> @location(0) vec4<f32> {
     let flags=u32(p.v[4].w);
     var texel=vec4<f32>(p.v[4].xyz,255.0);
+    if ((flags & 32u)!=0u) {
+        if ((flags & 64u)!=0u) {
+            let at=vec2<i32>(floor(in.position.xy)-p.v[2].xy);
+            let uv=vec2<i32>(p.v[6].xy)+at.x*vec2<i32>(p.v[6].zw)+at.y*vec2<i32>(p.v[7].xy);
+            let xy=vec2<i32>(p.v[1].xy)+(uv >> vec2<u32>(10u));
+            if (any(xy < max(vec2<i32>(p.v[1].xy),vec2<i32>(0))) ||
+                any(xy >= min(vec2<i32>(p.v[1].zw),vec2<i32>(textureDimensions(image))))) {
+                discard;
+            }
+            texel=load(image,xy);
+        } else if ((flags & 1u)==0u) {
+            texel=load(image,vec2<i32>(floor(in.uv)));
+        }
+        let weight=p.v[5].x;
+        var rgb=floor((weight*texel.rgb+(256.0-weight)*p.v[4].xyz)/256.0);
+        var alpha=p.v[0].z;
+        if (p.v[5].y!=0.0 && texel.a<255.0) {
+            alpha=floor(alpha*texel.a/256.0);
+        }
+        if (p.v[5].z!=0.0) {
+            rgb=floor(rgb*alpha/256.0);
+            alpha=256.0;
+        }
+        return vec4<f32>(rgb/255.0,alpha/256.0);
+    }
     if ((flags & 1u)==0u) {
         texel=load(image,vec2<i32>(floor(in.uv)));
         if (p.v[0].w>0.0) { texel=sample_linear(image,in.uv); }

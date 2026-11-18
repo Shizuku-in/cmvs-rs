@@ -16,6 +16,7 @@ use crate::{
 pub mod cvns;
 pub mod shader;
 
+#[derive(Clone, Copy)]
 pub enum Layer<'a> {
     /// World-space inverse-view billboard: full texture, wrapped linear sampling,
     /// alpha blending and no depth writes (original queue 5).
@@ -71,6 +72,7 @@ pub enum Layer<'a> {
         alpha: u32,
         blend: Blend,
     },
+    Cvns(cvns::Draw<'a>),
     Fade(&'a crate::fade::Fade),
 }
 
@@ -852,6 +854,16 @@ pub struct RenderFrame<'a> {
     precomposited: Option<RgbaImage>,
 }
 impl<'a> RenderFrame<'a> {
+    pub fn from_precomposited(image: RgbaImage) -> Self {
+        Self {
+            width: image.width(),
+            height: image.height(),
+            clear: [0, 0, 0, 255],
+            commands: Vec::new(),
+            precomposited: Some(image),
+        }
+    }
+
     pub fn dimensions(&self) -> [u32; 2] {
         [self.width, self.height]
     }
@@ -865,10 +877,20 @@ impl<'a> RenderFrame<'a> {
         self.precomposited.as_ref()
     }
 
+    /// A CVNS draw uploads its entire source, even when only one texel is visible.
+    pub fn cvns_source_exceeds(&self, max_dimension: u32) -> bool {
+        self.commands.iter().any(|layer| match layer {
+            Layer::Cvns(draw) => draw.texture().is_some_and(|(image, _)| {
+                image.width() > max_dimension || image.height() > max_dimension
+            }),
+            _ => false,
+        })
+    }
+
     /// Executes the shared command queue with the portable rasterizer.
-    pub fn render_cpu(self) -> Result<RgbaImage, FormatError> {
-        if let Some(image) = self.precomposited {
-            return Ok(image);
+    pub fn render_cpu(&self) -> Result<RgbaImage, FormatError> {
+        if let Some(image) = &self.precomposited {
+            return Ok(image.clone());
         }
         let size = (u64::from(self.width) * u64::from(self.height))
             .checked_mul(4)
@@ -880,7 +902,7 @@ impl<'a> RenderFrame<'a> {
         for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&self.clear);
         }
-        for command in self.commands {
+        for &command in &self.commands {
             draw(&mut pixels, self.width, self.height, command);
         }
         RgbaImage::new(self.width, self.height, pixels)
@@ -935,7 +957,7 @@ pub fn prepare_scene<'a>(
         return Err(FormatError("invalid scene surface dimensions"));
     }
     if let Some(cvns) = scene.cvns() {
-        let image = cvns::render_with_objects(
+        return cvns::prepare_gpu(cvns::prepare(
             cvns,
             scene.clear_enabled(),
             scene.clear().color,
@@ -943,14 +965,7 @@ pub fn prepare_scene<'a>(
             additional,
             width,
             height,
-        )?;
-        return Ok(RenderFrame {
-            width,
-            height,
-            clear: [0, 0, 0, 255],
-            commands: Vec::new(),
-            precomposited: Some(image),
-        });
+        ));
     }
     // Validate the entire scene before rasterizing. Slot order is the stable tie-breaker.
     let mut entries = Vec::new();
@@ -1755,6 +1770,10 @@ fn screen_mask<'a>(
 
 fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
     let (image, [sx, sy, w, h], [left, top], opacity, mask, screen_mask, blend) = match layer {
+        Layer::Cvns(draw) => {
+            draw.render(pixels, width);
+            return;
+        }
         Layer::Billboard { image, quad, alpha } => {
             draw_projected::<true>(
                 pixels,
@@ -2781,6 +2800,24 @@ mod scale_tests {
 #[cfg(test)]
 mod prepared_frame_tests {
     use super::*;
+
+    #[test]
+    fn cvns_translucent_layers_truncate_each_write() {
+        use crate::scene::cvns::{CvnsSprite, CvnsSpriteKind};
+
+        let mut scene = SceneHost::default();
+        let sprites = &mut scene.cvns_mut().sprites;
+        let solid = |color, alpha| CvnsSprite {
+            kind: CvnsSpriteKind::SolidRect { color },
+            src_rect: [0, 0, 1, 1],
+            alpha,
+            ..CvnsSprite::default()
+        };
+        sprites[64] = Some(solid(0x646464, 256));
+        sprites[..64].fill(Some(solid(0, 1)));
+        let frame = prepare_scene(&scene, None, &[], 1, 1).unwrap();
+        assert_eq!(frame.precomposited().unwrap().pixels(), [36, 36, 36, 255]);
+    }
 
     #[test]
     fn prepared_queue_preserves_equal_layer_order_and_pixel_result() {

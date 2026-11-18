@@ -94,7 +94,7 @@ fn console(confirm_is_cross: bool) -> Console {
 /// Composites the scene on the GPU; the caller presents the canvas.
 fn render_gpu(session: &mut HostSession, gpu: &mut gpu::GpuRenderer) -> Result<()> {
     session.with_gpu_target(false, |target| match target {
-        GpuTarget::Scene(frame) => gpu.render(&frame),
+        GpuTarget::Scene(frame) => gpu.render(frame),
         GpuTarget::Movie { .. } => Err("Vita movie frames use window presentation".into()),
     })
 }

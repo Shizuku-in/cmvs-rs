@@ -223,6 +223,123 @@ mod tests {
 
     #[test]
     #[ignore = "requires a native GPU adapter; run explicitly"]
+    fn cvns_layers_match_software_and_reuse_textures() {
+        use cmvs_core::render::{
+            scene::{
+                DrawState, ObjectImage, SceneHost, SceneObject,
+                cvns::{CvnsImageBuffer, CvnsSprite, CvnsSpriteKind},
+            },
+            scene_render::prepare_scene,
+        };
+
+        let mut scene = SceneHost::default();
+        let cvns = scene.cvns_mut();
+        cvns.sprites[0] = Some(CvnsSprite {
+            kind: CvnsSpriteKind::SolidRect { color: 0x0020_3040 },
+            src_rect: [0, 0, 12, 8],
+            z: 127,
+            ..CvnsSprite::default()
+        });
+        let pixels = RgbaImage::new(
+            4,
+            3,
+            (0..12)
+                .flat_map(|i| [30 * (i % 8), 20 * i, 13 * i, 0])
+                .collect(),
+        )
+        .unwrap();
+        cvns.images[0] = Some(CvnsImageBuffer {
+            layers: vec![None],
+            composited: Some(pixels.clone()),
+            mask: None,
+        });
+        cvns.sprites[5] = Some(CvnsSprite {
+            image_slot: 0,
+            src_rect: [0, 0, 4, 3],
+            x: -1,
+            y: 1,
+            ..CvnsSprite::default()
+        });
+        cvns.sprites[4] = Some(CvnsSprite {
+            image_slot: 0,
+            src_rect: [1, 0, 4, 3],
+            x: 6,
+            y: 3,
+            origin_x: 1,
+            origin_y: 1,
+            scale_x: 2000,
+            scale_y: 2000,
+            rotation: 30,
+            alpha: 150,
+            blend_mode: 1,
+            color_strength: 123,
+            color: 0x003A_6CB7,
+            ..CvnsSprite::default()
+        });
+        let mut draw = DrawState::default();
+        draw.set_source_size(2, 2);
+        draw.set_position([2, 1]);
+        draw.set_layer(0);
+        draw.set_opacity(256);
+        let overlay = SceneObject {
+            draw: Some(draw),
+            image: Some(ObjectImage {
+                pixels: RgbaImage::new(2, 2, [200, 80, 120, 255].repeat(4)).unwrap(),
+                alpha: true,
+                surface: false,
+                name: Vec::new(),
+                filter: None,
+            }),
+            shown: true,
+            ..SceneObject::default()
+        };
+        let frame = prepare_scene(&scene, None, &[&overlay], 12, 8).unwrap();
+        let expected = frame.render_cpu().unwrap();
+        assert_eq!(frame.commands().len(), 4);
+        assert!(frame.precomposited().is_none());
+        let mut gpu = renderer();
+        let actual = gpu.render(&frame).unwrap().read().unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(gpu.cache.len(), 2);
+        let bytes = gpu.uploaded_bytes;
+        drop(gpu.render(&frame).unwrap());
+        assert_eq!(gpu.uploaded_bytes, bytes);
+        gpu.check().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a native GPU adapter; run explicitly"]
+    fn cvns_oversized_source_uploads_only_the_canvas() {
+        use cmvs_core::render::{
+            scene::{
+                SceneHost,
+                cvns::{CvnsImageBuffer, CvnsSprite},
+            },
+            scene_render::prepare_scene,
+        };
+
+        let mut gpu = renderer();
+        let width = gpu.device.limits().max_texture_dimension_2d + 1;
+        let mut scene = SceneHost::default();
+        let cvns = scene.cvns_mut();
+        let pixel = [10, 20, 30, 255];
+        cvns.images[0] = Some(CvnsImageBuffer {
+            layers: vec![None],
+            composited: Some(RgbaImage::new(width, 1, pixel.repeat(width as usize)).unwrap()),
+            mask: None,
+        });
+        cvns.sprites[0] = Some(CvnsSprite {
+            image_slot: 0,
+            src_rect: [width as i32 - 1, 0, width as i32, 1],
+            ..CvnsSprite::default()
+        });
+        let frame = prepare_scene(&scene, None, &[], 1, 1).unwrap();
+        assert_eq!(gpu.render(&frame).unwrap().read().unwrap().pixels(), pixel);
+        assert_eq!(gpu.uploaded_bytes, 4);
+    }
+
+    #[test]
+    #[ignore = "requires a native GPU adapter; run explicitly"]
     fn precomposited_frames_skip_content_cache_and_frame_start_protects_same_frame_uploads() {
         fn layer_at(image: &cmvs_core::render::scene::ObjectImage, x: usize) -> Layer<'_> {
             Layer::Image {
@@ -237,49 +354,24 @@ mod tests {
         }
 
         let mut gpu = renderer();
-        let mut cvns_scene = cmvs_core::render::scene::SceneHost::default();
-        cvns_scene.enable_cvns();
-        let render_cvns = |gpu: &mut Renderer, red: u8| {
-            let mut draw = cmvs_core::render::scene::DrawState::default();
-            draw.set_source_size(2, 1);
-            draw.set_layer(1);
-            draw.set_opacity(256);
-            let overlay = cmvs_core::render::scene::SceneObject {
-                image: Some(cmvs_core::render::scene::ObjectImage {
-                    name: Vec::new(),
-                    filter: None,
-                    alpha: false,
-                    surface: false,
-                    pixels: RgbaImage::new(2, 1, vec![red, 20, 30, 255, 40, red, 60, 255]).unwrap(),
-                }),
-                draw: Some(draw),
-                shown: true,
-                ..cmvs_core::render::scene::SceneObject::default()
-            };
-            let frame = cmvs_core::render::scene_render::prepare_scene(
-                &cvns_scene,
-                None,
-                &[&overlay],
-                2,
-                1,
-            )
-            .unwrap();
-            let expected = frame.precomposited().unwrap().clone();
+        let render_composite = |gpu: &mut Renderer, red: u8| {
+            let expected = RgbaImage::new(2, 1, vec![red, 20, 30, 255, 40, red, 60, 255]).unwrap();
+            let frame = RenderFrame::from_precomposited(expected.clone());
             (gpu.render(&frame).unwrap(), expected)
         };
-        let (retained_cvns, first_expected) = render_cvns(&mut gpu, 11);
+        let (retained_composite, first_expected) = render_composite(&mut gpu, 11);
         for red in 12..40 {
-            drop(render_cvns(&mut gpu, red).0);
+            drop(render_composite(&mut gpu, red).0);
         }
-        let (final_cvns, last_expected) = render_cvns(&mut gpu, 99);
+        let (final_composite, last_expected) = render_composite(&mut gpu, 99);
         assert!(gpu.cache.is_empty());
         assert_eq!(gpu.cache_bytes, 0);
         assert!(gpu.frames.is_empty());
         assert_eq!(gpu.canvases.created, 0);
         assert_eq!(gpu.movie_textures.created, 2);
-        assert_eq!(retained_cvns.read().unwrap(), first_expected);
-        assert_eq!(final_cvns.read().unwrap(), last_expected);
-        drop((retained_cvns, final_cvns));
+        assert_eq!(retained_composite.read().unwrap(), first_expected);
+        assert_eq!(final_composite.read().unwrap(), last_expected);
+        drop((retained_composite, final_composite));
 
         let frame_obj = |red: u8| cmvs_core::render::scene::ObjectImage {
             name: Vec::new(),
@@ -361,7 +453,7 @@ mod tests {
                     layer_at(&pinned, 0),
                     layer_at(&new_a, 1),
                     layer_at(&new_b, 2),
-                    layer_at(&new_a, 3),
+                    layer_at(&new_b, 3),
                 ],
             )
             .unwrap();
@@ -371,7 +463,7 @@ mod tests {
         assert_eq!(
             static_scene.read().unwrap().pixels(),
             &[
-                10, 70, 80, 255, 20, 70, 80, 255, 30, 70, 80, 255, 20, 70, 80, 255
+                10, 70, 80, 255, 20, 70, 80, 255, 30, 70, 80, 255, 30, 70, 80, 255
             ]
         );
 

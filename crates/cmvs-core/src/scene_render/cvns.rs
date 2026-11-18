@@ -1,5 +1,6 @@
-//! Software compositor for CVNS (`cvns-20090203`) sprites, filters, fades, quake, and masks.
+//! Scene preparation and software rasterization for CVNS (`cvns-20090203`) sprites, filters, fades, quake, and masks.
 
+use super::{Layer, RenderFrame};
 use crate::{
     FormatError, MAX_PAYLOAD,
     raster::RgbaImage,
@@ -13,11 +14,11 @@ use crate::{
 };
 
 #[derive(Clone, Copy)]
-struct ShadeParams {
-    alpha: u16,
-    tint: [u8; 3],
-    weight: u16,
-    additive: bool,
+pub(super) struct ShadeParams {
+    pub(super) alpha: u16,
+    pub(super) tint: [u8; 3],
+    pub(super) weight: u16,
+    pub(super) additive: bool,
 }
 
 #[inline]
@@ -72,7 +73,7 @@ fn resolve_shade(sprite: &CvnsSprite, fade_color: u32, fade_level: u16) -> Shade
 }
 
 #[inline]
-fn apply_tint(rgb: [u8; 3], shade: ShadeParams) -> [u8; 3] {
+pub(super) fn apply_tint(rgb: [u8; 3], shade: ShadeParams) -> [u8; 3] {
     if shade.weight >= 256 {
         return rgb;
     }
@@ -125,8 +126,159 @@ fn blend_pixel(dst: &mut [u8], src_rgb: [u8; 3], src_alpha: u16, shade: ShadePar
     dst[3] = 255;
 }
 
-/// Renders CVNS scene sprites (`0..1536` ordered by `z = 127..0` and reverse slot order),
-/// backdrop clear, fade level, mask transitions, curtains, and quake offsets.
+#[derive(Clone, Copy)]
+pub struct Draw<'a> {
+    // Clipped device-space edges: left, top, right, bottom.
+    pub(super) bounds: [i32; 4],
+    pub(super) shade: ShadeParams,
+    pub(super) source: Source<'a>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum Source<'a> {
+    Solid([u8; 3]),
+    Tile {
+        image: &'a RgbaImage,
+        at: [i32; 2],
+        use_alpha: bool,
+        image_mask: Option<&'a CvnsMaskLayer>,
+        transition: Option<&'a CvnsMaskTransition>,
+        slot_mask: Option<&'a RgbaImage>,
+    },
+    Transformed {
+        image: &'a RgbaImage,
+        // Texture bounds and UV at the top-left pixel, with 10 fractional bits.
+        src_rect: [i32; 4],
+        base: [i64; 2],
+        step_x: [i64; 2],
+        step_y: [i64; 2],
+        use_alpha: bool,
+    },
+}
+
+impl Draw<'_> {
+    pub(super) fn texture(&self) -> Option<(&RgbaImage, bool)> {
+        match self.source {
+            Source::Tile {
+                image, use_alpha, ..
+            }
+            | Source::Transformed {
+                image, use_alpha, ..
+            } => Some((image, use_alpha)),
+            Source::Solid(_) => None,
+        }
+    }
+
+    fn gpu_supported(&self) -> bool {
+        // Normal CVNS alpha blending truncates after every write to the destination.
+        // Additive shaders already truncate their contribution before the blend.
+        if !self.shade.additive
+            && (self.shade.alpha < 256
+                || self
+                    .texture()
+                    .is_some_and(|(image, use_alpha)| use_alpha && !image.is_opaque()))
+        {
+            return false;
+        }
+        match &self.source {
+            Source::Tile {
+                image_mask,
+                transition,
+                slot_mask,
+                ..
+            } => image_mask.is_none() && transition.is_none() && slot_mask.is_none(),
+            Source::Transformed {
+                base,
+                step_x,
+                step_y,
+                ..
+            } => {
+                let [x0, y0, x1, y1] = self.bounds;
+                // Uniforms carry floats, but the fragment shader evaluates UVs as integers.
+                (0..2).all(|axis| {
+                    let (base, dx, dy) = (base[axis], step_x[axis], step_y[axis]);
+                    let limit = 1 << 24;
+                    base.abs() <= limit
+                        && dx.abs() <= limit
+                        && dy.abs() <= limit
+                        && base.abs()
+                            + dx.abs() * i64::from(x1 - x0 - 1)
+                            + dy.abs() * i64::from(y1 - y0 - 1)
+                            <= i64::from(i32::MAX)
+                })
+            }
+            Source::Solid(_) => true,
+        }
+    }
+
+    pub(super) fn render(&self, dst: &mut [u8], width: u32) {
+        let shade = self.shade;
+        let [x0, y0, x1, y1] = self.bounds;
+        let fb_w = width as usize;
+        match &self.source {
+            Source::Solid(rgb) => {
+                for y in y0..y1 {
+                    let row = y as usize * fb_w;
+                    let pixels = &mut dst[(row + x0 as usize) * 4..(row + x1 as usize) * 4];
+                    if shade.alpha == 256 && !shade.additive {
+                        let [r, g, b] = apply_tint(*rgb, shade);
+                        for pixel in pixels.as_chunks_mut::<4>().0 {
+                            *pixel = [r, g, b, 255];
+                        }
+                    } else {
+                        for pixel in pixels.as_chunks_mut::<4>().0 {
+                            blend_pixel(pixel, *rgb, 255, shade);
+                        }
+                    }
+                }
+            }
+            Source::Tile {
+                image,
+                at,
+                use_alpha,
+                image_mask,
+                transition,
+                slot_mask,
+            } => {
+                render_tile(
+                    dst,
+                    fb_w,
+                    self.bounds,
+                    image,
+                    *at,
+                    *use_alpha,
+                    shade,
+                    *image_mask,
+                    *transition,
+                    *slot_mask,
+                );
+            }
+            Source::Transformed {
+                image,
+                src_rect,
+                base,
+                step_x,
+                step_y,
+                use_alpha,
+            } => {
+                render_transformed(
+                    dst,
+                    fb_w,
+                    self.bounds,
+                    image,
+                    *src_rect,
+                    *base,
+                    *step_x,
+                    *step_y,
+                    *use_alpha,
+                    shade,
+                );
+            }
+        }
+    }
+}
+
+/// Renders CVNS scene sprites, including effects that capture the current scene.
 pub fn render(
     scene: &CvnsScene,
     backdrop_enabled: bool,
@@ -146,7 +298,7 @@ pub fn render(
     )
 }
 
-/// Renders CVNS scene sprites (`127..=0` Z order) together with additional window/glyph objects.
+/// Renders CVNS sprites together with additional window and glyph objects.
 pub fn render_with_objects(
     scene: &CvnsScene,
     backdrop_enabled: bool,
@@ -162,50 +314,91 @@ pub fn render_with_objects(
     if width == 0 || height == 0 || size > MAX_PAYLOAD as u64 {
         return Err(FormatError("CVNS scene surface exceeds byte limit"));
     }
-    let [br, bg, bb] = if backdrop_enabled {
-        unpack_rgb(fade_color)
-    } else {
-        [0, 0, 0]
-    };
-    let mut out = vec![0u8; size as usize];
-    for px in out.as_chunks_mut::<4>().0 {
-        px[0] = br;
-        px[1] = bg;
-        px[2] = bb;
-        px[3] = 255;
-    }
-    let w = width as i32;
-    let h = height as i32;
-    for z in (0..CVNS_Z_BUCKETS).rev() {
-        for obj in additional.iter().rev() {
-            let obj_z = obj.draw.as_ref().map_or(1, |d| d.words[10] as i32);
-            if obj_z == z {
-                draw_additional_object(&mut out, w, h, scene, obj, fade_color, fade_level);
-            }
-        }
-        for (slot, entry) in scene.sprites.iter().enumerate().rev() {
-            let Some(sprite) = entry.as_ref() else {
-                continue;
-            };
-            if sprite.z != z || !sprite.visible || sprite.finished_delete {
-                continue;
-            }
-            if !sprite.visible && sprite.alpha == 0 && sprite.mask_mode < 0 {
-                continue;
-            }
-            draw_sprite(&mut out, w, h, scene, slot, sprite, fade_color, fade_level);
-        }
-    }
-    RgbaImage::new(width, height, out)
+    prepare(
+        scene,
+        backdrop_enabled,
+        fade_color,
+        fade_level,
+        additional,
+        width,
+        height,
+    )
+    .render_cpu()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn draw_sprite(
-    dst: &mut [u8],
+pub(super) fn prepare<'a>(
+    scene: &'a CvnsScene,
+    backdrop_enabled: bool,
+    fade_color: u32,
+    fade_level: u16,
+    additional: &[&'a SceneObject],
+    width: u32,
+    height: u32,
+) -> RenderFrame<'a> {
+    enum Object<'a> {
+        Sprite(&'a CvnsSprite),
+        Additional(&'a SceneObject),
+    }
+
+    let [r, g, b] = if backdrop_enabled {
+        unpack_rgb(fade_color)
+    } else {
+        [0; 3]
+    };
+    let mut objects = Vec::new();
+    let valid_z = 0..CVNS_Z_BUCKETS;
+    for obj in additional.iter().rev().filter(|obj| obj.shown) {
+        if let Some(draw) = &obj.draw {
+            let z = draw.words[10] as i32;
+            if valid_z.contains(&z) {
+                objects.push((z, Object::Additional(obj)));
+            }
+        }
+    }
+    for sprite in scene.sprites.iter().rev().flatten() {
+        if sprite.visible && !sprite.finished_delete && valid_z.contains(&sprite.z) {
+            objects.push((sprite.z, Object::Sprite(sprite)));
+        }
+    }
+    // Stable ordering keeps reverse slot order and puts additional objects first at equal Z.
+    objects.sort_by_key(|(z, _)| std::cmp::Reverse(*z));
+    let mut commands = Vec::with_capacity(objects.len());
+    let (w, h) = (width as i32, height as i32);
+    for (_, obj) in objects {
+        match obj {
+            Object::Sprite(sprite) => {
+                draw_sprite(&mut commands, w, h, scene, sprite, fade_color, fade_level)
+            }
+            Object::Additional(obj) => {
+                draw_additional_object(&mut commands, w, h, scene, obj, fade_color, fade_level)
+            }
+        }
+    }
+    RenderFrame {
+        width,
+        height,
+        clear: [r, g, b, 255],
+        commands,
+        precomposited: None,
+    }
+}
+
+pub(super) fn prepare_gpu(frame: RenderFrame<'_>) -> Result<RenderFrame<'_>, FormatError> {
+    if frame
+        .commands()
+        .iter()
+        .any(|layer| matches!(layer, Layer::Cvns(draw) if !draw.gpu_supported()))
+    {
+        return Ok(RenderFrame::from_precomposited(frame.render_cpu()?));
+    }
+    Ok(frame)
+}
+
+fn draw_sprite<'a>(
+    queue: &mut Vec<Layer<'a>>,
     fb_w: i32,
     fb_h: i32,
-    scene: &CvnsScene,
-    _slot: usize,
+    scene: &'a CvnsScene,
     sprite: &CvnsSprite,
     fade_color: u32,
     fade_level: u16,
@@ -226,7 +419,7 @@ fn draw_sprite(
         if sprite.alpha == 0 {
             return;
         }
-        draw_solid_rect(dst, fb_w, fb_h, sprite, color, qoff, shade);
+        draw_solid_rect(queue, fb_w, fb_h, sprite, color, qoff, shade);
         return;
     }
     if matches!(sprite.kind, CvnsSpriteKind::Video) {
@@ -243,7 +436,7 @@ fn draw_sprite(
         for tile in &curtain.tiles {
             let mut tile_shade = shade;
             tile_shade.alpha = tile.alpha.min(256);
-            draw_image_tile(dst, fb_w, fb_h, buf, tile, qoff, tile_shade, None, None);
+            draw_image_tile(queue, fb_w, fb_h, buf, tile, qoff, tile_shade, None, None);
         }
         return;
     }
@@ -268,15 +461,15 @@ fn draw_sprite(
             alpha: sprite.alpha,
         };
         draw_image_tile(
-            dst, fb_w, fb_h, buf, &tile, qoff, shade, trans_mask, slot_mask,
+            queue, fb_w, fb_h, buf, &tile, qoff, shade, trans_mask, slot_mask,
         );
     } else if sprite.scale_x != 0 && sprite.scale_y != 0 {
-        draw_image_transformed(dst, fb_w, fb_h, buf, sprite, qoff, shade);
+        draw_image_transformed(queue, fb_w, fb_h, buf, sprite, qoff, shade);
     }
 }
 
 fn draw_solid_rect(
-    dst: &mut [u8],
+    queue: &mut Vec<Layer<'_>>,
     fb_w: i32,
     fb_h: i32,
     sprite: &CvnsSprite,
@@ -301,32 +494,31 @@ fn draw_solid_rect(
     if x1 <= x0 || y1 <= y0 {
         return;
     }
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let idx = (y as usize * fb_w as usize + x as usize) * 4;
-            blend_pixel(&mut dst[idx..idx + 4], rgb, 255, shade);
-        }
-    }
+    queue.push(Layer::Cvns(Draw {
+        bounds: [x0, y0, x1, y1],
+        shade,
+        source: Source::Solid(rgb),
+    }));
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_image_tile(
-    dst: &mut [u8],
+fn draw_image_tile<'a>(
+    queue: &mut Vec<Layer<'a>>,
     fb_w: i32,
     fb_h: i32,
-    buf: &CvnsImageBuffer,
+    buf: &'a CvnsImageBuffer,
     tile: &CvnsCurtainTile,
     qoff: [i32; 2],
     shade: ShadeParams,
-    trans_mask: Option<&CvnsMaskTransition>,
-    slot_mask: Option<&CvnsImageBuffer>,
+    trans_mask: Option<&'a CvnsMaskTransition>,
+    slot_mask: Option<&'a CvnsImageBuffer>,
 ) {
     let Some(img) = buf.display_pixels() else {
         return;
     };
     let use_alpha = buf.base().is_some_and(|l| l.use_alpha);
     draw_rgba_tile(
-        dst,
+        queue,
         fb_w,
         fb_h,
         img,
@@ -336,23 +528,23 @@ fn draw_image_tile(
         shade,
         buf.mask.as_ref(),
         trans_mask,
-        slot_mask,
+        slot_mask.and_then(CvnsImageBuffer::display_pixels),
     );
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_rgba_tile(
-    dst: &mut [u8],
+fn draw_rgba_tile<'a>(
+    queue: &mut Vec<Layer<'a>>,
     fb_w: i32,
     fb_h: i32,
-    img: &RgbaImage,
+    img: &'a RgbaImage,
     use_alpha: bool,
     tile: &CvnsCurtainTile,
     qoff: [i32; 2],
     shade: ShadeParams,
-    img_mask: Option<&CvnsMaskLayer>,
-    trans_mask: Option<&CvnsMaskTransition>,
-    slot_mask: Option<&CvnsImageBuffer>,
+    img_mask: Option<&'a CvnsMaskLayer>,
+    trans_mask: Option<&'a CvnsMaskTransition>,
+    slot_mask: Option<&'a RgbaImage>,
 ) {
     let iw = img.width() as i32;
     let ih = img.height() as i32;
@@ -402,15 +594,67 @@ fn draw_rgba_tile(
     if cw <= 0 || ch <= 0 {
         return;
     }
+    if shade.alpha != 0 || trans_mask.is_some() {
+        queue.push(Layer::Cvns(Draw {
+            bounds: [dx0, dy0, dx0 + cw, dy0 + ch],
+            shade,
+            source: Source::Tile {
+                image: img,
+                at: [sx0, sy0],
+                use_alpha,
+                image_mask: img_mask,
+                transition: trans_mask,
+                slot_mask,
+            },
+        }));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_tile(
+    dst: &mut [u8],
+    fb_w: usize,
+    [dx0, dy0, dx1, dy1]: [i32; 4],
+    img: &RgbaImage,
+    [sx0, sy0]: [i32; 2],
+    use_alpha: bool,
+    shade: ShadeParams,
+    img_mask: Option<&CvnsMaskLayer>,
+    trans_mask: Option<&CvnsMaskTransition>,
+    slot_mask: Option<&RgbaImage>,
+) {
+    let iw = img.width() as usize;
+    let cw = dx1 - dx0;
+    let ch = dy1 - dy0;
     let pixels = img.pixels();
+    if !use_alpha
+        && shade.alpha == 256
+        && shade.weight == 256
+        && !shade.additive
+        && img_mask.is_none()
+        && trans_mask.is_none()
+        && slot_mask.is_none()
+    {
+        let bytes = cw as usize * 4;
+        for row in 0..ch {
+            let s = ((sy0 + row) as usize * iw + sx0 as usize) * 4;
+            let d = ((dy0 + row) as usize * fb_w + dx0 as usize) * 4;
+            let line = &mut dst[d..d + bytes];
+            line.copy_from_slice(&pixels[s..s + bytes]);
+            for alpha in line.iter_mut().skip(3).step_by(4) {
+                *alpha = 255;
+            }
+        }
+        return;
+    }
     for row in 0..ch {
         let sy = (sy0 + row) as usize;
         let dy = (dy0 + row) as usize;
         for col in 0..cw {
             let sx = (sx0 + col) as usize;
             let dx = (dx0 + col) as usize;
-            let s = (sy * iw as usize + sx) * 4;
-            let d = (dy * fb_w as usize + dx) * 4;
+            let s = (sy * iw + sx) * 4;
+            let d = (dy * fb_w + dx) * 4;
             if let Some(mt) = trans_mask {
                 let mx = sx.min(mt.width.saturating_sub(1) as usize);
                 let my = sy.min(mt.height.saturating_sub(1) as usize);
@@ -455,7 +699,7 @@ fn draw_rgba_tile(
                 let ma = u16::from(im.data[dy * im.width as usize + dx]);
                 src_a = (src_a * ma) >> 8;
             }
-            if let Some(sm) = slot_mask.and_then(|b| b.display_pixels())
+            if let Some(sm) = slot_mask
                 && (sx as u32) < sm.width()
                 && (sy as u32) < sm.height()
             {
@@ -473,11 +717,11 @@ fn draw_rgba_tile(
     }
 }
 
-fn draw_image_transformed(
-    dst: &mut [u8],
+fn draw_image_transformed<'a>(
+    queue: &mut Vec<Layer<'a>>,
     fb_w: i32,
     fb_h: i32,
-    buf: &CvnsImageBuffer,
+    buf: &'a CvnsImageBuffer,
     sprite: &CvnsSprite,
     qoff: [i32; 2],
     shade: ShadeParams,
@@ -487,7 +731,7 @@ fn draw_image_transformed(
     };
     let use_alpha = buf.base().is_some_and(|l| l.use_alpha);
     draw_rgba_transformed(
-        dst,
+        queue,
         fb_w,
         fb_h,
         img,
@@ -506,11 +750,11 @@ fn draw_image_transformed(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_rgba_transformed(
-    dst: &mut [u8],
+fn draw_rgba_transformed<'a>(
+    queue: &mut Vec<Layer<'a>>,
     fb_w: i32,
     fb_h: i32,
-    img: &RgbaImage,
+    img: &'a RgbaImage,
     use_alpha: bool,
     src_rect: [i32; 4],
     piv_x: i32,
@@ -626,6 +870,35 @@ fn draw_rgba_transformed(
     }
     base_u += step_xx * clip_x + step_yx * clip_y;
     base_v += step_xy * clip_x + step_yy * clip_y;
+    if shade.alpha != 0 {
+        queue.push(Layer::Cvns(Draw {
+            bounds: [x0, y0, x1, y1],
+            shade,
+            source: Source::Transformed {
+                image: img,
+                src_rect,
+                base: [base_u, base_v],
+                step_x: [step_xx, step_xy],
+                step_y: [step_yx, step_yy],
+                use_alpha,
+            },
+        }));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_transformed(
+    dst: &mut [u8],
+    fb_w: usize,
+    [x0, y0, x1, y1]: [i32; 4],
+    img: &RgbaImage,
+    [sx0, sy0, sx1, sy1]: [i32; 4],
+    [mut base_u, mut base_v]: [i64; 2],
+    [step_xx, step_xy]: [i64; 2],
+    [step_yx, step_yy]: [i64; 2],
+    use_alpha: bool,
+    shade: ShadeParams,
+) {
     let iw = img.width() as i32;
     let ih = img.height() as i32;
     let pixels = img.pixels();
@@ -648,7 +921,7 @@ fn draw_rgba_transformed(
                 && sy < ih
             {
                 let s = (sy as usize * iw as usize + sx as usize) * 4;
-                let d = (dy * fb_w as usize + (x0 + c) as usize) * 4;
+                let d = (dy * fb_w + (x0 + c) as usize) * 4;
                 let src_a = if use_alpha {
                     u16::from(pixels[s + 3])
                 } else {
@@ -669,12 +942,12 @@ fn draw_rgba_transformed(
     }
 }
 
-fn draw_additional_object(
-    dst: &mut [u8],
+fn draw_additional_object<'a>(
+    queue: &mut Vec<Layer<'a>>,
     fb_w: i32,
     fb_h: i32,
     scene: &CvnsScene,
-    obj: &SceneObject,
+    obj: &'a SceneObject,
     fade_color: u32,
     fade_level: u16,
 ) {
@@ -740,7 +1013,7 @@ fn draw_additional_object(
                 alpha,
             };
             draw_rgba_tile(
-                dst,
+                queue,
                 fb_w,
                 fb_h,
                 &cimg.pixels,
@@ -794,7 +1067,7 @@ fn draw_additional_object(
             alpha,
         };
         draw_rgba_tile(
-            dst,
+            queue,
             fb_w,
             fb_h,
             &img.pixels,
@@ -808,7 +1081,7 @@ fn draw_additional_object(
         );
     } else {
         draw_rgba_transformed(
-            dst,
+            queue,
             fb_w,
             fb_h,
             &img.pixels,

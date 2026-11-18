@@ -459,17 +459,37 @@ mod tests {
     }
 
     #[test]
-    fn precomposited_frames_upload_draw_and_release_transient_texture() {
+    fn cvns_masked_frame_uploads_and_releases_software_composite() {
+        use cmvs_core::render::scene::cvns::{CvnsImageBuffer, CvnsMaskLayer, CvnsSprite};
+
         let device = FakeDevice {
             capacity: 4,
             ..FakeDevice::default()
         };
         let mut gpu = Compositor::new(device, 1 << 20).unwrap();
         let mut scene = SceneHost::default();
-        scene.enable_cvns();
+        let cvns = scene.cvns_mut();
+        cvns.images[0] = Some(CvnsImageBuffer {
+            layers: vec![None],
+            composited: Some(RgbaImage::new(1, 1, vec![200, 100, 0, 255]).unwrap()),
+            mask: Some(CvnsMaskLayer {
+                name: Vec::new(),
+                width: 1,
+                height: 1,
+                data: vec![128],
+            }),
+        });
+        cvns.sprites[0] = Some(CvnsSprite {
+            image_slot: 0,
+            src_rect: [0, 0, 1, 1],
+            ..CvnsSprite::default()
+        });
         let frame =
             cmvs_core::render::scene_render::prepare_scene(&scene, None, &[], 8, 4).unwrap();
-        assert!(frame.precomposited().is_some());
+        assert_eq!(
+            &frame.precomposited().unwrap().pixels()[..4],
+            &[99, 49, 0, 255]
+        );
         gpu.render(&frame).unwrap();
         let calls = &gpu.device().calls;
         assert!(calls.contains(&"upload 2 8x4".to_owned()), "{calls:?}");

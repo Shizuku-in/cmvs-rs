@@ -33,20 +33,46 @@ vec4 sampleLinear(sampler2D t, vec2 uv) {
 void main() {
     uint flags = uint(p.v[4].w);
     vec4 texel = vec4(p.v[4].xyz, 255.0);
-    if ((flags & 1u) == 0u) {
-        texel = p.v[0].w > 0.0 ? sampleLinear(image, inUv) : load(image, ivec2(floor(inUv)));
+    if ((flags & 32u) != 0u) {
+        if ((flags & 64u) != 0u) {
+            ivec2 at = ivec2(floor(gl_FragCoord.xy) - p.v[2].xy);
+            ivec2 uv = ivec2(p.v[6].xy) + at.x * ivec2(p.v[6].zw) + at.y * ivec2(p.v[7].xy);
+            ivec2 xy = ivec2(p.v[1].xy) + (uv >> 10);
+            if (any(lessThan(xy, max(ivec2(p.v[1].xy), ivec2(0)))) ||
+                any(greaterThanEqual(xy, min(ivec2(p.v[1].zw), textureSize(image, 0))))) {
+                discard;
+            }
+            texel = load(image, xy);
+        } else if ((flags & 1u) == 0u) {
+            texel = load(image, ivec2(floor(inUv)));
+        }
+        float weight = p.v[5].x;
+        vec3 rgb = floor((weight * texel.rgb + (256.0 - weight) * p.v[4].xyz) / 256.0);
+        float alpha = p.v[0].z;
+        if (p.v[5].y != 0.0 && texel.a < 255.0) {
+            alpha = floor(alpha * texel.a / 256.0);
+        }
+        if (p.v[5].z != 0.0) {
+            rgb = floor(rgb * alpha / 256.0);
+            alpha = 256.0;
+        }
+        outColor = vec4(rgb / 255.0, alpha / 256.0);
+    } else {
+        if ((flags & 1u) == 0u) {
+            texel = p.v[0].w > 0.0 ? sampleLinear(image, inUv) : load(image, ivec2(floor(inUv)));
+        }
+        float alpha = div255(texel.a * p.v[0].z + 127.0);
+        if ((flags & 4u) != 0u) {
+            uint green = uint(load(mask, ivec2(floor(inUv))).g);
+            alpha = roundEven(alpha * p.v[6u + green / 4u][green % 4u]);
+        }
+        if ((flags & 8u) != 0u) {
+            vec2 uv = (gl_FragCoord.xy - 0.5) * vec2(textureSize(screen, 0)) / p.v[0].xy;
+            alpha = div255(alpha * sampleLinear(screen, uv).g + 127.0);
+        }
+        if ((flags & 2u) != 0u) {
+            texel.rgb = vec3(0.0);
+        }
+        outColor = vec4(texel.rgb / 255.0, alpha / 255.0);
     }
-    float alpha = div255(texel.a * p.v[0].z + 127.0);
-    if ((flags & 4u) != 0u) {
-        uint green = uint(load(mask, ivec2(floor(inUv))).g);
-        alpha = roundEven(alpha * p.v[6u + green / 4u][green % 4u]);
-    }
-    if ((flags & 8u) != 0u) {
-        vec2 uv = (gl_FragCoord.xy - 0.5) * vec2(textureSize(screen, 0)) / p.v[0].xy;
-        alpha = div255(alpha * sampleLinear(screen, uv).g + 127.0);
-    }
-    if ((flags & 2u) != 0u) {
-        texel.rgb = vec3(0.0);
-    }
-    outColor = vec4(texel.rgb / 255.0, alpha / 255.0);
 }

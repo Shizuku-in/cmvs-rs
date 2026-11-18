@@ -28,6 +28,12 @@ impl GpuRenderer {
     }
 
     pub fn render(&mut self, frame: &RenderFrame<'_>) -> Result<()> {
+        // deko3d limits 2D textures to 16384 texels per side.
+        if frame.cvns_source_exceeds(16384) {
+            return self
+                .0
+                .render(&RenderFrame::from_precomposited(frame.render_cpu()?));
+        }
         self.0.render(frame)
     }
 

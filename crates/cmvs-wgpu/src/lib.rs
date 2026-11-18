@@ -309,13 +309,6 @@ impl Renderer {
         Ok(())
     }
     fn texture(&mut self, image: &RgbaImage) -> Result<Shared<Texture>> {
-        self.with_texture(image, Shared::clone)
-    }
-    fn with_texture<T>(
-        &mut self,
-        image: &RgbaImage,
-        use_texture: impl FnOnce(&Shared<Texture>) -> T,
-    ) -> Result<T> {
         let [w, h] = [image.width(), image.height()];
         if w > self.device.limits().max_texture_dimension_2d
             || h > self.device.limits().max_texture_dimension_2d
@@ -323,13 +316,13 @@ impl Renderer {
             return Err("GPU image exceeds device texture limits".into());
         }
         let key = match image.cache_key() {
-            CacheKey::Frame(id) => return Ok(use_texture(&self.frame_texture(id, image))),
+            CacheKey::Frame(id) => return Ok(self.frame_texture(id, image)),
             CacheKey::Content(digest, w, h) => (digest, w, h),
         };
         self.clock += 1;
         if let Some(cached) = self.cache.get_mut(&key) {
             cached.used = self.clock;
-            return Ok(use_texture(&cached.target));
+            return Ok(Shared::clone(&cached.target));
         }
         let bytes = image.pixels().len();
         while self.cache_bytes + bytes > CACHE_LIMIT {
@@ -356,7 +349,7 @@ impl Renderer {
             );
             self.cache_bytes += bytes;
         }
-        Ok(use_texture(&texture))
+        Ok(texture)
     }
     fn touch(&mut self, image: &RgbaImage) {
         let cached = match image.cache_key() {
@@ -428,6 +421,9 @@ impl Renderer {
     pub fn render(&mut self, frame: &RenderFrame<'_>) -> Result<GpuFrame> {
         if let Some(image) = frame.precomposited() {
             return self.render_precomposited(image);
+        }
+        if frame.cvns_source_exceeds(self.device.limits().max_texture_dimension_2d) {
+            return self.render_precomposited(&frame.render_cpu()?);
         }
         self.compose(frame.dimensions(), frame.clear_color(), frame.commands())
     }
@@ -510,7 +506,7 @@ impl Renderer {
         }
         // Pin every input until submission: an eviction or transient uncached upload
         // must remain alive until the command encoder is submitted.
-        let mut inputs = Vec::new();
+        let mut inputs = HashMap::new();
         for (index, draw) in resolved.into_iter().enumerate() {
             let mode = match draw.blend {
                 ShaderBlend::Replace => 0,
@@ -520,10 +516,16 @@ impl Renderer {
             let mut views = [dummy.view.clone(), dummy.view.clone(), dummy.view.clone()];
             for (view, image) in views.iter_mut().zip(draw.textures) {
                 if let Some(image) = image {
-                    *view = self.with_texture(image, |texture| {
-                        inputs.push(Shared::clone(texture));
-                        texture.view.clone()
-                    })?;
+                    let texture = match inputs.entry(image.cache_key()) {
+                        std::collections::hash_map::Entry::Occupied(entry) => {
+                            self.touch(image);
+                            entry.into_mut()
+                        }
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(self.texture(image)?)
+                        }
+                    };
+                    *view = texture.view.clone();
                 }
             }
             let offset = self.bindings.write(index, draw.used_params());
