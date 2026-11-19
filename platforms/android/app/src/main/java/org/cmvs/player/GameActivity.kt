@@ -3,17 +3,66 @@ package org.cmvs.player
 import android.app.AlertDialog
 import android.app.NativeActivity
 import android.content.Intent
+import android.text.InputFilter
 import android.text.InputType
+import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class GameActivity : NativeActivity() {
     private val cancelled = AtomicBoolean()
     private var choosingFont = false
+
+    private val commentResult = AtomicReference<Pair<Int, String>?>()
+    private var commentDialog: AlertDialog? = null
+
+    fun beginCommentInput(id: Int, initial: String, maxChars: Int) = runOnUiThread {
+        commentDialog?.dismiss()
+        fun answer(value: String) = commentResult.set(id to value)
+        if (isFinishing || isDestroyed) {
+            answer("")
+            return@runOnUiThread
+        }
+        val field = EditText(this)
+        field.setSingleLine(true)
+        field.contentDescription = "Save comment"
+        field.inputType = InputType.TYPE_CLASS_TEXT
+        field.imeOptions = EditorInfo.IME_ACTION_DONE
+        field.setText(initial)
+        field.filters = arrayOf(InputFilter.LengthFilter(maxChars))
+        field.selectAll()
+        val dialog = AlertDialog.Builder(this).setView(field)
+            .setNegativeButton(android.R.string.cancel) { _, _ -> answer("") }
+            .setOnCancelListener { answer("") }
+            .setPositiveButton(android.R.string.ok) { _, _ -> answer(" ${field.text}") }
+            .create()
+        field.setOnEditorActionListener { _, action, _ ->
+            if (action != EditorInfo.IME_ACTION_DONE) false else {
+                answer(" ${field.text}")
+                dialog.dismiss()
+                true
+            }
+        }
+        field.requestFocus()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        commentDialog = dialog
+        dialog.setOnDismissListener { if (commentDialog === dialog) commentDialog = null }
+        dialog.show()
+    }
+
+    // null means pending, empty means cancel, and an initial space marks an accepted draft.
+    fun takeCommentInput(id: Int): String? = commentResult.getAndSet(null)?.takeIf { it.first == id }?.second
+
+    fun dismissCommentInput() = runOnUiThread {
+        commentDialog?.dismiss()
+        commentResult.set(null)
+    }
 
     /** Called on the UI thread by the native platform backend via chooseFont()V. */
     fun chooseFont() {

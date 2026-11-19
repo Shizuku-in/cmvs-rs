@@ -1,12 +1,20 @@
 use cmvs_core::{
-    host::platform::DeviceFrameResult, host::platform::FontDialogResult,
-    host::platform::PlatformBackend, host::platform::PlatformRequest, render::raster::RgbaImage,
+    TextEncoding,
+    host::platform::DeviceFrameResult,
+    host::platform::FontDialogResult,
+    host::platform::PlatformBackend,
+    host::platform::PlatformRequest,
+    host::platform::{TextDialogRequest, TextDialogResult},
+    render::raster::RgbaImage,
 };
+use cmvs_host::CommentInput;
 use std::error::Error;
 
 pub struct BrowserBackend {
     pub size: [u32; 2],
     pub frame: Option<RgbaImage>,
+    pub comment_input: CommentInput,
+    encoding: TextEncoding,
     #[cfg(target_arch = "wasm32")]
     pub gpu: Option<crate::gpu::BrowserGpu>,
     fullscreen: bool,
@@ -23,10 +31,12 @@ impl BrowserBackend {
             render_mode: self.render,
         }
     }
-    pub fn new(size: [u32; 2]) -> Self {
+    fn new(size: [u32; 2], encoding: TextEncoding) -> Self {
         Self {
             size,
             frame: None,
+            comment_input: CommentInput::default(),
+            encoding,
             #[cfg(target_arch = "wasm32")]
             gpu: None,
             fullscreen: false,
@@ -38,8 +48,9 @@ impl BrowserBackend {
     pub fn with_preferences(
         size: [u32; 2],
         preferences: cmvs_core::host::settings::DisplayPreferences,
+        encoding: TextEncoding,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        let mut backend = Self::new(size);
+        let mut backend = Self::new(size, encoding);
         backend.fullscreen = preferences.fullscreen;
         backend.aspect = preferences.aspect_mode;
         backend.scaling = preferences.aspect_scaling;
@@ -102,6 +113,15 @@ impl PlatformBackend for BrowserBackend {
     }
     fn aspect_scaling(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.scaling)
+    }
+    fn poll_text_dialog(
+        &mut self,
+        request: &TextDialogRequest,
+    ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
+        self.comment_input.poll(request, self.encoding)
+    }
+    fn cancel_text_dialog(&mut self) {
+        self.comment_input.cancel();
     }
     fn poll_font_dialog(
         &mut self,

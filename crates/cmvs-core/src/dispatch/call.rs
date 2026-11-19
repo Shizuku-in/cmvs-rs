@@ -56,6 +56,9 @@ pub enum RuntimeOperation {
     CvnsColorPicker {
         swatches: [u32; 2],
     },
+    TextDialog {
+        arguments: [u32; 5],
+    },
     CvnsMessageDialog {
         arguments: Option<[u32; 3]>,
     },
@@ -69,7 +72,7 @@ pub struct RuntimeCall {
     arguments: u64,
     operation: RuntimeOperation,
     stack_len: usize,
-    values: [u32; 5],
+    values: [u32; 6],
 }
 
 impl RuntimeCall {
@@ -96,6 +99,9 @@ impl RuntimeCall {
             ));
         }
         Ok(())
+    }
+    pub(crate) fn error(&self, why: &'static str) -> DecodeError {
+        error(self.pc, self.opcode, why)
     }
     pub fn complete(&self, vm: &mut Machine, flags: u16) -> Result<Flow, DecodeError> {
         self.validate(vm)?;
@@ -214,11 +220,11 @@ impl<'a> Call<'a> {
         operation: RuntimeOperation,
         bytes: usize,
     ) -> Result<Flow, DecodeError> {
-        if bytes > 20 {
+        if bytes > 24 {
             return Err(self.error("runtime request exceeds its parameter capacity"));
         }
         self.require_arguments(bytes)?;
-        let mut values = [0; 5];
+        let mut values = [0; 6];
         for (i, value) in values.iter_mut().take(bytes / 4).enumerate() {
             *value = self
                 .vm

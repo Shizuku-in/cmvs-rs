@@ -54,6 +54,8 @@ CVNS 系统档占用 `save000.dat`，首个剧情槽使用 `save001.dat`。导�
 
 默认允许推定和未复核命令，缺失及空操作命令始终停止。命令状态见[引擎档案](../design/engine-profiles.md)，资源检查、trace 和探针见 [CLI 指南](cli.md)。
 
-## 系统对话框
+## 游戏内对话框
 
-存档评论编辑在 Windows 使用内置窗口、在 Linux 使用 Zenity、在 macOS 使用系统输入对话框。对话框打开时游戏暂停。macOS 构建与字体选择见 [Apple players](../../platforms/apple/README.md)及[字体后端](../backends/font-output.md)。
+存档评论、CVNS 退出确认和取色器共用游戏内面板。评论可在桌面直接输入，Web、移动端和主机可选择输入框后使用平台键盘。评论支持全角和半角字符，长度上限由游戏脚本决定。选「OK」提交，选「Cancel」保留原评论。对话框打开时脚本暂停。
+
+macOS 构建与系统字体选择见 [Apple players](../../platforms/apple/README.md)及[字体后端](../backends/font-output.md)。

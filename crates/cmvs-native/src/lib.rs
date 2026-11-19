@@ -7,7 +7,9 @@ use std::{fmt, path::PathBuf};
 #[cfg(target_os = "android")]
 mod android;
 #[cfg(target_os = "android")]
-pub use android::{AndroidWindow, show_font_picker};
+pub use android::{
+    AndroidWindow, begin_comment_input, dismiss_comment_input, show_font_picker, take_comment_input,
+};
 
 #[cfg(windows)]
 mod windows;
@@ -20,11 +22,6 @@ mod linux;
 #[cfg(any(target_os = "macos", test))]
 mod macos;
 // Compiled everywhere so reserved-platform services remain checked.
-#[cfg(all(test, not(target_os = "linux")))]
-#[path = "linux/text_dialog.rs"]
-mod linux_text_dialog_tests;
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
-mod text_dialog;
 #[cfg_attr(
     any(windows, target_os = "linux", target_os = "macos"),
     allow(dead_code)
@@ -59,17 +56,6 @@ impl std::error::Error for NativeError {}
 /// host can rasterize.
 pub fn choose_font(owner: RawWindowHandle, current: &str) -> Result<Option<String>, NativeError> {
     platform::choose_font(owner, current)
-}
-
-/// Modal comment editor. Text is Unicode at the OS boundary; None means cancel.
-pub fn edit_text(
-    owner: RawWindowHandle,
-    title: &str,
-    prompt: &str,
-    initial: &str,
-    max_chars: u32,
-) -> Result<Option<String>, NativeError> {
-    platform::edit_text(owner, title, prompt, initial, max_chars)
 }
 
 /// Directories holding the system's installed fonts, most general first.

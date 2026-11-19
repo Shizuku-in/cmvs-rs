@@ -1,6 +1,6 @@
 //! CVNS color dialog drawn in the logical game canvas.
 use super::dialog;
-use super::dialog::{FOCUS, INK, MUTED, Panel, Pointer, WIDTH, axes, confirmed};
+use super::dialog::{ACCEPT_BUTTON, CANCEL_BUTTON, INK, MUTED, Panel, Pointer, axes, confirmed};
 use crate::input::ActionInput;
 
 const TRACK_LEFT: usize = 48;
@@ -34,8 +34,8 @@ impl Control {
             Self::Blue => [TRACK_LEFT, 141, TRACK_WIDTH, 23],
             Self::First => [18, 184, 39, 32],
             Self::Second => [65, 184, 39, 32],
-            Self::Cancel => [204, 184, 86, 32],
-            Self::Accept => [302, 184, 80, 32],
+            Self::Cancel => CANCEL_BUTTON,
+            Self::Accept => ACCEPT_BUTTON,
         }
     }
 
@@ -132,13 +132,11 @@ impl ColorPicker {
 
     pub(super) fn render(&self) -> Panel {
         let mut panel = Panel::new();
-        panel.fill([0, 0, WIDTH, 3], FOCUS);
-        panel.text([18, 20], b"COLOR", INK);
+        panel.text([18, 18], b"COLOR", INK);
         panel.fill([245, 15, 30, 24], self.color);
         panel.outline([245, 15, 30, 24], MUTED);
         let [r, g, b] = self.color;
-        panel.text([290, 20], format!("#{r:02X}{g:02X}{b:02X}").as_bytes(), INK);
-        panel.fill([18, 50, 364, 1], [63, 78, 100]);
+        panel.text([290, 18], format!("#{r:02X}{g:02X}{b:02X}").as_bytes(), INK);
 
         for (channel, control) in Control::ALL[..3].iter().copied().enumerate() {
             let [x, y, w, h] = control.rect();

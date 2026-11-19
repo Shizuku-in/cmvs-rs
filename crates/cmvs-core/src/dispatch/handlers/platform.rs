@@ -1,5 +1,10 @@
 //! Window services, dialogs, and frame capture.
-use crate::dispatch::{Call, Flow, Hosts, RuntimeOperation};
+use crate::{
+    bytecode::DecodeError,
+    dispatch::{Call, Flow, Hosts, RuntimeOperation},
+    machine::Machine,
+    platform::{TextDialogRequest, TextDialogResult},
+};
 use std::error::Error;
 
 pub(in super::super) fn root_platform(
@@ -15,106 +20,139 @@ pub(in super::super) fn root_platform(
     ))
 }
 
-/// Old 0x213c returns a full-width comment and a confirmation result.
+/// 0x213c returns a comment and a confirmation result.
 pub(in super::super) fn variant_text_dialog(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_>,
 ) -> Result<Flow, Box<dyn Error + Send + Sync>> {
-    use crate::platform::{TextDialogRequest, TextDialogResult};
-    let title_raw = call.argument(4, "text dialog string")?;
-    let prompt_raw = call.argument(8, "text dialog string")?;
-    let initial_raw = call.argument(12, "text dialog string")?;
-    let max_bytes = call.argument(16, "text dialog character limit")?;
-    let output = call.argument(20, "text dialog output")?;
+    let arguments = [
+        call.argument(4, "text dialog title")?,
+        call.argument(8, "text dialog prompt")?,
+        call.argument(12, "text dialog initial text")?,
+        call.argument(16, "text dialog byte limit")?,
+        call.argument(20, "text dialog output")?,
+    ];
     // The inspected old helper ignores this sixth flag after the wrapper normalizes it.
     call.argument(24, "text dialog flag")?;
-    let crate::vm::StringRef::StringBank(index) = crate::vm::StringRef::decode(output) else {
-        return Err(call
-            .error("text dialog output requires a writable string slot")
-            .into());
-    };
-    let title = call.vm.resolve_string(title_raw)?;
-    let prompt = call.vm.resolve_string(prompt_raw)?;
-    let initial = match call.vm.resolve_string(initial_raw) {
-        Ok(bytes) => bytes,
-        Err(_)
-            if matches!(
-                crate::vm::StringRef::decode(initial_raw),
-                crate::vm::StringRef::Frame(offset) if offset >= 0x3fff_0000
-            ) =>
-        {
-            // Negative 0x121 bank indices (e.g. akifd's `16 + (g[84] - 80)` for comment-edit
-            // buttons 35..49) wrap via `| 0x8000_0000` into ~1 GiB Frame offsets; Win32's
-            // SEH inside `lstrcpyA` swallows the fault cleanly and leaves initial text empty.
-            Vec::new()
-        }
-        Err(err) => return Err(err.into()),
-    };
-    let limit = call.vm.state().string_slots();
-    let index = if index >= limit { 0 } else { index };
-    let request = TextDialogRequest {
-        title,
-        prompt,
-        initial,
-        max_bytes,
-    };
-    if request.title.len() >= 144 || request.prompt.len() >= 256 || request.initial.len() >= 256 {
-        return Err(call
-            .error("text dialog strings exceed native capacity")
-            .into());
+    if hosts.in_game_text_dialogs {
+        return Ok(call.defer(RuntimeOperation::TextDialog { arguments }, 24)?);
     }
+    let dialog = VmTextDialog::new(call.vm, arguments, |why| call.error(why))?;
     let answer = hosts
         .device_frame
         .as_deref_mut()
         .expect("text dialog backend checked")
-        .poll_text_dialog(&request)?;
-    let (accepted, text) = match answer {
+        .poll_text_dialog(&dialog.request)?;
+    let text = match answer {
         TextDialogResult::Pending => return Ok(Flow::Wait),
-        TextDialogResult::Cancelled => (false, request.initial.clone()),
-        TextDialogResult::Accepted(text) => (true, text),
+        TextDialogResult::Cancelled => None,
+        TextDialogResult::Accepted(text) => Some(text),
     };
-    if text.len() >= 256 || text.contains(&0) {
-        return Err(call
-            .error("text dialog result exceeds native capacity")
-            .into());
-    }
-    // 0x403b10 keeps only encoded double-byte characters before the empty fallback.
-    let text = if accepted {
-        let mut full_width = Vec::new();
-        let mut i = 0;
-        while i < text.len() {
-            if let Some(len) = call.vm.text_encoding().wide_len(text[i]) {
-                let pair = text.get(i..i + len).ok_or_else(|| {
-                    call.error("text dialog has a truncated double-byte character")
-                })?;
-                full_width.extend_from_slice(pair);
-                i += len;
-            } else {
-                i += 1;
-            }
-        }
-        if full_width.is_empty() {
-            request.initial.clone()
-        } else {
-            full_width
-        }
-    } else {
-        text
-    };
-    // Validate the write before consuming arguments or committing any VM state.
-    let mut next = call.vm.state().clone();
-    next.set_string(index, &text)
-        .map_err(|why| call.error(why))?;
+    let result = dialog.result(call.vm, text, true, |why| call.error(why))?;
     call.complete(0x4018)?;
-    call.vm
-        .state_mut()
-        .set_string(index, &text)
-        .expect("validated string slot");
-    call.vm
-        .state_mut()
-        .set_system_integer(0, u32::from(accepted))
-        .expect("slot zero exists");
+    dialog.store(call.vm, result);
     Ok(Flow::Done)
+}
+
+pub(crate) struct VmTextDialog {
+    pub request: TextDialogRequest,
+    index: u32,
+}
+
+impl VmTextDialog {
+    pub fn new(
+        vm: &Machine,
+        [title_raw, prompt_raw, initial_raw, max_bytes, output]: [u32; 5],
+        error: impl Fn(&'static str) -> DecodeError,
+    ) -> Result<Self, DecodeError> {
+        let crate::vm::StringRef::StringBank(index) = crate::vm::StringRef::decode(output) else {
+            return Err(error("text dialog output requires a writable string slot"));
+        };
+        let title = vm.resolve_string(title_raw)?;
+        let prompt = vm.resolve_string(prompt_raw)?;
+        let initial = match vm.resolve_string(initial_raw) {
+            Ok(bytes) => bytes,
+            Err(_)
+                if matches!(
+                    crate::vm::StringRef::decode(initial_raw),
+                    crate::vm::StringRef::Frame(offset) if offset >= 0x3fff_0000
+                ) =>
+            {
+                // Negative string-bank indices can wrap into a large frame offset.
+                // The original lstrcpyA swallows the fault and leaves the field empty.
+                Vec::new()
+            }
+            Err(err) => return Err(err),
+        };
+        let index = if index >= vm.state().string_slots() {
+            0
+        } else {
+            index
+        };
+        if title.len() >= 144 || prompt.len() >= 256 || initial.len() >= 256 {
+            return Err(error("text dialog strings exceed native capacity"));
+        }
+        Ok(Self {
+            request: TextDialogRequest {
+                title,
+                prompt,
+                initial,
+                max_bytes,
+            },
+            index,
+        })
+    }
+
+    pub fn result(
+        &self,
+        vm: &Machine,
+        text: Option<Vec<u8>>,
+        legacy_full_width_only: bool,
+        error: impl Fn(&'static str) -> DecodeError,
+    ) -> Result<(bool, Vec<u8>), DecodeError> {
+        let accepted = text.is_some();
+        let text = if let Some(bytes) = text {
+            if bytes.len() >= 256 || bytes.contains(&0) {
+                return Err(error("text dialog result exceeds native capacity"));
+            }
+            let mut comment = Vec::with_capacity(bytes.len());
+            let mut rest = bytes.as_slice();
+            while let Some(&byte) = rest.first() {
+                let wide = vm.text_encoding().wide_len(byte);
+                let (sequence, tail) = rest
+                    .split_at_checked(wide.unwrap_or(1))
+                    .ok_or_else(|| error("text dialog has a truncated double-byte character"))?;
+                // The original host strips single-byte characters before the empty fallback.
+                if !legacy_full_width_only || wide.is_some() {
+                    comment.extend_from_slice(sequence);
+                }
+                rest = tail;
+            }
+            if comment.is_empty() {
+                self.request.initial.clone()
+            } else {
+                comment
+            }
+        } else {
+            self.request.initial.clone()
+        };
+        if text.contains(&0) {
+            return Err(error("text dialog result exceeds native capacity"));
+        }
+        // Validate the write before consuming the arguments or changing VM state.
+        let mut next = vm.state().clone();
+        next.set_string(self.index, &text).map_err(error)?;
+        Ok((accepted, text))
+    }
+
+    pub fn store(&self, vm: &mut Machine, (accepted, text): (bool, Vec<u8>)) {
+        vm.state_mut()
+            .set_string(self.index, &text)
+            .expect("validated string slot");
+        vm.state_mut()
+            .set_system_integer(0, u32::from(accepted))
+            .expect("slot zero exists");
+    }
 }
 
 /// CVNS 0x21b0 (0x4652a0 -> exit confirmation dialog) and 0x21b1 (0x4652f0 -> MessageBoxA).

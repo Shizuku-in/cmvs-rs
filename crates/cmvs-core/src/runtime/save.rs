@@ -969,7 +969,7 @@ impl Runtime {
             self.write_slot(LOAD_BACKUP_SLOT, true)?;
         }
         self.machine.install_restore(vm);
-        self.clear_dialog();
+        self.discard_dialog(backend);
         self.history = history;
         self.sequence = Default::default();
         self.camera = Default::default();
@@ -1196,6 +1196,7 @@ impl Runtime {
             .restored_title(&snapshot.scene_title, self.machine.text_encoding())?;
         self.machine.install_restore(vm);
         // Commit the hosts.
+        self.discard_dialog(backend);
         self.history = history;
         self.sequence = sequence;
         self.camera = camera_host;

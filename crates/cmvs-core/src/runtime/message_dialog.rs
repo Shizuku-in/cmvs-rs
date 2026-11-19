@@ -1,9 +1,11 @@
 //! CVNS exit confirmation and script-supplied alerts.
-use super::dialog::{self, Answer, FOCUS, INK, Panel, Pointer, Update, WIDTH};
+use super::dialog::{
+    self, ACCEPT_BUTTON, Answer, CANCEL_BUTTON, INK, Panel, Pointer, Update, draw_line, wrap_text,
+};
 use crate::{
     TextEncoding,
     input::ActionInput,
-    message::{GlyphRasterizer, RecordedGlyph},
+    message::GlyphRasterizer,
     platform::{MessageDialogKind, MessageDialogRequest},
 };
 
@@ -22,8 +24,8 @@ enum Button {
 impl Button {
     fn rect(self) -> [usize; 4] {
         match self {
-            Self::Cancel => [188, 184, 92, 32],
-            Self::Accept => [292, 184, 90, 32],
+            Self::Cancel => CANCEL_BUTTON,
+            Self::Accept => ACCEPT_BUTTON,
             Self::Up => [353, 59, 29, 32],
             Self::Down => [353, 133, 29, 32],
         }
@@ -51,7 +53,7 @@ impl MessageDialog {
         } else {
             (request.caption.as_slice(), request.text.as_slice())
         };
-        let mut caption = wrap(caption, encoding, if has_font { 360 } else { TEXT_WIDTH });
+        let mut caption = wrap_text(caption, encoding, if has_font { 360 } else { TEXT_WIDTH });
         if caption.len() > 1 {
             // Keep the title bar to one line.
             let end = caption[0].len().saturating_sub(3);
@@ -61,7 +63,7 @@ impl MessageDialog {
         Self {
             kind: request.kind,
             caption: caption.swap_remove(0),
-            lines: wrap(text, encoding, TEXT_WIDTH),
+            lines: wrap_text(text, encoding, TEXT_WIDTH),
             top: 0,
             focus: if request.kind == MessageDialogKind::Confirm {
                 Button::Cancel
@@ -132,9 +134,7 @@ impl MessageDialog {
         mut font: Option<&mut (dyn GlyphRasterizer + Send + 'static)>,
     ) -> Panel {
         let mut panel = Panel::new();
-        panel.fill([0, 0, WIDTH, 3], FOCUS);
-        panel.fill([18, 48, 364, 1], [63, 78, 100]);
-        draw_line(&mut panel, &mut font, 14, &self.caption, INK);
+        draw_line(&mut panel, &mut font, [TEXT_LEFT, 14], &self.caption, INK);
         let body_y = 56 + LINES_VISIBLE.saturating_sub(self.lines.len()) * 23 / 2;
         for (line, glyphs) in self
             .lines
@@ -143,7 +143,13 @@ impl MessageDialog {
             .take(LINES_VISIBLE)
             .enumerate()
         {
-            draw_line(&mut panel, &mut font, body_y + line * 23, glyphs, INK);
+            draw_line(
+                &mut panel,
+                &mut font,
+                [TEXT_LEFT, body_y + line * 23],
+                glyphs,
+                INK,
+            );
         }
         if self.top > 0 {
             panel.button(Button::Up.rect(), b"^", false);
@@ -161,103 +167,5 @@ impl MessageDialog {
         );
         panel.focus(self.focus.rect());
         panel
-    }
-}
-
-fn advance(code: u16) -> usize {
-    if code <= 0x7f { 12 } else { 20 }
-}
-
-fn wrap(bytes: &[u8], encoding: TextEncoding, width: usize) -> Vec<Vec<u16>> {
-    let mut lines = Vec::new();
-    let mut line = Vec::new();
-    let mut x = 0;
-    let mut bytes = bytes.iter().copied().peekable();
-    while let Some(byte) = bytes.next() {
-        if byte == b'\r' && bytes.peek() == Some(&b'\n') {
-            continue;
-        }
-        if matches!(byte, b'\r' | b'\n') {
-            lines.push(std::mem::take(&mut line));
-            x = 0;
-            continue;
-        }
-        let code = if let Some(len) = encoding.wide_len(byte) {
-            let mut sequence = [byte; 4];
-            let mut available = 1;
-            for b in &mut sequence[1..len] {
-                let Some(next) = bytes.next_if(|&next| !matches!(next, b'\r' | b'\n')) else {
-                    break;
-                };
-                *b = next;
-                available += 1;
-            }
-            if available == len {
-                encoding
-                    .wide_code(&sequence[..len])
-                    .unwrap_or(u16::from(b'?'))
-            } else {
-                u16::from(b'?')
-            }
-        } else if !byte.is_ascii() {
-            u16::from_be_bytes([0xff, byte])
-        } else if byte.is_ascii_control() {
-            u16::from(b' ')
-        } else {
-            u16::from(byte)
-        };
-        let advance = advance(code);
-        if x + advance > width {
-            lines.push(std::mem::take(&mut line));
-            x = 0;
-        }
-        line.push(code);
-        x += advance;
-    }
-    lines.push(line);
-    lines
-}
-
-fn draw_line(
-    panel: &mut Panel,
-    font: &mut Option<&mut (dyn GlyphRasterizer + Send + 'static)>,
-    y: usize,
-    codes: &[u16],
-    ink: [u8; 3],
-) {
-    const SIZE: u32 = 20;
-    let [r, g, b] = ink;
-    let mut glyph = RecordedGlyph {
-        snapshot_indices: None,
-        face: std::sync::Arc::from(crate::settings::DEFAULT_FONT_FACE),
-        bold: false,
-        revision_alpha: false,
-        code: 0,
-        position: [0, 0],
-        size: SIZE,
-        colors: [u32::from_be_bytes([0, r, g, b]); 2],
-        gradient: 0,
-        outline: [0; 2],
-        delay_ms: 0,
-        elapsed_ms: 0,
-        duration_ms: 0,
-        active: false,
-        shown: true,
-        opacity: 255,
-        reveal_mode: 0,
-        reveal_width: SIZE + 4,
-    };
-    let mut x = TEXT_LEFT;
-    for &code in codes {
-        glyph.code = code;
-        if let Some(image) = font
-            .as_deref_mut()
-            .and_then(|font| font.rasterize_glyph(&glyph).ok())
-        {
-            panel.blit_glyph([x - 2, y], &image);
-        } else {
-            panel.text([x, y + 4], &[u8::try_from(code).unwrap_or(b'?')], ink);
-        }
-        x += advance(code);
     }
 }

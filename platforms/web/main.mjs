@@ -1,7 +1,7 @@
 import { AudioDevice } from './audio-device.mjs';
 const $ = id => document.getElementById(id);
 let canvas = $('canvas'), context, logicalSize = [canvas.width, canvas.height];
-let worker, timer, saveKey, audio, audioTimer, launch=0;
+let worker, timer, saveKey, audio, audioTimer, commentInput, commentObserver, launch=0;
 const physical = new Map();
 const keyCodes = {Backspace:20,Tab:21,Enter:22,NumpadEnter:22,ShiftLeft:23,ShiftRight:23,ControlLeft:24,ControlRight:24,Escape:25,Space:26,PageUp:27,PageDown:28,End:29,Home:30,Insert:31,Delete:32,ArrowUp:33,ArrowDown:34,ArrowLeft:35,ArrowRight:36,NumpadMultiply:47,NumpadAdd:48,NumpadSubtract:49,NumpadDecimal:50,NumpadDivide:51,Semicolon:112,Equal:113,Comma:114,Minus:115,Period:116,Slash:117,Backquote:118,BracketLeft:119,Backslash:120,BracketRight:121,Quote:122};
 for (let i=0;i<10;i++) { keyCodes['Numpad'+i]=37+i; keyCodes['Digit'+i]=76+i; }
@@ -11,6 +11,7 @@ function send(message, transfer = []) { worker?.postMessage(message, transfer); 
 function status(text) { $('status').textContent = text; }
 function stop(text) {
   launch++;
+  closeComment();
   clearTimeout(timer); clearInterval(audioTimer);
   if(audio) {void audio.close(); audio=undefined;}
   worker?.terminate(); worker = undefined; physical.clear();
@@ -58,7 +59,8 @@ $('setup').onsubmit = async event => {
     } else if (data.type === 'frame') {
       canvas.style.imageRendering = data.renderMode === 1 ? 'auto' : 'pixelated';
       if(data.pixels) context.putImageData(new ImageData(new Uint8ClampedArray(data.pixels.buffer),data.width,data.height),0,0);
-    } else if (data.type === 'next') timer = setTimeout(() => send({type:'tick'}),data.delay);
+    } else if (data.type === 'comment-input') editComment(data.id, data.initial, data.rect, data.maxChars);
+    else if (data.type === 'next') timer = setTimeout(() => send({type:'tick'}),data.delay);
     else if (data.type === 'stopped') stop('已停止，存档和设置已保存。');
     else if (data.type === 'quit') stop('游戏已退出，存档已保存。');
     else if (data.type === 'export') {
@@ -83,6 +85,58 @@ function point(event) {
   const bounds = canvas.getBoundingClientRect();
   return [Math.floor((event.clientX-bounds.left)*logicalSize[0]/bounds.width),Math.floor((event.clientY-bounds.top)*logicalSize[1]/bounds.height)];
 }
+function closeComment() {
+  if (!commentInput) return;
+  const input = commentInput;
+  commentInput = undefined;
+  commentObserver.disconnect();
+  input.remove();
+}
+function editComment(id, initial, [x,y,w,h], maxChars) {
+  closeComment();
+  const input = document.createElement('input');
+  input.id = 'comment-input';
+  input.type = 'text';
+  input.maxLength = maxChars;
+  input.autocomplete = 'off';
+  input.setAttribute('aria-label', 'Save comment');
+  input.enterKeyHint = 'done';
+  input.value = initial;
+  commentInput = input;
+  const stage = $('stage');
+  commentObserver = new ResizeObserver(position);
+  commentObserver.observe(canvas);
+  commentObserver.observe(stage);
+  function position() {
+    if (commentInput !== input) return;
+    const bounds = canvas.getBoundingClientRect(), container = stage.getBoundingClientRect();
+    const sx = bounds.width/logicalSize[0], sy = bounds.height/logicalSize[1];
+    const width = Math.min(bounds.width, Math.max(120, w*sx)), height = Math.max(28, h*sy);
+    Object.assign(input.style, {
+      left:`${bounds.left-container.left-stage.clientLeft+(x+w/2)*sx-width/2}px`,
+      top:`${bounds.top-container.top-stage.clientTop+(y+h/2)*sy-height/2}px`,
+      width:`${width}px`, height:`${height}px`, fontSize:`${Math.max(16, 20*sy)}px`,
+    });
+  }
+  function finish(accept) {
+    if (commentInput !== input) return;
+    send({type:'comment-input',id,text:accept?input.value:null});
+    closeComment();
+    canvas.focus({preventScroll:true});
+  }
+  input.onkeydown = event => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Enter' || event.key === 'Escape') {
+      event.preventDefault();
+      if (!event.repeat) finish(event.key === 'Enter');
+    }
+  };
+  input.onblur = () => { if (document.hasFocus()) finish(true); };
+  stage.append(input);
+  position();
+  input.focus({preventScroll:true});
+  input.select();
+}
 function bindCanvas() {
   canvas.oncontextmenu = event => event.preventDefault();
   canvas.onpointermove = event => send({type:'input',pointer:point(event)});
@@ -97,9 +151,16 @@ function bindCanvas() {
   canvas.onkeydown = event => {
     const key = keyCodes[event.code]; if (!key) return;
     event.preventDefault();
-    if (!physical.has(event.code)) { physical.set(event.code,key); send({type:'input',key,down:true,pulse:key}); }
+    if (event.repeat || physical.has(event.code)) return;
+    physical.set(event.code,key);
+    send({type:'input',key,down:true,pulse:key});
   };
-  canvas.onblur = () => {physical.clear();send({type:'input',focused:false});};
+  canvas.onblur = () => {
+    if (commentInput) {
+      for (const key of new Set(physical.values())) send({type:'input',key,down:false});
+    } else send({type:'input',focused:false});
+    physical.clear();
+  };
   canvas.onfocus = () => send({type:'input',focused:true});
 }
 bindCanvas();
@@ -108,4 +169,4 @@ window.addEventListener('keyup',event => {
   if (key && ![...physical.values()].includes(key)) send({type:'input',key,down:false});
 });
 window.addEventListener('blur',() => {physical.clear();send({type:'input',focused:false});});
-window.addEventListener('focus',() => send({type:'input',focused:document.activeElement===canvas}));
+window.addEventListener('focus',() => send({type:'input',focused:document.activeElement===canvas || Boolean(commentInput)}));

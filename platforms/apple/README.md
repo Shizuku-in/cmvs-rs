@@ -37,9 +37,9 @@ These use the same player and presentation path as the document picker.
 The host C API is in `crates/cmvs-host/cmvs_host.h`. Calls on a handle are
 serialized by its owner. The host must respect cooperative budget slices:
 only completed VM frames advance the serial and expose new RGBA pixels. Native
-audio owns its device callback. The host does not implement desktop window
-management, a font picker or a save-comment editor. Font selection is cancelled;
-unsupported platform requests report errors. CMV decoding is shared with core;
+audio owns its device callback. The iOS player opens a UIKit text field and
+keyboard from the in-game save-comment editor. Font selection is cancelled;
+unsupported window requests report errors. CMV decoding is shared with core;
 MGV/Theora movies decode through `cmvs-video` on a prefetching worker thread.
 
 ## Validation, 2026-11-06

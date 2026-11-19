@@ -26,7 +26,35 @@ pub struct WebRuntime {
     backend: BrowserBackend,
 }
 #[wasm_bindgen]
+pub struct WebCommentInput {
+    pub id: u32,
+    #[wasm_bindgen(getter_with_clone)]
+    pub initial: String,
+    pub max_chars: u32,
+}
+
+#[wasm_bindgen]
 impl WebRuntime {
+    pub fn take_comment_input(&mut self) -> Option<WebCommentInput> {
+        let request = self.backend.comment_input.take_request()?;
+        Some(WebCommentInput {
+            id: request.id,
+            initial: request.initial,
+            max_chars: request.max_chars,
+        })
+    }
+
+    pub fn comment_input_rect(&self) -> Vec<i32> {
+        self.session
+            .runtime
+            .keyboard_comment_rect()
+            .map_or_else(Vec::new, |rect| rect.map(|value| value as i32).to_vec())
+    }
+
+    pub fn submit_comment_input(&mut self, id: u32, text: Option<String>) {
+        self.backend.comment_input.submit(id, text);
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub async fn enable_gpu(&mut self, canvas: web_sys::OffscreenCanvas) -> Result<(), JsValue> {
         if self.backend.gpu.is_some() {
@@ -261,6 +289,7 @@ impl WebRuntime {
         let backend = BrowserBackend::with_preferences(
             session.runtime.screen_size(),
             session.runtime.display_preferences(),
+            session.runtime.machine().text_encoding(),
         )?;
         Ok(Self { session, backend })
     }

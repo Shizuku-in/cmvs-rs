@@ -30,6 +30,11 @@ void cmvs_host_destroy(CmvsHost *);
 /* Tick: -1 error, 0 cooperative slice, 1 complete frame, 2 quit, 3 inactive.
  * When a slice returns 0, its delta_ms is retained; continuation deltas are ignored. */
 int32_t cmvs_host_tick(CmvsHost *, uint32_t delta_ms);
+/* Take a keyboard request into a UTF-8 buffer of at least 1024 bytes.
+ * Returns the character limit for a new request, 0 when idle, or -1 on error.
+ * Submit the request ID with the edited text, or NULL on cancel. */
+int32_t cmvs_host_take_comment_input(CmvsHost *, uint32_t *id, char *initial, uint32_t capacity);
+int32_t cmvs_host_submit_comment_input(CmvsHost *, uint32_t id, const char *text);
 /* CMVS codes: 1 left, 3 right, 4/5 wheel, 22 enter, 24 control, 25 escape,
  * 26 space, 33..36 arrows, 52..63 F1..F12. Pulses survive until a VM frame. */
 int32_t cmvs_host_key(CmvsHost *, uint32_t code, int32_t pressed);

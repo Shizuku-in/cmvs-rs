@@ -231,33 +231,8 @@ impl PlatformBackend for NativeBackend<'_> {
     ) -> Result<cmvs_core::host::platform::MessageDialogResult, Box<dyn Error + Send + Sync>> {
         Ok(cmvs_core::host::platform::MessageDialogResult::Accepted)
     }
-    fn poll_text_dialog(
-        &mut self,
-        request: &cmvs_core::host::platform::TextDialogRequest,
-    ) -> Result<cmvs_core::host::platform::TextDialogResult, Box<dyn Error + Send + Sync>> {
-        use winit::raw_window_handle::HasWindowHandle;
-        let owner = self.window.window_handle()?.as_raw();
-        let title = text_codec::decode(self.encoding, &request.title)?;
-        let prompt = text_codec::decode(self.encoding, &request.prompt)?;
-        let initial = text_codec::decode(self.encoding, &request.initial)?;
-        Ok(
-            match cmvs_native::edit_text(
-                owner,
-                &title,
-                &prompt,
-                &initial,
-                if request.max_bytes == 0 {
-                    127
-                } else {
-                    request.max_bytes.min(255) / 2
-                },
-            )? {
-                Some(text) => cmvs_core::host::platform::TextDialogResult::Accepted(
-                    text_codec::encode(self.encoding, &text)?,
-                ),
-                None => cmvs_core::host::platform::TextDialogResult::Cancelled,
-            },
-        )
+    fn inline_comment_input(&self) -> bool {
+        true
     }
     fn choose_font(
         &mut self,

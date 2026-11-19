@@ -172,6 +172,56 @@ fn tick_code(outcome: TickOutcome) -> i32 {
     }
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn cmvs_host_take_comment_input(
+    handle: *mut Handle,
+    id: *mut u32,
+    initial: *mut c_char,
+    capacity: u32,
+) -> i32 {
+    if id.is_null() || initial.is_null() || capacity < 1024 {
+        return -1;
+    }
+    unsafe { handle.as_mut() }.map_or(-1, |h| {
+        h.run(false, |player| {
+            let Some(request) = player.take_comment_input() else {
+                return Ok(0);
+            };
+            let text = CString::new(request.initial)?;
+            let bytes = text.as_bytes_with_nul();
+            if bytes.len() > capacity as usize {
+                player.submit_comment_input(request.id, None);
+                return Err("comment input buffer is too small".into());
+            }
+            // SAFETY: the caller provides capacity writable bytes and the source is owned here.
+            unsafe {
+                *id = request.id;
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), initial.cast(), bytes.len());
+            }
+            Ok(request.max_chars as i32)
+        })
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cmvs_host_submit_comment_input(
+    handle: *mut Handle,
+    id: u32,
+    text: *const c_char,
+) -> i32 {
+    unsafe { handle.as_mut() }.map_or(-1, |h| {
+        h.run(false, |player| {
+            let text = if text.is_null() {
+                None
+            } else {
+                Some(unsafe { CStr::from_ptr(text) }.to_str()?.to_owned())
+            };
+            player.submit_comment_input(id, text);
+            Ok(0)
+        })
+    })
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_key(handle: *mut Handle, code: u32, pressed: i32) -> i32 {
     unsafe { handle.as_mut() }.map_or(-1, |h| {
         h.run(false, |p| {

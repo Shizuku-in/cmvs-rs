@@ -11,6 +11,7 @@ description = "CMVS desktop window, native input adapter and application entry p
 workspace = true
 
 [dependencies]
+arboard = { version = "=3.7.0", default-features = false, features = ["wayland-data-control"] }
 cmvs-wgpu = { path = "../cmvs-wgpu", optional = true }
 cmvs-core = { path = "../cmvs-core" }
 cmvs-host = { path = "../cmvs-host", default-features = false, features = ["std-fs"] }

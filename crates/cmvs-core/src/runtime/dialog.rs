@@ -1,10 +1,16 @@
-//! Shared canvas and VM suspension for CVNS dialogs.
-use super::{Runtime, color_picker::ColorPicker, message_dialog::MessageDialog};
+//! Shared canvas and VM suspension for script dialogs.
+use super::{
+    Runtime,
+    color_picker::ColorPicker,
+    message_dialog::MessageDialog,
+    text_dialog::{CommentEdit, TextDialog},
+};
 use crate::{
-    FormatError,
+    FormatError, TextEncoding,
     dispatch::{RuntimeCall, store_color_result},
     input::ActionInput,
-    message::GlyphRasterizer,
+    message::{GlyphRasterizer, RecordedGlyph},
+    platform::PlatformBackend,
     raster::RgbaImage,
     scene::ObjectImage,
 };
@@ -15,9 +21,13 @@ pub(super) const INK: [u8; 3] = [238, 242, 249];
 pub(super) const MUTED: [u8; 3] = [163, 178, 199];
 pub(super) const FOCUS: [u8; 3] = [127, 187, 255];
 
+pub(super) const CANCEL_BUTTON: [usize; 4] = [188, 184, 92, 32];
+pub(super) const ACCEPT_BUTTON: [usize; 4] = [292, 184, 90, 32];
+
 pub(super) enum Content {
     Color(ColorPicker),
     Message(MessageDialog),
+    Text(Box<TextDialog>),
 }
 
 pub(super) enum Update {
@@ -35,6 +45,7 @@ impl Update {
 pub(super) enum Answer {
     Color(Option<u32>),
     Message(bool),
+    Text(Option<Vec<u8>>),
 }
 
 pub(super) struct Dialog {
@@ -51,6 +62,7 @@ impl Dialog {
         let panel = match &self.content {
             Content::Color(picker) => picker.render(),
             Content::Message(message) => message.render(font),
+            Content::Text(text) => text.render(font),
         };
         Ok(ObjectImage {
             pixels: RgbaImage::new(WIDTH as u32, HEIGHT as u32, panel.0)?,
@@ -72,6 +84,7 @@ impl Runtime {
     pub fn enable_in_game_dialogs(&mut self, font: Option<Box<dyn GlyphRasterizer + Send>>) {
         self.enable_in_game_color_picker();
         self.in_game_message_dialogs = true;
+        self.in_game_text_dialogs = true;
         self.dialog_font = font;
     }
 
@@ -79,6 +92,7 @@ impl Runtime {
         &mut self,
         request: RuntimeCall,
         content: Content,
+        backend: &impl PlatformBackend,
     ) -> Result<(), FormatError> {
         let [sw, sh] = self.screen_size().map(i64::from);
         let mut w = sw.min(WIDTH as i64);
@@ -95,6 +109,17 @@ impl Runtime {
             rect,
         };
         let image = dialog.image(self.dialog_font.as_deref_mut())?;
+        if let Some(movie) = self.movies.player_image() {
+            let pixels = crate::raster::movie_canvas(
+                movie,
+                self.screen_size(),
+                backend.render_mode().unwrap_or(0) == 1,
+            )?;
+            self.scene.modal_movie = Some(ObjectImage {
+                pixels,
+                ..image.clone()
+            });
+        }
         self.scene.modal_panel = Some((rect, image));
         self.dialog = Some(dialog);
         clear_edges(&mut self.input);
@@ -102,11 +127,47 @@ impl Runtime {
         Ok(())
     }
 
-    pub(super) fn advance_dialog(&mut self) -> Result<(), super::RuntimeError> {
+    /// Logical canvas rectangle of the focused inline comment field.
+    pub fn inline_comment_rect(&self) -> Option<[i64; 4]> {
+        let dialog = self.dialog.as_ref()?;
+        match &dialog.content {
+            Content::Text(text) if text.inline_focused() => Some(text.field_rect(dialog.rect)),
+            _ => None,
+        }
+    }
+
+    /// Logical canvas rectangle of the field awaiting a platform keyboard.
+    pub fn keyboard_comment_rect(&self) -> Option<[i64; 4]> {
+        let dialog = self.dialog.as_ref()?;
+        match &dialog.content {
+            Content::Text(text) if text.waiting_for_keyboard() => {
+                Some(text.field_rect(dialog.rect))
+            }
+            _ => None,
+        }
+    }
+
+    /// Deliver a keyboard or IME edit to the open comment field.
+    pub fn edit_comment(&mut self, edit: CommentEdit) -> bool {
+        if let Some(Dialog {
+            content: Content::Text(text),
+            ..
+        }) = &mut self.dialog
+        {
+            return text.edit(edit);
+        }
+        false
+    }
+
+    pub(super) fn advance_dialog(
+        &mut self,
+        backend: &mut impl PlatformBackend,
+    ) -> Result<(), super::RuntimeError> {
         let dialog = self.dialog.as_mut().expect("open dialog");
         let update = match &mut dialog.content {
             Content::Color(picker) => picker.update(&mut self.input, dialog.rect),
             Content::Message(message) => message.update(&mut self.input, dialog.rect),
+            Content::Text(text) => text.update(&mut self.input, dialog.rect, backend),
         };
         match update {
             Update::Close(result) => {
@@ -114,6 +175,17 @@ impl Runtime {
                     Answer::Color(color) => {
                         dialog.request.complete(&mut self.machine, 0x4008)?;
                         store_color_result(self.machine.state_mut(), color);
+                    }
+                    Answer::Text(answer) => {
+                        let Content::Text(text) = &dialog.content else {
+                            unreachable!()
+                        };
+                        let binding = &text.binding;
+                        let result = binding.result(&self.machine, answer, false, |why| {
+                            dialog.request.error(why)
+                        })?;
+                        dialog.request.complete(&mut self.machine, 0x4018)?;
+                        binding.store(&mut self.machine, result);
                     }
                     Answer::Message(accepted) => {
                         let flags = if dialog.request.command() == 0x5b0 {
@@ -144,6 +216,17 @@ impl Runtime {
     pub(super) fn clear_dialog(&mut self) {
         self.dialog = None;
         self.scene.modal_panel = None;
+        self.scene.modal_movie = None;
+    }
+
+    pub(super) fn discard_dialog(&mut self, backend: &mut impl PlatformBackend) {
+        if self.keyboard_comment_rect().is_some() {
+            backend.cancel_text_dialog();
+        }
+        if self.dialog.is_some() {
+            self.clear_dialog();
+            clear_edges(&mut self.input);
+        }
     }
 }
 
@@ -223,7 +306,10 @@ impl<T: Copy + PartialEq> Pointer<T> {
 pub(super) struct Panel(Vec<u8>);
 impl Panel {
     pub(super) fn new() -> Self {
-        Self([23, 32, 48, 255].repeat(WIDTH * HEIGHT))
+        let mut panel = Self([23, 32, 48, 255].repeat(WIDTH * HEIGHT));
+        panel.fill([0, 0, WIDTH, 3], FOCUS);
+        panel.fill([18, 48, 364, 1], [63, 78, 100]);
+        panel
     }
 
     pub(super) fn fill(&mut self, [x, y, w, h]: [usize; 4], [r, g, b]: [u8; 3]) {
@@ -339,5 +425,102 @@ fn label_glyph(code: u8) -> [u8; 7] {
         b'/' => [1, 1, 2, 4, 8, 16, 16],
         b' ' => [0; 7],
         _ => [14, 17, 1, 2, 4, 0, 4],
+    }
+}
+
+pub(super) fn glyph_advance(code: u16) -> usize {
+    if code <= 0x7f { 12 } else { 20 }
+}
+
+pub(super) fn wrap_text(bytes: &[u8], encoding: TextEncoding, width: usize) -> Vec<Vec<u16>> {
+    let mut lines = Vec::new();
+    let mut line = Vec::new();
+    let mut x = 0;
+    let mut bytes = bytes.iter().copied().peekable();
+    while let Some(byte) = bytes.next() {
+        if byte == b'\r' && bytes.peek() == Some(&b'\n') {
+            continue;
+        }
+        if matches!(byte, b'\r' | b'\n') {
+            lines.push(std::mem::take(&mut line));
+            x = 0;
+            continue;
+        }
+        let code = if let Some(len) = encoding.wide_len(byte) {
+            let mut sequence = [byte; 4];
+            let mut available = 1;
+            for b in &mut sequence[1..len] {
+                let Some(next) = bytes.next_if(|&next| !matches!(next, b'\r' | b'\n')) else {
+                    break;
+                };
+                *b = next;
+                available += 1;
+            }
+            if available == len {
+                encoding
+                    .wide_code(&sequence[..len])
+                    .unwrap_or(u16::from(b'?'))
+            } else {
+                u16::from(b'?')
+            }
+        } else if !byte.is_ascii() {
+            u16::from_be_bytes([0xff, byte])
+        } else if byte.is_ascii_control() {
+            u16::from(b' ')
+        } else {
+            u16::from(byte)
+        };
+        let advance = glyph_advance(code);
+        if x + advance > width {
+            lines.push(std::mem::take(&mut line));
+            x = 0;
+        }
+        line.push(code);
+        x += advance;
+    }
+    lines.push(line);
+    lines
+}
+
+pub(super) fn draw_line(
+    panel: &mut Panel,
+    font: &mut Option<&mut (dyn GlyphRasterizer + Send + 'static)>,
+    [mut x, y]: [usize; 2],
+    codes: &[u16],
+    ink: [u8; 3],
+) {
+    const SIZE: u32 = 20;
+    let [r, g, b] = ink;
+    let mut glyph = RecordedGlyph {
+        snapshot_indices: None,
+        face: std::sync::Arc::from(crate::settings::DEFAULT_FONT_FACE),
+        bold: false,
+        revision_alpha: false,
+        code: 0,
+        position: [0, 0],
+        size: SIZE,
+        colors: [u32::from_be_bytes([0, r, g, b]); 2],
+        gradient: 0,
+        outline: [0; 2],
+        delay_ms: 0,
+        elapsed_ms: 0,
+        duration_ms: 0,
+        active: false,
+        shown: true,
+        opacity: 255,
+        reveal_mode: 0,
+        reveal_width: SIZE + 4,
+    };
+    for &code in codes {
+        glyph.code = code;
+        if let Some(image) = font
+            .as_deref_mut()
+            .and_then(|font| font.rasterize_glyph(&glyph).ok())
+        {
+            panel.blit_glyph([x - 2, y], &image);
+        } else {
+            panel.text([x, y + 4], &[u8::try_from(code).unwrap_or(b'?')], ink);
+        }
+        x += glyph_advance(code);
     }
 }

@@ -105,7 +105,9 @@ mod color_picker;
 mod dialog;
 mod frame;
 mod message_dialog;
+mod text_dialog;
 pub use frame::{FrameBudget, FrameDriver, FrameOutcome};
+pub use text_dialog::CommentEdit;
 mod lifecycle;
 mod preferences;
 mod save;
@@ -417,6 +419,7 @@ pub struct Runtime {
     focused: bool,
     in_game_color_picker: bool,
     in_game_message_dialogs: bool,
+    in_game_text_dialogs: bool,
     dialog_font: Option<Box<dyn crate::message::GlyphRasterizer + Send>>,
     dialog: Option<dialog::Dialog>,
     machine: Machine,
@@ -677,6 +680,7 @@ impl Runtime {
             input: ActionInput::default(),
             in_game_color_picker: false,
             in_game_message_dialogs: false,
+            in_game_text_dialogs: false,
             dialog_font: None,
             dialog: None,
             effects,
@@ -809,9 +813,9 @@ impl Runtime {
     pub fn movies(&self) -> &MovieHost {
         &self.movies
     }
-    /// Latest decoded full-screen movie frame, if one is available.
+    /// Full-screen movie for direct presentation. Open panels draw it in the scene instead.
     pub fn movie_frame(&self) -> Option<&crate::raster::RgbaImage> {
-        self.movies.player_image()
+        self.movies.player_image().filter(|_| self.dialog.is_none())
     }
     /// Install the host-provided Theora decoder factory for MGV movies.
     pub fn set_mgv_factory(&mut self, factory: Box<dyn crate::mgv::DecoderFactory>) {
@@ -1267,7 +1271,7 @@ impl Runtime {
             return Ok(RuntimeEvent::Inactive);
         }
         if self.dialog.is_some() {
-            self.advance_dialog()?;
+            self.advance_dialog(backend)?;
             return Ok(RuntimeEvent::Yield);
         }
         if std::mem::take(&mut self.capture_due) {
@@ -1335,12 +1339,26 @@ impl Runtime {
                     self.open_dialog(
                         request,
                         dialog::Content::Color(color_picker::ColorPicker::new(swatches)),
+                        backend,
                     )?;
                     return Ok(RuntimeEvent::Yield);
                 }
                 let color = backend.choose_color(swatches)?;
                 request.complete(&mut self.machine, 0x4008)?;
                 crate::dispatch::store_color_result(self.machine.state_mut(), color);
+            }
+            TextDialog { arguments } => {
+                let binding =
+                    crate::dispatch::VmTextDialog::new(&self.machine, arguments, |why| {
+                        request.error(why)
+                    })?;
+                let dialog = text_dialog::TextDialog::new(
+                    binding,
+                    self.machine.text_encoding(),
+                    backend.inline_comment_input(),
+                );
+                self.open_dialog(request, dialog::Content::Text(Box::new(dialog)), backend)?;
+                return Ok(RuntimeEvent::Yield);
             }
             CvnsMessageDialog { arguments } => {
                 let message = crate::dispatch::cvns_message_request(&self.machine, arguments)?;
@@ -1350,7 +1368,7 @@ impl Runtime {
                     arguments.is_none(),
                     self.dialog_font.is_some(),
                 );
-                self.open_dialog(request, dialog::Content::Message(dialog))?;
+                self.open_dialog(request, dialog::Content::Message(dialog), backend)?;
                 return Ok(RuntimeEvent::Yield);
             }
             CvnsCaptureScreen { slot } => {
@@ -1692,6 +1710,7 @@ impl Runtime {
         let mut hosts = crate::dispatch::Hosts {
             runtime: true,
             in_game_message_dialogs: self.in_game_message_dialogs,
+            in_game_text_dialogs: self.in_game_text_dialogs,
             message_wait: None,
             snapshot: Some(crate::dispatch::SnapshotHosts {
                 image: &mut self.save_image,

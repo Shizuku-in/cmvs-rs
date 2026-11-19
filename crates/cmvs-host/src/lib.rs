@@ -8,6 +8,7 @@
 //! - With the default `native-audio` feature enabled, a complete single-threaded `Player`
 //!   and C interface (`cmvs_host_*`) with OS file storage and `cmvs-audio` device output.
 mod backend;
+mod comment_input;
 mod encoding;
 mod error;
 #[cfg(feature = "native-audio")]
@@ -22,6 +23,7 @@ mod session;
 mod storage;
 
 pub use backend::HostBackend;
+pub use comment_input::{CommentInput, CommentInputRequest};
 pub use encoding::{EncodingPolicy, conversion_encoding_with_fs, resolve_encoding_with_fs};
 pub use error::PlayerError;
 pub use frame::{
@@ -147,6 +149,7 @@ mod player {
                 session.runtime.set_audio_backend(Box::new(audio))?;
             }
             let mut backend = HostBackend::new(session.runtime.screen_size());
+            backend.encoding = session.runtime.machine().text_encoding();
             let preferences = session.runtime.display_preferences();
             backend.fullscreen = preferences.fullscreen;
             backend.aspect = preferences.aspect_mode;
@@ -162,6 +165,16 @@ mod player {
                 serial: 0,
                 audio: audio_control,
             })
+        }
+
+        /// Take the initial text and length limit for a newly requested platform keyboard.
+        pub fn take_comment_input(&mut self) -> Option<crate::CommentInputRequest> {
+            self.backend.comment_input.take_request()
+        }
+
+        /// Return the keyboard's draft, or `None` on keyboard cancellation.
+        pub fn submit_comment_input(&mut self, id: u32, text: Option<String>) {
+            self.backend.comment_input.submit(id, text);
         }
 
         pub fn set_key_state(&mut self, code: usize, pressed: bool) -> Result<(), &'static str> {

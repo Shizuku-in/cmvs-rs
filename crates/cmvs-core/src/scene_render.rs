@@ -956,6 +956,25 @@ pub fn prepare_scene<'a>(
     if width == 0 || height == 0 || size > MAX_PAYLOAD as u64 {
         return Err(FormatError("invalid scene surface dimensions"));
     }
+    if let Some(movie) = &scene.modal_movie {
+        let mut commands = vec![Layer::Image {
+            image: movie,
+            rect: [0, 0, width.into(), height.into()],
+            corner: [0, 0],
+            alpha: 255,
+            mask: None,
+            screen_mask: None,
+            blend: Blend::Replace,
+        }];
+        append_modal(&mut commands, scene, width, height);
+        return Ok(RenderFrame {
+            width,
+            height,
+            clear: [0, 0, 0, 255],
+            commands,
+            precomposited: None,
+        });
+    }
     if let Some(cvns) = scene.cvns() {
         let mut frame = cvns::prepare(
             cvns,
@@ -966,26 +985,7 @@ pub fn prepare_scene<'a>(
             width,
             height,
         );
-        if let Some(([x, y, w, h], image)) = &scene.modal_panel {
-            frame.commands.push(Layer::Solid {
-                rect: [0, 0, i64::from(width), i64::from(height)],
-                color: [8, 11, 18],
-                alpha: 144,
-                blend: Blend::Alpha,
-            });
-            frame.commands.push(Layer::Projected {
-                image,
-                rect: [
-                    0,
-                    0,
-                    i64::from(image.pixels.width()),
-                    i64::from(image.pixels.height()),
-                ],
-                quad: [*x, *y, x + w, y + h].map(|v| v as f32 - 0.5),
-                alpha: 255,
-                blend: Blend::Replace,
-            });
-        }
+        append_modal(&mut frame.commands, scene, width, height);
         return cvns::prepare_gpu(frame);
     }
     // Validate the entire scene before rasterizing. Slot order is the stable tie-breaker.
@@ -1471,6 +1471,7 @@ pub fn prepare_scene<'a>(
             commands.push(layer);
         }
     }
+    append_modal(&mut commands, scene, width, height);
     Ok(RenderFrame {
         width,
         height,
@@ -1478,6 +1479,29 @@ pub fn prepare_scene<'a>(
         commands,
         precomposited: None,
     })
+}
+
+fn append_modal<'a>(commands: &mut Vec<Layer<'a>>, scene: &'a SceneHost, width: u32, height: u32) {
+    if let Some(([x, y, w, h], image)) = &scene.modal_panel {
+        commands.push(Layer::Solid {
+            rect: [0, 0, i64::from(width), i64::from(height)],
+            color: [8, 11, 18],
+            alpha: 144,
+            blend: Blend::Alpha,
+        });
+        commands.push(Layer::Projected {
+            image,
+            rect: [
+                0,
+                0,
+                i64::from(image.pixels.width()),
+                i64::from(image.pixels.height()),
+            ],
+            quad: [*x, *y, x + w, y + h].map(|v| v as f32 - 0.5),
+            alpha: 255,
+            blend: Blend::Replace,
+        });
+    }
 }
 
 /// One target pixel under the device blend state, with straight 8-bit source values.

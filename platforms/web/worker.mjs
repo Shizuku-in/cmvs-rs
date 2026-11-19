@@ -85,6 +85,11 @@ async function tick() {
       const pixels = useGpu ? undefined : runtime.pixels();
       postMessage({ type: 'frame', width: runtime.width(), height: runtime.height(), pixels, renderMode: runtime.render_mode() }, pixels ? [pixels.buffer] : []);
     }
+    const comment = runtime.take_comment_input();
+    if (comment) {
+      postMessage({type:'comment-input', id:comment.id, initial:comment.initial, maxChars:comment.max_chars, rect:runtime.comment_input_rect()});
+      comment.free();
+    }
     if (result === 2) runtime.save_preferences();
     await persist();
     if (result === 2) { postMessage({ type: 'quit' }); runtime.free(); runtime = null; }
@@ -96,6 +101,7 @@ async function handleMessage(data) {
     if (data.type === 'start') await start(data);
     else if (data.type === 'tick') await tick();
     else if (data.type === 'audio-clock') audio.report(data.clock);
+    else if (data.type === 'comment-input') runtime?.submit_comment_input(data.id, data.text ?? undefined);
     else if (data.type === 'input') {
       if (data.key !== undefined) data.down ? held.add(data.key) : held.delete(data.key);
       if (data.pulse !== undefined) pulses.add(data.pulse);

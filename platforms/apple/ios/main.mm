@@ -3,7 +3,7 @@
 #import <AVFAudio/AVFAudio.h>
 #include "cmvs_host.h"
 
-@interface PlayerController : UIViewController <UIDocumentPickerDelegate> {
+@interface PlayerController : UIViewController <UIDocumentPickerDelegate, UITextFieldDelegate> {
     CmvsHost *_player;
     UIImageView *_image;
     CADisplayLink *_clock;
@@ -11,6 +11,9 @@
     CFTimeInterval _lastTime;
     uint64_t _serial;
     BOOL _failed;
+    UIAlertController *_commentEditor;
+    NSUInteger _commentLimit;
+    uint32_t _commentId;
 }
 @end
 
@@ -42,6 +45,7 @@
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)closeGame {
+    [_commentEditor dismissViewControllerAnimated:NO completion:nil]; _commentEditor = nil;
     [_clock invalidate]; _clock = nil;
     if (_player) {
         if (!_failed && cmvs_host_save_preferences(_player) < 0)
@@ -86,12 +90,51 @@
 }
 - (void)pause { if (_player) cmvs_host_pause(_player,1); _clock.paused=YES; }
 - (void)resume { if (_player) cmvs_host_pause(_player,0); _clock.paused=NO; _lastTime=0; }
+- (void)editComment:(NSString *)initial limit:(NSUInteger)limit {
+    UIAlertController *editor = [UIAlertController alertControllerWithTitle:nil message:nil preferredStyle:UIAlertControllerStyleAlert];
+    _commentEditor = editor;
+    _commentLimit = limit;
+    [editor addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.text = initial;
+        field.accessibilityLabel = @"Save comment";
+        field.autocorrectionType = UITextAutocorrectionTypeNo;
+        field.delegate = self;
+    }];
+    __weak PlayerController *weakSelf = self;
+    __weak UIAlertController *weakEditor = editor;
+    [editor addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+        [weakSelf finishComment:weakEditor accept:NO];
+    }]];
+    [editor addAction:[UIAlertAction actionWithTitle:@"Done" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [weakSelf finishComment:weakEditor accept:YES];
+    }]];
+    [self presentViewController:editor animated:YES completion:^{
+        UITextField *field = weakEditor.textFields.firstObject;
+        [field becomeFirstResponder];
+        [field selectAll:nil];
+    }];
+}
+- (BOOL)textField:(UITextField *)field shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)text {
+    if (field.markedTextRange) return YES;
+    NSUInteger length = field.text.length - range.length + text.length;
+    return length <= _commentLimit || length < field.text.length;
+}
+- (void)finishComment:(UIAlertController *)editor accept:(BOOL)accept {
+    if (!editor || _commentEditor != editor || !_player) return;
+    NSString *text = accept ? editor.textFields.firstObject.text : nil;
+    cmvs_host_submit_comment_input(_player, _commentId, text.UTF8String);
+    _commentEditor = nil;
+}
 - (void)step:(CADisplayLink *)clock {
     uint32_t delta = _lastTime ? (uint32_t)MIN(250.0,(clock.timestamp-_lastTime)*1000.0) : 16;
     int result = cmvs_host_tick(_player,delta);
     if (result<0) { [self showError:[NSString stringWithUTF8String:cmvs_host_error(_player)]]; return; }
     if (result==2) { [self closeGame]; return; }
     if (result!=1) return;
+    char initial[1024];
+    int32_t commentLimit = cmvs_host_take_comment_input(_player, &_commentId, initial, sizeof initial);
+    if (commentLimit > 0)
+        [self editComment:[NSString stringWithUTF8String:initial] limit:(NSUInteger)commentLimit];
     _lastTime=clock.timestamp;
     uint32_t width=cmvs_host_width(_player),height=cmvs_host_height(_player);
     NSData *data=[NSData dataWithBytes:cmvs_host_pixels(_player) length:(NSUInteger)width*height*4];

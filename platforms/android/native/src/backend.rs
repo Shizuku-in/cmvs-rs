@@ -1,10 +1,15 @@
 use android_activity::AndroidApp;
 use cmvs_core::{
-    host::filesystem::resolve_under, host::platform::FontDialogResult,
-    host::platform::PlatformBackend, host::platform::PlatformRequest,
-    host::settings::DisplayPreferences, render::raster::RgbaImage,
+    host::filesystem::resolve_under,
+    host::platform::FontDialogResult,
+    host::platform::PlatformBackend,
+    host::platform::PlatformRequest,
+    host::platform::{TextDialogRequest, TextDialogResult},
+    host::settings::DisplayPreferences,
+    render::raster::RgbaImage,
 };
 use cmvs_font::font::FontRenderer;
+use cmvs_host::CommentInput;
 use cmvs_wgpu::GpuFrame;
 use std::{cell::RefCell, error::Error, fs::File, io::Read, path::PathBuf, rc::Rc, sync::Arc};
 
@@ -14,6 +19,7 @@ pub(super) struct MobileBackend {
     pub frame: Option<Arc<GpuFrame>>,
     pub font: Rc<RefCell<FontRenderer>>,
     pub font_pending: bool,
+    comment_input: CommentInput,
     encoding: cmvs_core::TextEncoding,
     app: AndroidApp,
     directory: PathBuf,
@@ -38,6 +44,7 @@ impl MobileBackend {
             screen_size,
             frame: None,
             font_pending: false,
+            comment_input: CommentInput::default(),
             title: String::new(),
         }
     }
@@ -90,6 +97,44 @@ impl PlatformBackend for MobileBackend {
     }
     fn aspect_scaling(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.display.aspect_scaling)
+    }
+    fn poll_text_dialog(
+        &mut self,
+        request: &TextDialogRequest,
+    ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
+        let result = self.comment_input.poll(request, self.encoding)?;
+        if !matches!(result, TextDialogResult::Pending) {
+            return Ok(result);
+        }
+        if let Some(request) = self.comment_input.take_request() {
+            if let Err(error) = cmvs_native::begin_comment_input(
+                &self.app,
+                request.id,
+                &request.initial,
+                request.max_chars,
+            ) {
+                self.comment_input.cancel();
+                return Err(error.into());
+            }
+            return Ok(result);
+        }
+        let id = self.comment_input.waiting_id().expect("pending keyboard");
+        let answer = cmvs_native::take_comment_input(&self.app, id);
+        match answer {
+            Ok(None) => Ok(result),
+            Ok(Some(text)) => {
+                self.comment_input.submit(id, text);
+                self.comment_input.poll(request, self.encoding)
+            }
+            Err(error) => {
+                self.cancel_text_dialog();
+                Err(error.into())
+            }
+        }
+    }
+    fn cancel_text_dialog(&mut self) {
+        self.comment_input.cancel();
+        let _ = cmvs_native::dismiss_comment_input(&self.app);
     }
     fn poll_font_dialog(
         &mut self,

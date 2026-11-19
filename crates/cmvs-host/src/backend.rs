@@ -1,6 +1,11 @@
+use crate::CommentInput;
 use cmvs_core::{
-    host::platform::FontDialogResult, host::platform::PlatformBackend,
-    host::platform::PlatformRequest, render::raster::RgbaImage,
+    TextEncoding,
+    host::platform::FontDialogResult,
+    host::platform::PlatformBackend,
+    host::platform::PlatformRequest,
+    host::platform::{TextDialogRequest, TextDialogResult},
+    render::raster::RgbaImage,
 };
 use std::error::Error;
 
@@ -11,6 +16,9 @@ pub struct HostBackend {
     pub aspect: u32,
     pub scaling: bool,
     pub render: u32,
+    /// Encoding of the runtime served by this backend.
+    pub encoding: TextEncoding,
+    pub comment_input: CommentInput,
 }
 impl HostBackend {
     pub fn preferences(&self) -> cmvs_core::host::settings::DisplayPreferences {
@@ -29,6 +37,8 @@ impl HostBackend {
             aspect: 1,
             scaling: true,
             render: 0,
+            encoding: TextEncoding::default(),
+            comment_input: CommentInput::default(),
         }
     }
 }
@@ -86,6 +96,15 @@ impl PlatformBackend for HostBackend {
     ) -> Result<FontDialogResult, Box<dyn Error + Send + Sync>> {
         Ok(FontDialogResult::Cancelled)
     }
+    fn poll_text_dialog(
+        &mut self,
+        request: &TextDialogRequest,
+    ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
+        self.comment_input.poll(request, self.encoding)
+    }
+    fn cancel_text_dialog(&mut self) {
+        self.comment_input.cancel();
+    }
     fn poll_message_dialog(
         &mut self,
         _: &cmvs_core::host::platform::MessageDialogRequest,
@@ -106,5 +125,39 @@ impl PlatformBackend for HostBackend {
             _ => return Err("unsupported host display request".into()),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restored_keyboard_ignores_late_replies_and_uses_the_session_encoding() {
+        let mut backend = HostBackend::new([800, 600]);
+        backend.encoding = TextEncoding::Gbk;
+        let request = TextDialogRequest {
+            title: vec![],
+            prompt: vec![],
+            initial: b"\xd6\xd0".to_vec(),
+            max_bytes: 8,
+        };
+        backend.poll_text_dialog(&request).unwrap();
+        let previous = backend.comment_input.take_request().unwrap();
+        backend.cancel_text_dialog();
+        backend.poll_text_dialog(&request).unwrap();
+        let current = backend.comment_input.take_request().unwrap();
+        assert_eq!(current.initial, "中");
+        backend
+            .comment_input
+            .submit(previous.id, Some("old".into()));
+        assert!(matches!(
+            backend.poll_text_dialog(&request).unwrap(),
+            TextDialogResult::Pending
+        ));
+        backend.comment_input.submit(current.id, Some("文".into()));
+        assert!(
+            matches!(backend.poll_text_dialog(&request).unwrap(), TextDialogResult::Accepted(bytes) if bytes == b"\xce\xc4")
+        );
     }
 }

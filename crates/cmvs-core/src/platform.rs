@@ -98,6 +98,25 @@ pub struct TextDialogRequest {
     /// ANSI edit limit: 100 bytes allows 50 double-byte characters in the game encoding.
     pub max_bytes: u32,
 }
+impl TextDialogRequest {
+    /// Maximum encoded bytes, leaving room for the save field's terminator.
+    pub fn byte_limit(&self) -> u32 {
+        match self.max_bytes {
+            0 => 255,
+            limit => limit.min(255),
+        }
+    }
+
+    /// Native input limit. Legacy dialogs budget two bytes per character.
+    pub fn character_limit(&self, encoding: TextEncoding) -> u32 {
+        let bytes = self.byte_limit();
+        if encoding == TextEncoding::Utf8 {
+            bytes.min(127)
+        } else {
+            (bytes / 2).max(1)
+        }
+    }
+}
 pub enum TextDialogResult {
     Pending,
     Cancelled,
@@ -224,12 +243,18 @@ pub trait PlatformBackend {
     fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement linear stretch queries".into())
     }
+    /// The host feeds keyboard and IME edits directly into the canvas field.
+    fn inline_comment_input(&self) -> bool {
+        false
+    }
     fn poll_text_dialog(
         &mut self,
         _request: &TextDialogRequest,
     ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement the text dialog".into())
     }
+    /// Discard a pending keyboard request and its reply when a restore replaces the dialog.
+    fn cancel_text_dialog(&mut self) {}
     /// Fallback for CVNS `0x21b7` when the in-game picker is disabled.
     /// The two swatches use `0xRRGGBB` order. The default response is cancellation.
     fn choose_color(

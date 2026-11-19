@@ -1,6 +1,79 @@
 use super::*;
 
 #[test]
+fn restoring_a_slot_discards_the_movie_overlay_and_its_pending_keyboard() {
+    use cmvs_core::host::{
+        input::{CodeInput, KeyBindings},
+        platform::{TextDialogRequest, TextDialogResult},
+    };
+    #[derive(Default)]
+    struct Keyboard {
+        pending: bool,
+    }
+    impl PlatformBackend for Keyboard {
+        fn poll_text_dialog(
+            &mut self,
+            _: &TextDialogRequest,
+        ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
+            self.pending = true;
+            Ok(TextDialogResult::Pending)
+        }
+        fn cancel_text_dialog(&mut self) {
+            self.pending = false;
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
+            Ok(())
+        }
+    }
+    let mut code = string_call(0x2160);
+    commands::command(&mut code, 0x2128, &[]);
+    commands::command(&mut code, 0x22b2, &[]);
+    commands::command(&mut code, 0x2015, &[7]);
+    commands::command(&mut code, 0x20c0, &[0]);
+    commands::command(&mut code, 0x213c, &[7, 7, 7, 32, 0x8000_0003, 0]);
+    commands::command(&mut code, 0x2000, &[]);
+    let root = Root::new("restore-comment", &code, b"op.cmv\0\0");
+    fs::write(root.0.join("save/system.dat"), auto_resume_save(0)).unwrap();
+    fs::write(root.0.join("op.cmv"), crate::support::cmv9::cmv6(3, false)).unwrap();
+    let game = Registry::builtin()
+        .identify_game(&root.0, Some("cmvs-20071117"))
+        .unwrap();
+    let mut run = Runtime::new(root.script(), &root.0, &game, 0).unwrap();
+    let user = crate::support::temp_dir::TempPath::new("restore-comment-save");
+    run.set_user_data_directory(&user).unwrap();
+    run.enable_in_game_dialogs(None);
+    run.set_decode_cmv_frames(true);
+    let mut backend = Keyboard::default();
+    while run.tick(&mut backend).unwrap() == RuntimeEvent::Progress {}
+    assert!(run.save_slot(3).unwrap());
+    while run.tick(&mut backend).unwrap() == RuntimeEvent::Progress {}
+    assert!(run.movies().player_image().is_some());
+    assert!(run.movie_frame().is_none());
+    let [w, h] = run.screen_size();
+    let accent = (((h - 234) / 2 * w + (w - 400) / 2) * 4) as usize;
+    let frame = run.prepare_scene_frame().unwrap().render_cpu().unwrap();
+    assert_eq!(&frame.pixels()[accent..accent + 4], &[127, 187, 255, 255]);
+    // The gray movie is still visible above the panel, under the dimming layer.
+    assert!(frame.pixels()[w as usize * 2] > 30);
+    let mut keys = [false; 128];
+    keys[22] = true;
+    CodeInput::default().update(&KeyBindings::default(), &keys, run.input_mut());
+    run.tick(&mut backend).unwrap();
+    run.tick(&mut backend).unwrap();
+    assert!(backend.pending);
+    assert!(run.load_slot(4, &mut backend).is_err());
+    assert!(run.keyboard_comment_rect().is_some() && backend.pending);
+    run.load_slot(3, &mut backend).unwrap();
+    assert!(run.keyboard_comment_rect().is_none() && !backend.pending);
+    assert!(run.movies().player_image().is_none());
+    assert_ne!(
+        &run.render_frame().unwrap().pixels()[accent..accent + 4],
+        &[127, 187, 255, 255]
+    );
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+}
+
+#[test]
 fn slot_exchange_and_move_preserve_raw_files_and_use_only_the_user_directory() {
     use std::collections::BTreeMap;
     for op in [0x228cu16, 0x228e] {

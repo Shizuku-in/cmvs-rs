@@ -68,3 +68,79 @@ pub fn show_font_picker(outer_app: &android_activity::AndroidApp) {
         }
     }));
 }
+
+/// Queue the native single-line input control on the Android UI thread.
+pub fn begin_comment_input(
+    app: &android_activity::AndroidApp,
+    id: u32,
+    initial: &str,
+    max_chars: u32,
+) -> Result<(), String> {
+    with_activity(app, |env, activity| {
+        let initial = env.new_string(initial)?;
+        env.call_method(
+            activity,
+            jni::jni_str!("beginCommentInput"),
+            jni::jni_sig!("(ILjava/lang/String;I)V"),
+            &[
+                jni::JValue::Int(id as i32),
+                jni::JValue::Object(initial.as_ref()),
+                jni::JValue::Int(max_chars as i32),
+            ],
+        )?;
+        Ok(())
+    })
+}
+
+/// Pending, cancelled, or accepted UTF-8 text from the Activity.
+pub fn take_comment_input(
+    app: &android_activity::AndroidApp,
+    id: u32,
+) -> Result<Option<Option<String>>, String> {
+    with_activity(app, |env, activity| {
+        use jni::objects::JString;
+        let answer = env
+            .call_method(
+                activity,
+                jni::jni_str!("takeCommentInput"),
+                jni::jni_sig!("(I)Ljava/lang/String;"),
+                &[jni::JValue::Int(id as i32)],
+            )?
+            .l()?;
+        if answer.is_null() {
+            return Ok(None);
+        }
+        let answer = env.cast_local::<JString>(answer)?.try_to_string(env)?;
+        Ok(Some(answer.strip_prefix(' ').map(str::to_owned)))
+    })
+}
+
+pub fn dismiss_comment_input(app: &android_activity::AndroidApp) -> Result<(), String> {
+    with_activity(app, |env, activity| {
+        env.call_method(
+            activity,
+            jni::jni_str!("dismissCommentInput"),
+            jni::jni_sig!("()V"),
+            &[],
+        )?;
+        Ok(())
+    })
+}
+
+#[allow(unsafe_code)]
+fn with_activity<T>(
+    app: &android_activity::AndroidApp,
+    work: impl for<'local, 'object> FnOnce(
+        &mut jni::Env<'local>,
+        &jni::objects::JObject<'object>,
+    ) -> jni::errors::Result<T>,
+) -> Result<T, String> {
+    // SAFETY: AndroidApp owns the VM and Activity throughout the call.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    vm.attach_current_thread(|env| {
+        let raw: jni::sys::jobject = app.activity_as_ptr().cast();
+        let activity = unsafe { env.as_cast_raw::<jni::objects::JObject>(&raw)? };
+        work(env, &activity)
+    })
+    .map_err(|err| err.to_string())
+}

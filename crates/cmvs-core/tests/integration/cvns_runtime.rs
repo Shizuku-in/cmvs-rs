@@ -904,3 +904,183 @@ fn cvns_in_game_message_dialogs_wait_for_the_player_and_return_the_answer() {
     assert_eq!(run.render_scene_frame().unwrap(), clear);
     assert!(platform.message_dialogs().is_empty());
 }
+
+#[test]
+fn comment_editor_waits_for_input_and_commits_only_on_panel_confirmation() {
+    use cmvs_core::{
+        host::{
+            input::{CodeInput, KeyBindings},
+            platform::{PlatformBackend, PlatformRequest, TextDialogRequest, TextDialogResult},
+        },
+        profile::Registry,
+        runtime::{CommentEdit, Runtime, RuntimeEvent},
+    };
+    use std::error::Error;
+
+    struct Keyboard {
+        inline: bool,
+        reply: Option<Vec<u8>>,
+    }
+
+    impl PlatformBackend for Keyboard {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
+            unreachable!()
+        }
+
+        fn inline_comment_input(&self) -> bool {
+            self.inline
+        }
+
+        fn poll_text_dialog(
+            &mut self,
+            request: &TextDialogRequest,
+        ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
+            assert!(!self.inline);
+            assert_eq!(request.initial, b"\x82\xa0");
+            assert!(request.prompt.ends_with(b"LIMIT ON THIRD LINE"));
+            assert_eq!(request.max_bytes, 4);
+            Ok(self
+                .reply
+                .take()
+                .map_or(TextDialogResult::Pending, TextDialogResult::Accepted))
+        }
+    }
+
+    let (root, _) = cvns_movie_fixture("comment-editor", 0);
+    for (profile, opcode, command_id, inline) in [
+        ("cmvs-20071117", 0x213c, 0x13c, true),
+        ("cvns-20040730", 0x21b2, 0x5b2, false),
+    ] {
+        let game = Registry::builtin()
+            .identify_game(&root, Some(profile))
+            .unwrap();
+        let mut code = Vec::new();
+        let title = b"EDIT COMMENT\0";
+        let prompt = b"ENTER A COMMENT\nSECOND LINE\nLIMIT ON THIRD LINE\0";
+        let initial = (title.len() + prompt.len()) as u32;
+        for _ in 0..3 {
+            for argument in [0, 0x8000_0003, 4, initial, title.len() as u32, 0] {
+                push_const(&mut code, 0x200, 0x100, argument);
+            }
+            word(&mut code, opcode);
+        }
+        word(&mut code, 0x2000);
+        let text = [title.as_slice(), prompt, b"\x82\xa0\0"].concat();
+        let start = Script::decode(&script(&code, &text)).unwrap();
+        let mut runtime = Runtime::new(&start, &root, &game, 0).unwrap();
+        runtime.enable_in_game_dialogs(None);
+        let mut keyboard = Keyboard {
+            inline,
+            reply: None,
+        };
+        let mut codes = CodeInput::default();
+        let bindings = KeyBindings::default();
+        let [width, height] = runtime.screen_size().map(|size| size as i32);
+        let [x, y] = [(width - 400) / 2, (height - 234) / 2];
+        let ok = [x + 337, y + 200];
+        runtime.input_mut().set_pointer(ok[0], ok[1]);
+        let mut frame = |runtime: &mut Runtime, keyboard: &mut Keyboard, key: Option<usize>| {
+            let mut keys = [false; 128];
+            if let Some(key) = key {
+                keys[key] = true;
+            }
+            codes.update(&bindings, &keys, runtime.input_mut());
+            while runtime.tick(keyboard).unwrap() == RuntimeEvent::Progress {}
+            runtime.advance_playback(16).unwrap();
+        };
+        let clear = runtime.render_scene_frame().unwrap();
+        frame(&mut runtime, &mut keyboard, None);
+        let command = runtime.machine().pending_system();
+        assert_eq!(command.map(|(_, opcode)| opcode), Some(command_id));
+        assert_eq!(runtime.machine().stack().len_bytes(), 24);
+        assert_eq!(runtime.inline_comment_rect().is_some(), inline);
+        let panel = runtime.render_scene_frame().unwrap();
+        assert!(panel != clear);
+        let accent = (y * width + x) as usize * 4;
+        assert_eq!(&panel.pixels()[accent..accent + 4], &[127, 187, 255, 255]);
+
+        let accepted = if inline {
+            b"\x82\xa2A".as_slice()
+        } else {
+            b"A\x82\xa2"
+        };
+        if inline {
+            assert!(runtime.edit_comment(CommentEdit::Tab { backwards: true }));
+            frame(&mut runtime, &mut keyboard, Some(22));
+            let scrolled = runtime.render_scene_frame().unwrap();
+            let row = ((y + 84) * width + x + 18) as usize * 4;
+            assert_ne!(
+                &scrolled.pixels()[row..row + 320],
+                &panel.pixels()[row..row + 320]
+            );
+            assert!(runtime.edit_comment(CommentEdit::Tab { backwards: false }));
+            assert!(runtime.edit_comment(CommentEdit::SelectAll));
+            assert!(runtime.edit_comment(CommentEdit::Insert(b"longer than four bytes".to_vec())));
+            assert!(runtime.edit_comment(CommentEdit::Preedit(b"\x82\xa2".to_vec())));
+            frame(&mut runtime, &mut keyboard, Some(1));
+            assert!(runtime.inline_comment_rect().is_some());
+            // A click started during preedit cannot confirm even if the IME commits by mouseup.
+            assert!(runtime.edit_comment(CommentEdit::Insert(b"\x82\xa2".to_vec())));
+            frame(&mut runtime, &mut keyboard, None);
+            assert_eq!(runtime.machine().pending_system(), command);
+
+            assert!(runtime.edit_comment(CommentEdit::SelectAll));
+            // Click the right half of the wide glyph to insert after it.
+            runtime.input_mut().set_pointer(x + 28 + 12, y + 131);
+            frame(&mut runtime, &mut keyboard, Some(1));
+            frame(&mut runtime, &mut keyboard, None);
+            assert!(runtime.edit_comment(CommentEdit::Insert(b"A".to_vec())));
+            runtime.input_mut().set_pointer(ok[0], ok[1]);
+        } else {
+            frame(&mut runtime, &mut keyboard, Some(22));
+            frame(&mut runtime, &mut keyboard, None);
+            assert!(runtime.keyboard_comment_rect().is_some());
+            keyboard.reply = Some(b"longer than four bytes".to_vec());
+            frame(&mut runtime, &mut keyboard, None);
+            frame(&mut runtime, &mut keyboard, Some(22));
+            keyboard.reply = Some(accepted.to_vec());
+        }
+        frame(&mut runtime, &mut keyboard, None);
+        assert_eq!(runtime.machine().pending_system(), command);
+        assert_eq!(runtime.machine().stack().len_bytes(), 24);
+        assert!(runtime.render_scene_frame().unwrap() != panel);
+
+        frame(&mut runtime, &mut keyboard, Some(1));
+        frame(&mut runtime, &mut keyboard, None);
+        assert_eq!(runtime.machine().state().system_integer(0), Some(1));
+        assert_eq!(runtime.machine().state().string(3), Some(accepted));
+        assert_eq!(runtime.machine().stack().len_bytes(), 0);
+        assert!(runtime.render_scene_frame().unwrap() == clear);
+
+        frame(&mut runtime, &mut keyboard, None);
+        // Four bytes fit, but the legacy field accepts only two characters.
+        let too_many = b"A\x82\xa2B".to_vec();
+        if inline {
+            assert!(runtime.edit_comment(CommentEdit::Insert(too_many)));
+        } else {
+            frame(&mut runtime, &mut keyboard, Some(22));
+            frame(&mut runtime, &mut keyboard, None);
+            keyboard.reply = Some(too_many);
+        }
+        frame(&mut runtime, &mut keyboard, None);
+        frame(&mut runtime, &mut keyboard, Some(1));
+        frame(&mut runtime, &mut keyboard, None);
+        if !inline {
+            assert_eq!(runtime.machine().stack().len_bytes(), 24);
+            frame(&mut runtime, &mut keyboard, Some(25));
+        }
+        assert_eq!(
+            runtime.machine().state().string(3),
+            Some(b"\x82\xa0".as_slice())
+        );
+
+        frame(&mut runtime, &mut keyboard, None);
+        frame(&mut runtime, &mut keyboard, Some(25));
+        assert_eq!(runtime.machine().state().system_integer(0), Some(0));
+        assert_eq!(
+            runtime.machine().state().string(3),
+            Some(b"\x82\xa0".as_slice())
+        );
+        assert!(runtime.render_scene_frame().unwrap() == clear);
+    }
+}

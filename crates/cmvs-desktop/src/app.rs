@@ -5,15 +5,16 @@ use cmvs_core::{
     format::cpz::ArchiveIndex, format::cursor::CursorBitmap, format::pb3, host::input::KeyBindings,
     host::platform::DirectoryAssets, host::platform::PlatformAssets,
     host::platform::PlatformBackend, host::platform::PlatformRequest, profile::Registry,
-    render::raster::RgbaImage, runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome,
-    runtime::Runtime, runtime::RuntimeEvent, runtime::SaveStorage, runtime::SnapshotPolicy,
-    runtime::load_start_with_fs,
+    render::raster::RgbaImage, runtime::CommentEdit, runtime::FrameBudget, runtime::FrameDriver,
+    runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent, runtime::SaveStorage,
+    runtime::SnapshotPolicy, runtime::load_start_with_fs,
 };
 use cmvs_host::{
     GameBootstrap, KeyBindingPolicy, SessionConfig, compose_cpu_frame, default_host_fs,
     resolve_encoding_with_fs,
 };
 use std::{
+    collections::HashSet,
     env,
     error::Error,
     fs::{File, OpenOptions},
@@ -25,10 +26,10 @@ use std::{
 };
 use winit::{
     application::ApplicationHandler,
-    dpi::LogicalSize,
-    event::{ElementState, MouseScrollDelta, WindowEvent},
+    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
+    event::{ElementState, Ime, KeyEvent, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
+    keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey},
     window::{Window, WindowId},
 };
 
@@ -119,6 +120,10 @@ struct App {
     encoding: TextEncoding,
     input: DesktopInput,
     game_input: GameInput,
+    modifiers: ModifiersState,
+    comment_keys: HashSet<PhysicalKey>,
+    comment_ime_allowed: bool,
+    comment_preedit: bool,
     bindings: KeyBindings,
     native_input: bool,
     halted: bool,
@@ -140,6 +145,99 @@ struct App {
     windowed_size: std::cell::Cell<[u32; 2]>,
 }
 impl App {
+    fn comment_input(&mut self, text: &str, preedit: bool) {
+        let encode = |text| cmvs_font::text_codec::encode(self.encoding, text);
+        let edit = if preedit {
+            self.comment_preedit = !text.is_empty();
+            CommentEdit::Preedit(encode(text).unwrap_or_else(|_| b"?".to_vec()))
+        } else {
+            self.comment_preedit = false;
+            if text.is_empty() {
+                return;
+            }
+            if text.chars().any(char::is_control) {
+                CommentEdit::Invalid
+            } else {
+                encode(text).map_or(CommentEdit::Invalid, CommentEdit::Insert)
+            }
+        };
+        self.startup.edit_comment(edit);
+    }
+
+    fn comment_key(&mut self, event: &KeyEvent) -> bool {
+        if !self.native_input || event.state != ElementState::Pressed {
+            return false;
+        }
+        if event.logical_key == Key::Named(NamedKey::Tab) && !self.comment_preedit {
+            return self.startup.edit_comment(CommentEdit::Tab {
+                backwards: self.modifiers.shift_key(),
+            });
+        }
+        if self.startup.inline_comment_rect().is_none() {
+            return false;
+        }
+        if self.comment_preedit {
+            return true;
+        }
+        let shortcut = (self.modifiers.control_key() && !self.modifiers.alt_key())
+            || self.modifiers.super_key();
+        let edit = match &event.logical_key {
+            Key::Named(
+                NamedKey::Enter | NamedKey::Escape | NamedKey::ArrowUp | NamedKey::ArrowDown,
+            ) => return false,
+            Key::Named(NamedKey::Backspace) => CommentEdit::Backspace,
+            Key::Named(NamedKey::Delete) => CommentEdit::Delete,
+            Key::Named(NamedKey::ArrowLeft) => CommentEdit::Left,
+            Key::Named(NamedKey::ArrowRight) => CommentEdit::Right,
+            Key::Named(NamedKey::Home) => CommentEdit::Home,
+            Key::Named(NamedKey::End) => CommentEdit::End,
+            Key::Character(ch) if shortcut && ch.eq_ignore_ascii_case("a") => {
+                CommentEdit::SelectAll
+            }
+            Key::Character(ch) if shortcut && ch.eq_ignore_ascii_case("v") => {
+                if let Ok(text) =
+                    arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text())
+                {
+                    self.comment_input(&text, false);
+                }
+                return true;
+            }
+            _ => {
+                if !shortcut && let Some(text) = &event.text {
+                    self.comment_input(text, false);
+                }
+                return true;
+            }
+        };
+        self.startup.edit_comment(edit)
+    }
+
+    fn sync_comment_ime(&mut self, window: &Window, mode: u32) {
+        use crate::game_input::Viewport;
+        let field = self
+            .startup
+            .inline_comment_rect()
+            .filter(|_| self.native_input);
+        if self.comment_ime_allowed != field.is_some() {
+            self.comment_ime_allowed = field.is_some();
+            self.comment_preedit = false;
+            window.set_ime_allowed(self.comment_ime_allowed);
+        }
+        if let Some([x, y, w, h]) = field {
+            let size = window.inner_size();
+            if let Some(viewport) =
+                Viewport::for_canvas(self.startup.screen_size(), [size.width, size.height], mode)
+            {
+                let [left, top] = viewport.to_window([x as i32, y as i32]);
+                let [right, bottom] = viewport.to_window([(x + w) as i32, (y + h) as i32]);
+                window.set_ime_cursor_area(
+                    PhysicalPosition::new(left, top),
+                    PhysicalSize::new((right - left) as u32, (bottom - top) as u32),
+                );
+            }
+        }
+    }
+
     fn frame(&mut self) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
         if let Some(image) = &self.preview_image {
             return Ok(image.clone());
@@ -439,6 +537,8 @@ impl ApplicationHandler for App {
                     self.driver.suspend();
                 }
                 if !focus {
+                    self.modifiers = ModifiersState::empty();
+                    self.comment_input("", true);
                     self.window
                         .as_ref()
                         .expect("window")
@@ -483,8 +583,28 @@ impl ApplicationHandler for App {
                 self.input.push(InputEvent::Wheel { x, y });
                 self.game_input.wheel(y);
             }
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            WindowEvent::Ime(ime) if self.comment_ime_allowed => match ime {
+                Ime::Commit(text) => self.comment_input(&text, false),
+                Ime::Preedit(text, _) => self.comment_input(&text, true),
+                Ime::Disabled => self.comment_input("", true),
+                Ime::Enabled => {}
+            },
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state == ElementState::Pressed;
+                if !pressed && self.comment_keys.remove(&event.physical_key) {
+                    return;
+                }
+                if self.comment_key(&event) {
+                    if !event.repeat {
+                        self.comment_keys.insert(event.physical_key);
+                    }
+                    return;
+                }
+                if pressed && event.repeat && self.comment_keys.contains(&event.physical_key) {
+                    return;
+                }
+                self.comment_keys.remove(&event.physical_key);
                 if let PhysicalKey::Code(key) = event.physical_key {
                     self.game_input
                         .key(event_key(key, &event.logical_key), pressed);
@@ -542,14 +662,13 @@ impl ApplicationHandler for App {
             }
             self.next_frame = now + Duration::from_millis(16);
             let window = window.clone();
-            self.game_input.set_aspect_mode(
-                cmvs_core::render::viewport::presentation_mode_with_full_move(
-                    window.fullscreen().is_some(),
-                    self.aspect_scaling.get(),
-                    self.aspect_mode.get(),
-                    self.startup.platform().window_full_move(),
-                ),
+            let presentation_mode = cmvs_core::render::viewport::presentation_mode_with_full_move(
+                window.fullscreen().is_some(),
+                self.aspect_scaling.get(),
+                self.aspect_mode.get(),
+                self.startup.platform().window_full_move(),
             );
+            self.game_input.set_aspect_mode(presentation_mode);
             let cursor_auto_clear = self.startup.settings().cursor_auto_clear();
             self.driver.sample_input(self.startup.input_mut(), |input| {
                 if self.native_input && self.preview_image.is_none() {
@@ -668,6 +787,7 @@ impl ApplicationHandler for App {
                     return;
                 }
             }
+            self.sync_comment_ime(&window, presentation_mode);
             if !yielded && !inactive && !self.halted {
                 // Continue the same VM run promptly after processing window events.
                 // Do not consume another input edge, advance effects, or draw here.
@@ -675,14 +795,13 @@ impl ApplicationHandler for App {
                 el.set_control_flow(ControlFlow::Poll);
                 return;
             }
-            self.game_input.set_aspect_mode(
-                cmvs_core::render::viewport::presentation_mode_with_full_move(
-                    window.fullscreen().is_some(),
-                    self.aspect_scaling.get(),
-                    self.aspect_mode.get(),
-                    self.startup.platform().window_full_move(),
-                ),
+            let presentation_mode = cmvs_core::render::viewport::presentation_mode_with_full_move(
+                window.fullscreen().is_some(),
+                self.aspect_scaling.get(),
+                self.aspect_mode.get(),
+                self.startup.platform().window_full_move(),
             );
+            self.game_input.set_aspect_mode(presentation_mode);
             if let Some(point) = self.startup.input_mut().take_warp() {
                 let size = window.inner_size();
                 if let Some(position) = self.game_input.warp([size.width, size.height], point)
@@ -1079,6 +1198,10 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         encoding,
         input: DesktopInput::default(),
         game_input,
+        modifiers: ModifiersState::empty(),
+        comment_keys: HashSet::new(),
+        comment_ime_allowed: false,
+        comment_preedit: false,
         bindings,
         native_input,
         halted: false,
