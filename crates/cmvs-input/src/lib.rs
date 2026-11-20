@@ -131,12 +131,21 @@ impl TouchInput {
     /// Multiple taps between samples coalesce, as with desktop button pulses.
     /// Keep the final position through release for the core drag recognizer.
     pub fn frame(&mut self, bindings: &KeyBindings, viewport: Viewport, input: &mut ActionInput) {
-        let point = self.pointer.and_then(|point| viewport.to_script(point));
+        let (point, pressed) = self.sample_pointer(viewport);
         let mut codes = [false; 128];
-        codes[1] = self.primary.is_some() || self.pulse;
-        self.pulse = false;
+        codes[1] = pressed;
         self.history.update(bindings, &codes, input);
         let [x, y] = point.unwrap_or([-1, -1]);
         input.set_pointer(x, y);
+    }
+
+    /// Consume the touch sample when combining touch, keyboard and mouse in one code history.
+    pub fn sample_pointer(&mut self, viewport: Viewport) -> (Option<[i32; 2]>, bool) {
+        let pressed = self.primary.is_some() || self.pulse;
+        self.pulse = false;
+        (
+            self.pointer.and_then(|point| viewport.to_script(point)),
+            pressed,
+        )
     }
 }

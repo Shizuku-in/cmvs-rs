@@ -211,5 +211,13 @@ termcolor 1.4.1: Unlicense OR MIT (used under MIT)
 https://github.com/BurntSushi/termcolor
 Transitive shader diagnostic dependency enabled by wgpu/webgpu.
 
+Apple launcher dependencies (no vendored source):
+zip 7.2.0 - MIT
+https://github.com/zip-rs/zip2
+Used to archive save slots and imported font faces.
+serde_json 1.0.154 - MIT OR Apache-2.0
+https://github.com/serde-rs/json
+Used for launcher metadata, session configuration and platform events.
+
 Exact package checksums are pinned in Cargo.lock. Distributions must retain
 applicable upstream license and notice files from the published packages.

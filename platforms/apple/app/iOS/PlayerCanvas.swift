@@ -1,0 +1,162 @@
+import CmvsAppleC
+import QuartzCore
+import SwiftUI
+
+struct PlayerCanvas: UIViewRepresentable {
+    var player: Playback
+    func makeUIView(context: Context) -> Canvas { Canvas(player) }
+    func updateUIView(_ view: Canvas, context: Context) {}
+    static func dismantleUIView(_ view: Canvas, coordinator: ()) { view.player.close() }
+}
+
+final class Canvas: UIView {
+    let player: Playback
+    private var started = false
+    private var blocked = false
+    private var contacts = Set<UITouch>()
+    override class var layerClass: AnyClass { CAMetalLayer.self }
+    override var canBecomeFirstResponder: Bool { true }
+    init(_ player: Playback) {
+        self.player = player
+        super.init(frame: .zero)
+        isMultipleTouchEnabled = true
+        backgroundColor = .black
+        if player.game.options.gestures {
+            for count in [2, 3] {
+                let tap = UITapGestureRecognizer(target: self, action: #selector(tap(_:)))
+                tap.numberOfTouchesRequired = count
+                addGestureRecognizer(tap)
+            }
+            for direction in [UISwipeGestureRecognizer.Direction.up, .down] {
+                let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swipe(_:)))
+                swipe.direction = direction
+                swipe.numberOfTouchesRequired = 2
+                addGestureRecognizer(swipe)
+            }
+        }
+        addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
+        let right = UITapGestureRecognizer(target: self, action: #selector(rightClick(_:)))
+        right.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+        right.buttonMaskRequired = .secondary
+        addGestureRecognizer(right)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard let window, bounds.width > 0, bounds.height > 0 else { return }
+        let s = window.screen.scale
+        let metal = layer as! CAMetalLayer
+        metal.contentsScale = s
+        metal.drawableSize = CGSize(width: bounds.width * s, height: bounds.height * s)
+        if started {
+            player.resize(bounds.size, s)
+        } else {
+            started = true
+            becomeFirstResponder()
+            player.start(
+                metal, size: bounds.size, scale: s,
+                link: CADisplayLink(target: player, selector: #selector(Playback.step(_:))))
+        }
+    }
+    @objc func tap(_ gesture: UITapGestureRecognizer) {
+        if gesture.numberOfTouchesRequired == 3 { player.controls.toggle() } else { player.pulse(3) }
+    }
+    @objc func swipe(_ gesture: UISwipeGestureRecognizer) { player.pulse(gesture.direction == .up ? 4 : 5) }
+    @objc func hover(_ gesture: UIHoverGestureRecognizer) {
+        let p = gesture.location(in: self)
+        let s = layer.contentsScale
+        player.invoke { cmvs_apple_pointer($0, p.x * s, p.y * s) }
+    }
+    @objc func rightClick(_ gesture: UITapGestureRecognizer) {
+        let p = gesture.location(in: self)
+        let s = layer.contentsScale
+        var inside = false
+        player.invoke {
+            let result = cmvs_apple_pointer($0, p.x * s, p.y * s)
+            inside = result == 1
+            return result
+        }
+        if inside { player.pulse(3) }
+    }
+    private func send(_ touches: Set<UITouch>, _ phase: UInt32) {
+        for t in touches {
+            let id = UInt64(UInt(bitPattern: Unmanaged.passUnretained(t).toOpaque()))
+            let p = t.location(in: self)
+            let s = layer.contentsScale
+            player.invoke { cmvs_apple_touch($0, id, phase, p.x * s, p.y * s) }
+        }
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if touches.allSatisfy({ $0.type == .indirectPointer }), event?.buttonMask.contains(.secondary) == true {
+            return
+        }
+        contacts.formUnion(touches)
+        if contacts.count > 1 {
+            blocked = true
+            send(contacts, 3)
+        }
+        if !blocked { send(touches, 0) }
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { if !blocked { send(touches, 1) } }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if !blocked { send(touches.intersection(contacts), 2) }
+        contacts.subtract(touches)
+        if contacts.isEmpty { blocked = false }
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        send(touches, 3)
+        contacts.subtract(touches)
+        if contacts.isEmpty { blocked = false }
+    }
+    private func keys(_ presses: Set<UIPress>, _ down: Bool) -> Set<UIPress> {
+        var remaining = presses
+        for p in presses {
+            guard let key = p.key, !key.modifierFlags.contains(.command), let code = Self.code(Int(key.keyCode.rawValue))
+            else { continue }
+            player.key(code, down)
+            remaining.remove(p)
+        }
+        return remaining
+    }
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        super.pressesBegan(keys(presses, true), with: event)
+    }
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        super.pressesEnded(keys(presses, false), with: event)
+    }
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        super.pressesCancelled(keys(presses, false), with: event)
+    }
+
+    static func code(_ hid: Int) -> UInt32? {
+        switch hid {
+        case 4...29: return UInt32(86 + hid - 4)
+        case 30...38: return UInt32(77 + hid - 30)
+        case 58...69: return UInt32(52 + hid - 58)
+        case 104...115: return UInt32(64 + hid - 104)
+        case 89...97: return UInt32(38 + hid - 89)
+        default:
+            return [
+                39: 76, 40: 22, 41: 25, 42: 20, 43: 21, 44: 26, 45: 115, 46: 113, 47: 119, 48: 121, 49: 120, 51: 112,
+                52: 122, 53: 118, 54: 114, 55: 116, 56: 117, 73: 31, 74: 30, 75: 27, 76: 32, 77: 29, 78: 28, 79: 36,
+                80: 35, 81: 34, 82: 33, 84: 51, 85: 47, 86: 49, 87: 48, 88: 22, 98: 37, 99: 50, 224: 24, 225: 23,
+                228: 24, 229: 23,
+            ][hid]
+        }
+    }
+}
+
+@MainActor final class OrientationDelegate: NSObject, UIApplicationDelegate {
+    private static var mask: UIInterfaceOrientationMask = .allButUpsideDown
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?)
+        -> UIInterfaceOrientationMask
+    { Self.mask }
+    static func playing(_ value: Bool) {
+        mask = value ? .landscape : .allButUpsideDown
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+        where scene.activationState == .foregroundActive {
+            scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
+        }
+    }
+}

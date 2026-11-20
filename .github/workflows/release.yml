@@ -103,9 +103,36 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  apple:
+    name: Apple players
+    needs: [verify]
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
+      - run: brew install xcodegen
+      - name: Package players
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          sh platforms/apple/build.sh macos
+          sh platforms/apple/build.sh ios --reuse-framework
+          mkdir -p dist target/apple/Payload
+          ditto -c -k --keepParent target/apple/macos/Cmvs.app "dist/cmvs-macos-$TAG.zip"
+          ditto target/apple/ios/Cmvs.app target/apple/Payload/Cmvs.app
+          ditto -c -k --keepParent target/apple/Payload "dist/cmvs-ios-$TAG.ipa"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-apple
+          path: dist/*
+          if-no-files-found: error
+
   publish:
     name: publish release
-    needs: [switch, psvita]
+    needs: [switch, psvita, apple]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

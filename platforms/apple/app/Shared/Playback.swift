@@ -1,0 +1,299 @@
+import CmvsAppleC
+import QuartzCore
+import SwiftUI
+
+#if os(iOS)
+    import AVFAudio
+#endif
+
+@MainActor @Observable final class Playback: NSObject, Identifiable {
+    let game: Game
+    let font: FontFace
+    let fonts: [FontFace]
+    let engine = Engine()
+    let cpu = CALayer()
+    private var clock: CADisplayLink?
+    private var previous: CFTimeInterval?
+    private var frames = 0
+    private var active = true
+    private var interrupted = false
+    private var focused = true
+    private var closed = false
+    private(set) var ready = false
+    var title: String
+    var error: String?
+    var dialog: [String: Any]?
+    var draft = ""
+    var controls = false
+    var fast = false
+    var fullscreen: ((Bool) -> Void)?
+    var cursorVisible: ((Bool) -> Void)?
+    var cursor: (([String: Any]?) -> Void)?
+    var closeError: ((String) -> Void)?
+    var quit: (() -> Void)?
+    var encoding: String
+    private var mode = 1
+    private var logicalSize: [Int]
+    private var viewSize = CGSize.zero
+    private var scale: CGFloat = 1
+    private var smokeFrames = Int(ProcessInfo.processInfo.environment["CMVS_SMOKE_FRAMES"] ?? "") ?? 0
+    init(_ game: Game, _ font: FontFace, _ fonts: [FontFace]) {
+        self.game = game
+        self.font = font
+        self.fonts = fonts
+        title = game.name
+        encoding = game.info.encoding
+        logicalSize = game.info.size
+    }
+    func start(_ layer: CAMetalLayer, size: CGSize, scale: CGFloat, link: CADisplayLink) {
+        guard clock == nil, !closed else {
+            link.invalidate()
+            return
+        }
+        clock = link
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        layer.addSublayer(cpu)
+        layer.masksToBounds = true
+        cpu.contentsGravity = .resize
+        resize(size, scale)
+        #if os(iOS)
+            do {
+                if game.options.native_audio {
+                    let audio = AVAudioSession.sharedInstance()
+                    try audio.setCategory(.playback)
+                    try audio.setActive(true)
+                    NotificationCenter.default.addObserver(
+                        self, selector: #selector(audioInterrupted), name: AVAudioSession.interruptionNotification,
+                        object: audio)
+                    NotificationCenter.default.addObserver(
+                        self, selector: #selector(routeChanged), name: AVAudioSession.routeChangeNotification,
+                        object: audio)
+                }
+            } catch {
+                fail(error)
+                return
+            }
+        #endif
+        let width = UInt32(size.width * scale)
+        let height = UInt32(size.height * scale)
+        let engine = engine
+        let game = game
+        let font = font
+        engine.queue.async {
+            let result = Result { try engine.open(game, font: font, layer: layer, width: width, height: height) }
+            DispatchQueue.main.async {
+                guard !self.closed else { return }
+                do {
+                    let info = try result.get()
+                    self.encoding = info["encoding"] as? String ?? self.encoding
+                    self.logicalSize = info["size"] as? [Int] ?? self.logicalSize
+                    self.ready = true
+                    self.display(info)
+                    self.syncActivity()
+                    link.add(to: .main, forMode: .common)
+                } catch { self.fail(error) }
+            }
+        }
+    }
+    func resize(_ size: CGSize, _ scale: CGFloat) {
+        viewSize = size
+        self.scale = scale
+        let width = UInt32(size.width * scale)
+        let height = UInt32(size.height * scale)
+        if ready { invoke { cmvs_apple_resize($0, width, height) } }
+        let w = CGFloat(logicalSize[0])
+        let h = CGFloat(logicalSize[1])
+        var factor = min(size.width / w, size.height / h)
+        if mode == 2 { factor = max(size.width / w, size.height / h) }
+        if mode == 0 { factor = min(1 / scale, factor) }
+        let target = mode == 3 ? size : CGSize(width: w * factor, height: h * factor)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        cpu.frame = CGRect(
+            x: (size.width - target.width) / 2, y: (size.height - target.height) / 2, width: target.width,
+            height: target.height)
+        CATransaction.commit()
+    }
+    func scene(_ value: Bool) {
+        active = value
+        syncActivity()
+    }
+    func focus(_ value: Bool) {
+        focused = value
+        syncActivity()
+    }
+    private func syncActivity() {
+        let paused = !active || !focused || interrupted || dialog != nil || error != nil
+        previous = nil
+        if paused { fast = false }
+        clock?.isPaused = paused
+        if ready { invoke { cmvs_apple_pause($0, paused) } }
+    }
+    #if os(iOS)
+        @objc private func audioInterrupted(_ note: Notification) {
+            guard let kind = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt else { return }
+            Task { @MainActor in
+                interrupted = kind == AVAudioSession.InterruptionType.began.rawValue
+                if !interrupted { do { try AVAudioSession.sharedInstance().setActive(true) } catch { fail(error) } }
+                syncActivity()
+            }
+        }
+        @objc private func routeChanged(_ note: Notification) {
+            guard let reason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue
+            else { return }
+            Task { @MainActor in
+                interrupted = true
+                controls = true
+                syncActivity()
+            }
+        }
+        func resumeAudio() {
+            interrupted = false
+            syncActivity()
+        }
+    #endif
+    @objc func step(_ link: CADisplayLink) {
+        guard ready, !closed else { return }
+        let delta = UInt32(min(250, max(0, (link.timestamp - (previous ?? link.timestamp - 0.016)) * 1000)))
+        do {
+            let result = try engine.queue.sync { () -> (Int32, CGImage?, [[String: Any]]) in
+                guard let api = engine.api else { throw PlayerError("Game closed.") }
+                let result = cmvs_apple_tick(api.handle, delta)
+                if result < 0 {
+                    let fallback = PlayerError(api.text)
+                    if cmvs_apple_next_event(api.handle) == 1,
+                       let stop = try? JSONDecoder().decode(StopDiagnostic.self, from: Data(api.text.utf8)) {
+                        throw stop
+                    }
+                    throw fallback
+                }
+                var events = [[String: Any]]()
+                while cmvs_apple_next_event(api.handle) == 1 { events.append(try api.object()) }
+                let image = result == 1 && !game.options.metal ? try engine.image() : nil
+                return (result, image, events)
+            }
+            if result.0 == 2 {
+                finish()
+                return
+            }
+            if result.0 == 1 {
+                previous = link.timestamp
+                frames += 1
+                if let image = result.1 { cpu.contents = image }
+            }
+            for e in result.2 {
+                switch e["kind"] as? String {
+                case "title": title = e["text"] as? String ?? title
+                case "display": display(e)
+                case "visibility": cursorVisible?(e["visible"] as? Bool ?? true)
+                case "cursor": cursor?(e["cursor"] as? [String: Any])
+                case "message", "font", "comment":
+                    draft = e["text"] as? String ?? ""
+                    dialog = e
+                    syncActivity()
+                default: break
+                }
+            }
+            if smokeFrames > 0 && frames == smokeFrames {
+                if let path = ProcessInfo.processInfo.environment["CMVS_SMOKE_OUTPUT"] {
+                    try engine.queue.sync { try engine.screenshot(to: URL(fileURLWithPath: path)) }
+                }
+                NSLog("CMVS_SMOKE_OK frames=%d", frames)
+                finish()
+            }
+        } catch { fail(error) }
+    }
+    private func display(_ info: [String: Any]) {
+        mode = info["mode"] as? Int ?? 1
+        let filter: CALayerContentsFilter = info["linear"] as? Bool == true ? .linear : .nearest
+        cpu.magnificationFilter = filter
+        cpu.minificationFilter = filter
+        resize(viewSize, scale)
+        if let value = info["fullscreen"] as? Bool { fullscreen?(value) }
+    }
+    func invoke(_ f: (OpaquePointer) -> Int32) {
+        guard ready, !closed else { return }
+        do { try engine.queue.sync { if let api = engine.api { try api.check(f(api.handle)) } } } catch { fail(error) }
+    }
+    func key(_ code: UInt32, _ down: Bool) { invoke { cmvs_apple_key($0, code, down) } }
+    func pulse(_ code: UInt32) {
+        key(code, true)
+        key(code, false)
+    }
+    func toggleFast() {
+        fast.toggle()
+        key(24, fast)
+    }
+    func capture() {
+        do {
+            let dir = Library.base.appending(path: "Screenshots")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try engine.queue.sync { try engine.screenshot(to: dir.appending(path: "\(UUID()).png")) }
+        } catch { fail(error) }
+    }
+    var validDraft: Bool {
+        guard let limit = dialog?["limit"] as? Int, let bytes = dialog?["bytes"] as? Int else { return true }
+        return engine.queue.sync {
+            guard let api = engine.api else { return false }
+            return cmvs_apple_comment_valid(api.handle, draft, UInt32(limit), UInt32(bytes)) == 1
+        }
+    }
+    func answer(_ accepted: Bool, face: FontFace? = nil) {
+        guard let e = dialog else { return }
+        switch e["kind"] as? String {
+        case "comment":
+            let id = (e["id"] as? NSNumber)?.uint32Value ?? 0
+            invoke { accepted ? cmvs_apple_comment($0, id, draft) : cmvs_apple_comment($0, id, nil) }
+        case "font":
+            invoke { handle in
+                if let face { return cmvs_apple_font(handle, face.url.path, face.index) }
+                return cmvs_apple_font(handle, nil, 0)
+            }
+        default: invoke { cmvs_apple_message($0, accepted) }
+        }
+        dialog = nil
+        syncActivity()
+    }
+    func fail(_ cause: Error) {
+        clock?.isPaused = true
+        if ready { engine.queue.sync { if let api = engine.api { _ = cmvs_apple_pause(api.handle, true) } } }
+        error = cause.localizedDescription
+    }
+    func close() {
+        guard !closed else { return }
+        closed = true
+        clock?.invalidate()
+        clock = nil
+        NotificationCenter.default.removeObserver(self)
+        defer { quit = nil }
+        if !ready {
+            let engine = engine
+            let report = closeError
+            engine.queue.async {
+                do { try engine.close() }
+                catch { DispatchQueue.main.async { report?(error.localizedDescription) } }
+            }
+        } else {
+            do {
+                try engine.queue.sync {
+                    if frames > 0 {
+                        try? engine.screenshot(to: Library.base.appending(path: "\(game.id).png"))
+                    }
+                    try engine.close()
+                }
+            } catch { closeError?(error.localizedDescription) }
+        }
+        ready = false
+        #if os(iOS)
+            if game.options.native_audio {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            }
+        #endif
+    }
+    func finish() {
+        let exit = quit
+        close()
+        exit?()
+    }
+}

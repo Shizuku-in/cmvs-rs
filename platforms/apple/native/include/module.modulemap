@@ -1,0 +1,4 @@
+module CmvsAppleC {
+    header "cmvs_apple.h"
+    export *
+}

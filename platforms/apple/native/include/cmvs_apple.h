@@ -1,0 +1,42 @@
+#pragma once
+#include <stdbool.h>
+#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* Serialize all calls per handle. Copy borrowed text/pixels before the next
+ * mutation. All strings are NUL-terminated UTF-8. Status -1 sets error text. */
+typedef struct CmvsApple CmvsApple;
+CmvsApple *cmvs_apple_create(void);
+void cmvs_apple_destroy(CmvsApple *);
+const char *cmvs_apple_text(const CmvsApple *);
+int32_t cmvs_apple_list_profiles(CmvsApple *);
+/* NULL profile and encoding select automatic inspection. */
+int32_t cmvs_apple_inspect_game(CmvsApple *, const char *path, const char *profile, const char *encoding);
+int32_t cmvs_apple_validate_font(CmvsApple *, const char *path, uint32_t face);
+int32_t cmvs_apple_open(CmvsApple *, const char *config_json);
+/* Retain the CAMetalLayer until detach returns. Dimensions are physical pixels. */
+int32_t cmvs_apple_attach_metal_layer(CmvsApple *, void *, uint32_t width, uint32_t height);
+int32_t cmvs_apple_resize(CmvsApple *, uint32_t width, uint32_t height);
+int32_t cmvs_apple_fullscreen(CmvsApple *, bool fullscreen);
+int32_t cmvs_apple_detach(CmvsApple *);
+/* 0 budget slice, 1 completed frame, 2 quit, 3 inactive */
+int32_t cmvs_apple_tick(CmvsApple *, uint32_t delta_ms);
+/* Returns 1 with one JSON event in text, or 0 if empty. After a stopped
+ * tick, the first event includes the script, PC, step count and reason. */
+int32_t cmvs_apple_next_event(CmvsApple *);
+int32_t cmvs_apple_key(CmvsApple *, uint32_t code, bool pressed);
+int32_t cmvs_apple_pointer(CmvsApple *, double x, double y);
+/* Physical surface pixels. Touch phases are begin/move/end/cancel (0..3). */
+int32_t cmvs_apple_touch(CmvsApple *, uint64_t id, uint32_t phase, double x, double y);
+int32_t cmvs_apple_pause(CmvsApple *, bool paused);
+int32_t cmvs_apple_save_preferences(CmvsApple *);
+int32_t cmvs_apple_comment(CmvsApple *, uint32_t id, const char *text);
+int32_t cmvs_apple_font(CmvsApple *, const char *path, uint32_t face);
+int32_t cmvs_apple_message(CmvsApple *, bool accept);
+int32_t cmvs_apple_backup(CmvsApple *, const char *game, const char *user, bool local, const char *zip, bool restore);
+int32_t cmvs_apple_comment_valid(CmvsApple *, const char *text, uint32_t chars, uint32_t bytes);
+int32_t cmvs_apple_read_frame(CmvsApple *, const uint8_t **pixels);
+#ifdef __cplusplus
+}
+#endif

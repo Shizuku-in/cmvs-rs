@@ -36,8 +36,8 @@ cmake --build target/host-android
 
 For embedding, add this directory with `add_subdirectory` and link `cmvs_host`.
 `CMVS_CARGO_TARGET_DIR` may select a shared Cargo cache. Apple toolchains choose
-the device or simulator Rust target from the normalized SDK path. The UIKit
-application builder remains in [`platforms/apple`](../apple/README.md).
+the device or simulator Rust target from the normalized SDK path. The SwiftUI
+launcher and its Apple-specific bridge are in [`platforms/apple`](../apple/README.md).
 
 On Android, call `cmvs_host_initialize_android(java_vm, application_context)`
 before opening a player with native audio. The context must be a JNI global

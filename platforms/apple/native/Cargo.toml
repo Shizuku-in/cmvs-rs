@@ -1,0 +1,25 @@
+[package]
+name = "cmvs-apple"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[dependencies]
+cmvs-host = { path = "../../../crates/cmvs-host", default-features = false, features = ["std-fs"] }
+cmvs-core = { path = "../../../crates/cmvs-core" }
+cmvs-font = { path = "../../../crates/cmvs-font" }
+cmvs-input = { path = "../../../crates/cmvs-input" }
+cmvs-audio = { path = "../../../crates/cmvs-audio", features = ["native"] }
+cmvs-wgpu = { path = "../../../crates/cmvs-wgpu" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "=1.0.154"
+zip = { version = "=7.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+tempfile.workspace = true
