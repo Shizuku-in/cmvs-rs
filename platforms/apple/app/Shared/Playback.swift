@@ -256,6 +256,7 @@ import SwiftUI
         syncActivity()
     }
     func fail(_ cause: Error) {
+        if smokeFrames > 0 { NSLog("CMVS_SMOKE playback failed: %@", cause.localizedDescription) }
         clock?.isPaused = true
         if ready { engine.queue.sync { if let api = engine.api { _ = cmvs_apple_pause(api.handle, true) } } }
         error = cause.localizedDescription

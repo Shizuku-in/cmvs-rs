@@ -25,4 +25,4 @@ Release 流程将 macOS 通用应用打包为 ZIP，将 iOS 真机应用打包�
 
 在 Linux 或 macOS 上运行 `cargo test --locked -p cmvs-apple` 可检查 Rust 桥接层与存档备份恢复。Linux 上的 CPU 冒烟测试已从合成游戏读回非黑的 64×48 逻辑帧。
 
-Apple CI 配置了三种应用构建、Swift 模拟器测试和 Metal 截帧检查。手动复现模拟器检查时，用 `SIMCTL_CHILD_` 前缀向 `simctl launch` 传入游戏目录、字体、截帧帧数和输出路径。完整命令见 [Apple CI 步骤](../../.github/workflows/ci.yml)。新版 SwiftUI 播放器的 Apple CI 结果及真机音频中断、触控和存读档验证仍待确认。
+Apple CI 构建三种应用，运行 Swift 模拟器测试，并检查逻辑帧为 64×48 且非黑屏。模拟器没有 Metal 设备时，冒烟测试使用 CPU 渲染。复现命令见 [Apple CI 步骤](../../.github/workflows/ci.yml)。真机音频中断、触控和存读档仍待验证。

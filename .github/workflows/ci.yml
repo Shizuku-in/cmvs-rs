@@ -313,7 +313,11 @@ jobs:
             test -s "$SIMCTL_CHILD_CMVS_SMOKE_OUTPUT" && break
             sleep 1
           done
-          swift tests/check_frame.swift "$SIMCTL_CHILD_CMVS_SMOKE_OUTPUT"
+          if ! test -s "$SIMCTL_CHILD_CMVS_SMOKE_OUTPUT" || ! swift tests/check_frame.swift "$SIMCTL_CHILD_CMVS_SMOKE_OUTPUT"; then
+            xcrun simctl spawn "$device" log show --last 5m --predicate 'eventMessage CONTAINS "CMVS_SMOKE"' || true
+            echo "::error::Simulator smoke test did not produce a valid logical frame"
+            exit 1
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: cmvs-apple

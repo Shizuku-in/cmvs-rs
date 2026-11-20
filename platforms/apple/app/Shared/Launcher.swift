@@ -1,5 +1,6 @@
 import CmvsAppleC
 import ImageIO
+import Metal
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -157,6 +158,12 @@ private struct Launcher: View {
                 do {
                     var options = library.data.defaults
                     options.profile = env["CMVS_PROFILE"] ?? options.profile
+                    #if targetEnvironment(simulator)
+                        if options.metal && MTLCreateSystemDefaultDevice() == nil {
+                            options.metal = false
+                        }
+                    #endif
+                    NSLog("CMVS_SMOKE renderer=%@", options.metal ? "Metal" : "CPU")
                     if let path = env["CMVS_FONT"] {
                         let fonts = try FontFace.read(URL(fileURLWithPath: path), file: path)
                         library.systemFonts += fonts
@@ -168,7 +175,10 @@ private struct Launcher: View {
                             progress: Progress(totalUnitCount: -1))
                     }.value
                     play(game)
-                } catch { library.error = error.localizedDescription }
+                } catch {
+                    NSLog("CMVS_SMOKE launch failed: %@", error.localizedDescription)
+                    library.error = error.localizedDescription
+                }
             }
         }
     }
@@ -325,7 +335,10 @@ private struct Launcher: View {
             #if os(macOS)
                 openWindow(id: "player")
             #endif
-        } catch { library.error = error.localizedDescription }
+        } catch {
+            if smokeStarted { NSLog("CMVS_SMOKE playback setup failed: %@", error.localizedDescription) }
+            library.error = error.localizedDescription
+        }
     }
 }
 
