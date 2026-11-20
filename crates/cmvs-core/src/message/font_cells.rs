@@ -894,14 +894,20 @@ pub(crate) fn auxiliary_line_break(
     let inseparable = call.argument(12, "inseparable characters")?;
     let max_overflow = call.argument(16, "maximum overflow")? as i32;
     let resolve = |raw| -> Result<Vec<u8>, DecodeError> {
-        let bytes = call.vm.resolve_string(raw)?;
-        let bytes = bytes.split(|&b| b == 0).next().unwrap_or_default();
-        if bytes.len() >= 64 || bytes.len() % 2 != 0 {
-            return Err(
-                call.error("auxiliary line-break set exceeds 63 bytes or has an odd length")
-            );
+        let mut bytes = call.vm.resolve_string(raw)?;
+        if let Some(end) = bytes.iter().position(|&byte| byte == 0) {
+            bytes.truncate(end);
         }
-        Ok(bytes.to_vec())
+        if bytes.len() >= 64 {
+            return Err(call.error("auxiliary line-break set exceeds 63 bytes"));
+        }
+        if call.vm.text_encoding() == TextEncoding::Utf8 {
+            core::str::from_utf8(&bytes)
+                .map_err(|_| call.error("auxiliary line-break set is not valid UTF-8"))?;
+        } else if bytes.len() % 2 != 0 {
+            return Err(call.error("auxiliary line-break set has an odd length"));
+        }
+        Ok(bytes)
     };
     let rules = super::LineBreakRules {
         max_overflow,

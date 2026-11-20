@@ -1081,6 +1081,41 @@ fn auxiliary_queries_restore_pen_preserve_glyphs_and_report_bytes_or_font_widths
 }
 
 #[test]
+fn auxiliary_rules_accept_odd_length_utf8_sets_and_reject_invalid_utf8() {
+    let script = content_script(
+        &[
+            (0x2380, &[7, 0, 24, 64]),
+            (0x23b8, &[7, 0x80000000, 0x80000001, 4]),
+        ],
+        b"",
+    );
+    let mut vm = Machine::new_with_encoding(&script, cmvs_core::TextEncoding::Utf8).unwrap();
+    let mut messages = MessageHost::default();
+    research_call(&mut vm, &mut messages).unwrap();
+
+    let hanging = "。、」』）！？”～ー♪".as_bytes();
+    let inseparable = "…―─".as_bytes();
+    vm.state_mut().set_string(0, hanging).unwrap();
+    vm.state_mut().set_string(1, b"\xff\xff").unwrap();
+    let result = research_call(&mut vm, &mut messages).unwrap_err();
+    assert!(result.to_string().contains("not valid UTF-8"));
+    assert!(messages.auxiliary_text(7).unwrap().line_break.is_none());
+
+    vm.state_mut().set_string(1, inseparable).unwrap();
+    research_call(&mut vm, &mut messages).unwrap();
+    let rules = messages
+        .auxiliary_text(7)
+        .unwrap()
+        .line_break
+        .as_ref()
+        .unwrap();
+    assert_eq!(rules.hanging, hanging);
+    assert_eq!(rules.inseparable, inseparable);
+    assert_eq!(rules.max_overflow, 4);
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
 fn auxiliary_rule_errors_are_retryable_without_changing_rules_or_results() {
     for bad in [vec![0x82], vec![0x82; 64]] {
         let script = content_script(
