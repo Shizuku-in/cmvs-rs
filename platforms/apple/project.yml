@@ -29,7 +29,6 @@ targetTemplates:
       base:
         PRODUCT_NAME: Cmvs
         PRODUCT_BUNDLE_IDENTIFIER: org.cmvs.player
-        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/native/include"
         OTHER_LDFLAGS: "$(inherited) -lc++ -lz -framework Metal -framework QuartzCore -framework CoreGraphics -framework Security -framework SystemConfiguration -framework AudioToolbox -framework CoreAudio -framework AVFAudio -framework CoreFoundation -framework Foundation"
 targets:
   CmvsMac:
