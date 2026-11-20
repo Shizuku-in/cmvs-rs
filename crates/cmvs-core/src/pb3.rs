@@ -11,6 +11,17 @@
 use crate::{FormatError, MAX_PAYLOAD, image::DecodeThreads, jbp1, raster::RgbaImage};
 use std::ops::Range;
 
+const NAME_KEY: [u8; 16] = [
+    0xa6, 0x75, 0xf3, 0x9c, 0xc5, 0x69, 0x78, 0xa3, 0x3e, 0xa5, 0x4f, 0x79, 0x59, 0xfe, 0x3a, 0xc7,
+];
+
+#[cfg(feature = "encode")]
+mod write;
+#[cfg(feature = "encode")]
+pub use crate::pb_write::Compression;
+#[cfg(feature = "encode")]
+pub use write::{ImageType, encode_image};
+
 pub(crate) fn u16_at(b: &[u8], at: usize) -> Result<u16, FormatError> {
     let v = b.get(at..at + 2).ok_or(FormatError("truncated PB3 u16"))?;
     Ok(u16::from_le_bytes([v[0], v[1]]))
@@ -276,14 +287,10 @@ pub fn reference_name(raw: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
     if h.bpp != 32 {
         return Err(FormatError("PB3 types 6/8 require 32 bits per pixel"));
     }
-    let key = [
-        0xa6, 0x75, 0xf3, 0x9c, 0xc5, 0x69, 0x78, 0xa3, 0x3e, 0xa5, 0x4f, 0x79, 0x59, 0xfe, 0x3a,
-        0xc7,
-    ];
     let stem: Vec<_> = raw[52..84]
         .iter()
         .enumerate()
-        .map(|(i, b)| b ^ key[i % 16])
+        .map(|(i, b)| b ^ NAME_KEY[i % 16])
         .collect();
     let end = stem
         .iter()

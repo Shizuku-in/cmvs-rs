@@ -1,4 +1,4 @@
-//! MSK0 8-bit transition mask decoder used by CVNS.
+//! MSK0 8-bit transition masks and glyph atlases used by CVNS.
 
 // Format reference: cvns.exe SHA-256 8e6044466b928d77f0a94a0d0f32fe48190596bf628115598881c2aa3a4885aa,
 // sub_43D090 (base 0x400000).
@@ -23,18 +23,8 @@ impl Header {
             width: u32_at(raw, 8)?,
             height: u32_at(raw, 12)?,
         };
-        let count = u64::from(h.width)
-            .checked_mul(u64::from(h.height))
-            .ok_or(FormatError("MSK0 dimensions overflow"))?;
-        let rgba_bytes = count
-            .checked_mul(4)
-            .ok_or(FormatError("MSK0 RGBA size overflow"))?;
-        if h.width == 0 || h.height == 0 || rgba_bytes > MAX_PAYLOAD as u64 {
-            return Err(FormatError("MSK0 dimensions exceed research bounds"));
-        }
-        let offset =
-            usize::try_from(h.data_offset).map_err(|_| FormatError("MSK0 offset overflow"))?;
-        let pixels = usize::try_from(count).map_err(|_| FormatError("MSK0 size overflow"))?;
+        let pixels = pixel_count(h.width, h.height)?;
+        let offset = h.data_offset as usize;
         let end = offset
             .checked_add(pixels)
             .ok_or(FormatError("MSK0 payload end overflow"))?;
@@ -43,6 +33,30 @@ impl Header {
         }
         Ok(h)
     }
+}
+
+/// Number of mask samples within the decoder's RGBA allocation limit.
+pub fn pixel_count(width: u32, height: u32) -> Result<usize, FormatError> {
+    let count = u64::from(width) * u64::from(height);
+    if count == 0 || count > (MAX_PAYLOAD / 4) as u64 {
+        return Err(FormatError("MSK0 dimensions exceed research bounds"));
+    }
+    Ok(count as usize)
+}
+
+/// Write an MSK0 with contiguous rows of unmodified, single-channel samples.
+#[cfg(feature = "encode")]
+pub fn encode(width: u32, height: u32, samples: &[u8]) -> Result<Vec<u8>, FormatError> {
+    if samples.len() != pixel_count(width, height)? {
+        return Err(FormatError("MSK0 sample count differs from dimensions"));
+    }
+    let mut out = Vec::with_capacity(16 + samples.len());
+    out.extend_from_slice(b"MSK0");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&height.to_le_bytes());
+    out.extend_from_slice(samples);
+    Ok(out)
 }
 
 /// Decodes raw 8-bit mask intensities along with `(width, height)`.

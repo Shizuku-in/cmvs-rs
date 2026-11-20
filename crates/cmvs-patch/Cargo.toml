@@ -15,6 +15,7 @@ name = "cmvs-patch"
 path = "src/main.rs"
 
 [dependencies]
+cmvs-assembler = { path = "../cmvs-assembler" }
 cmvs-core = { path = "../cmvs-core" }
 encoding_rs.workspace = true
 png.workspace = true

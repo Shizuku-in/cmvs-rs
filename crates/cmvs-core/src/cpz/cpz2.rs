@@ -6,6 +6,8 @@ use crate::FormatError;
 use std::io::{Read, Seek, SeekFrom};
 
 pub const CPZ2_HEADER_SIZE: usize = 20;
+pub(super) const INDEX_KEY_MASK: u32 = 0x77777777 ^ 0x37a9f45b;
+pub(super) const FILE_KEY_MASK: u32 = 0x796c3afd;
 
 /// The 64-byte Shift-JIS phrase embedded in cvns.exe. The reader XORs it with a
 /// byte stream starting at 55 and stepping by -41, then uses it as sixteen
@@ -22,20 +24,29 @@ const TABLE: [u32; 16] = {
     table
 };
 
-fn decrypt(bytes: &mut [u8], key: u32) {
+pub(super) fn crypt(bytes: &mut [u8], key: u32, encrypt: bool) {
     let table = TABLE.map(|v| v.wrapping_add(key));
     let shift = ((0..8).fold(5u32, |v, n| v ^ (key >> (4 * n))) & 15) + 8;
     let mut flag = 0;
     let (chunks, tail) = bytes.as_chunks_mut::<4>();
     for chunk in chunks {
-        let value = (word(chunk) ^ table[flag])
-            .wrapping_sub(0x0015_c3e7)
-            .rotate_right(shift);
+        let value = if encrypt {
+            word(chunk).rotate_left(shift).wrapping_add(0x0015_c3e7) ^ table[flag]
+        } else {
+            (word(chunk) ^ table[flag])
+                .wrapping_sub(0x0015_c3e7)
+                .rotate_right(shift)
+        };
         chunk.copy_from_slice(&value.to_le_bytes());
         flag = (flag + 1) & 15;
     }
     for (i, byte) in tail.iter_mut().enumerate() {
-        *byte = (*byte ^ (table[flag] >> (4 * i)) as u8).wrapping_add(55);
+        let xor = (table[flag] >> (4 * i)) as u8;
+        *byte = if encrypt {
+            byte.wrapping_sub(55) ^ xor
+        } else {
+            (*byte ^ xor).wrapping_add(55)
+        };
         flag = (flag + 1) & 15;
     }
 }
@@ -73,7 +84,7 @@ pub struct Cpz2Index {
     pub layout: Cpz2Layout,
     entries: Vec<Entry>,
     lookup: flat::FlatLookup,
-    entry_keys: Vec<u32>,
+    pub(super) entry_keys: Vec<u32>,
 }
 
 impl Cpz2Index {
@@ -91,7 +102,7 @@ impl Cpz2Index {
         if cpz3_checksum(&bytes) != layout.index_checksum_raw {
             return Err(FormatError("CPZ2 index checksum mismatch").into());
         }
-        decrypt(&mut bytes, word(&header[16..]) ^ 0x77777777 ^ 0x37a9f45b);
+        crypt(&mut bytes, word(&header[16..]) ^ INDEX_KEY_MASK, false);
         let (entries, keys) =
             flat::records(&bytes, layout.file_count, layout.data_offset, file_bytes)?;
         let lookup = flat::FlatLookup::from_entries(&entries);
@@ -99,7 +110,7 @@ impl Cpz2Index {
             layout,
             entries,
             lookup,
-            entry_keys: keys.into_iter().map(|key| key ^ 0x796c3afd).collect(),
+            entry_keys: keys.into_iter().map(|key| key ^ FILE_KEY_MASK).collect(),
         })
     }
 
@@ -148,7 +159,7 @@ impl Cpz2Index {
         if verify && cpz3_checksum(&bytes) != self.entries[index].checksum_raw {
             return Err(FormatError("CPZ2 resource checksum mismatch").into());
         }
-        decrypt(&mut bytes, self.entry_keys[index]);
+        crypt(&mut bytes, self.entry_keys[index], false);
         Ok(bytes)
     }
 }

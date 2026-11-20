@@ -1,7 +1,7 @@
 //! Cross-platform CMVS session bootstrap and runtime configuration over [`HostFs`].
 use crate::{
     EncodingPolicy, GpuFrameSource, GpuTarget, InputState, compose_cpu_frame_with_capture,
-    compose_gpu_frame, resolve_encoding_with_fs, with_gpu_target,
+    compose_gpu_frame, resolve_profile_encoding_with_fs, with_gpu_target,
 };
 use cmvs_core::{
     FormatError, TextEncoding,
@@ -209,7 +209,14 @@ impl GameBootstrap {
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let game = Registry::builtin().identify_game_with_fs(&*fs, root, profile_id)?;
         let script = load_start_with_fs(&*fs, root, &game.files)?;
-        let encoding = resolve_encoding_with_fs(&*fs, root, &game.files, &script, encoding_policy)?;
+        let encoding = resolve_profile_encoding_with_fs(
+            &*fs,
+            root,
+            &game.files,
+            &script,
+            encoding_policy,
+            Some(game.selection.profile),
+        )?;
         Ok(Self {
             fs,
             root: root.to_path_buf(),

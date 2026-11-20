@@ -18,7 +18,7 @@ impl Cipher {
             }
             ArchiveIndex::Cpz3(_) => unreachable!("CPZ3 has a separate flat-index writer"),
             ArchiveIndex::Cpz1(_) | ArchiveIndex::Cpz2(_) => {
-                unreachable!("CPZ1/CPZ2 are read-only")
+                unreachable!("flat archives use their own cipher")
             }
         }
     }
@@ -169,7 +169,7 @@ impl Cipher {
             flag = (flag + 1) % 24;
         }
     }
-    pub fn encode_resource(&self, bytes: &mut [u8], directory: u32, file: u32, directories: u32) {
+    pub fn resource(&self, directory: u32, file: u32, directories: u32) -> Resource {
         let keys = self.keys();
         let resource = (keys.key ^ directory.wrapping_add(file)).wrapping_add(directories);
         let seed = match self {
@@ -185,34 +185,68 @@ impl Cipher {
         let decrypt: [u32; 24] = std::array::from_fn(|i| {
             u32::from_le_bytes(key_bytes[i * 4..i * 4 + 4].try_into().unwrap()) ^ seed
         });
-        let mut key: u32 = match self {
+        let key: u32 = match self {
             Self::Cpz5(Cpz5Mode::Mode9, _) => 0x2547b39e,
             Self::Cpz5(..) => 0x2547a39e,
             _ => 0x2748c39e,
         };
-        let mut flag = if matches!(self, Self::Cpz5(..)) {
+        let flag = if matches!(self, Self::Cpz5(..)) {
             9
         } else {
             10
         };
-        let (words, tail) = bytes.as_chunks_mut::<4>();
-        for word in words {
-            let value = u32::from_le_bytes(*word);
-            *word = ((value ^ keys.digest[(key & 3) as usize]).wrapping_add(seed)
-                ^ (decrypt[flag] >> 1)
-                ^ decrypt[((key >> 6) & 15) as usize])
-                .to_le_bytes();
-            key = key.wrapping_add(seed).wrapping_add(value);
-            flag = (flag + 1) & 15;
-        }
         let xor = match self {
             Self::Cpz5(Cpz5Mode::Mode9, _) => 0xcb,
             Self::Cpz5(..) => 0xbc,
             _ => 0xae,
         };
-        let inverse = inverse(table);
-        for byte in tail {
-            *byte = inverse[*byte as usize] ^ xor;
+        Resource {
+            seed,
+            table,
+            inverse: inverse(table),
+            words: decrypt,
+            key,
+            flag,
+            digest: keys.digest,
+            xor,
+        }
+    }
+}
+
+pub(super) struct Resource {
+    seed: u32,
+    table: [u8; 256],
+    inverse: [u8; 256],
+    words: [u32; 24],
+    key: u32,
+    flag: usize,
+    digest: [u32; 4],
+    xor: u8,
+}
+impl Resource {
+    /// Every non-final chunk is word-aligned. Feedback advances with each plaintext word.
+    pub fn transform(&mut self, bytes: &mut [u8], encode: bool) {
+        let (words, tail) = bytes.as_chunks_mut::<4>();
+        for word in words {
+            let source = u32::from_le_bytes(*word);
+            let mask = (self.words[self.flag] >> 1) ^ self.words[((self.key >> 6) & 15) as usize];
+            let digest = self.digest[(self.key & 3) as usize];
+            let (out, plain) = if encode {
+                ((source ^ digest).wrapping_add(self.seed) ^ mask, source)
+            } else {
+                let plain = (source ^ mask).wrapping_sub(self.seed) ^ digest;
+                (plain, plain)
+            };
+            *word = out.to_le_bytes();
+            self.key = self.key.wrapping_add(self.seed).wrapping_add(plain);
+            self.flag = (self.flag + 1) & 15;
+        }
+        for b in tail {
+            *b = if encode {
+                self.inverse[*b as usize] ^ self.xor
+            } else {
+                self.table[(*b ^ self.xor) as usize]
+            };
         }
     }
 }

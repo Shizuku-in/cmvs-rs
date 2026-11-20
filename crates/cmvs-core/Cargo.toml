@@ -10,6 +10,7 @@ description = "Platform-independent CMVS formats, VM, scene and backend contract
 [features]
 default = ["std-fs"]
 std-fs = []
+encode = []
 
 [lints]
 workspace = true

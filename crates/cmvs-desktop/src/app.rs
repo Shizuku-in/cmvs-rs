@@ -11,7 +11,7 @@ use cmvs_core::{
 };
 use cmvs_host::{
     GameBootstrap, KeyBindingPolicy, SessionConfig, compose_cpu_frame, default_host_fs,
-    resolve_encoding_with_fs,
+    resolve_profile_encoding_with_fs,
 };
 use std::{
     collections::HashSet,
@@ -1053,8 +1053,14 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         println!("{line}");
     }
     let script = load_start_with_fs(&*fs, root.as_ref(), &game.files)?;
-    let encoding =
-        resolve_encoding_with_fs(&*fs, &root, &game.files, &script, choice.into_policy())?;
+    let encoding = resolve_profile_encoding_with_fs(
+        &*fs,
+        &root,
+        &game.files,
+        &script,
+        choice.into_policy(),
+        Some(game.selection.profile),
+    )?;
     if choice == EncodingChoice::Auto {
         let name = cmvs_font::text_codec::name(encoding);
         println!(

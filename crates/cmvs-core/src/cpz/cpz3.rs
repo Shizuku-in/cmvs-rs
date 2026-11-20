@@ -6,6 +6,8 @@ use std::io::{Read, Seek, SeekFrom};
 mod write;
 
 pub const CPZ3_HEADER_SIZE: usize = 20;
+pub(super) const INDEX_KEY_MASK: u32 = 0xdddddddd ^ 0x7bf4a539;
+pub(super) const FILE_KEY_MASK: u32 = 0xc7f5da63;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cpz3Layout {
@@ -22,10 +24,12 @@ fn word(bytes: &[u8]) -> u32 {
 
 /// CPZ3 uses a different checksum seed from CPZ5/6/7.
 pub fn cpz3_checksum(bytes: &[u8]) -> u32 {
+    checksum_chunk(0x78341256, bytes)
+}
+
+pub(super) fn checksum_chunk(sum: u32, bytes: &[u8]) -> u32 {
     let (words, tail) = bytes.as_chunks::<4>();
-    let sum = words
-        .iter()
-        .fold(0x78341256u32, |sum, b| sum.wrapping_add(word(b)));
+    let sum = words.iter().fold(sum, |sum, b| sum.wrapping_add(word(b)));
     tail.iter()
         .fold(sum, |sum, &b| sum.wrapping_add(u32::from(b)))
 }
@@ -96,7 +100,7 @@ pub struct Cpz3Index {
     pub layout: Cpz3Layout,
     entries: Vec<Entry>,
     lookup: LookupTable,
-    entry_keys: Vec<u32>,
+    pub(super) entry_keys: Vec<u32>,
 }
 
 impl Cpz3Index {
@@ -114,11 +118,7 @@ impl Cpz3Index {
         if cpz3_checksum(&bytes) != layout.index_checksum_raw {
             return Err(FormatError("CPZ3 index checksum mismatch").into());
         }
-        crypt(
-            &mut bytes,
-            word(&header[16..]) ^ 0xdddddddd ^ 0x7bf4a539,
-            false,
-        );
+        crypt(&mut bytes, word(&header[16..]) ^ INDEX_KEY_MASK, false);
         let mut entries = Vec::new();
         let mut entry_keys = Vec::new();
         let directory: std::sync::Arc<[u8]> = [].into();
@@ -154,7 +154,7 @@ impl Cpz3Index {
                 offset: absolute,
                 checksum_raw: word(&rec[16..]),
             });
-            entry_keys.push(word(&rec[20..]) ^ 0xc7f5da63);
+            entry_keys.push(word(&rec[20..]) ^ FILE_KEY_MASK);
             offset += length;
         }
         // The original stops at file_count. Real indexes can have a large

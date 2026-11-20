@@ -35,6 +35,17 @@ impl Default for Sha256 {
     }
 }
 
+impl io::Write for Sha256 {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 impl Sha256 {
     pub fn new() -> Self {
         Self::default()

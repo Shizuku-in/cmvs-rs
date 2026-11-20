@@ -75,6 +75,7 @@ pub enum DetectError {
     Archive(cmvs_core::format::cpz::ArchiveError),
     /// Invalid script header, startup registration, or payload format.
     Format(FormatError),
+    Startup(String),
 }
 
 impl DetectError {
@@ -91,6 +92,7 @@ impl std::fmt::Display for DetectError {
             Self::Io(error) => error.fmt(f),
             Self::Archive(error) => error.fmt(f),
             Self::Format(error) => error.fmt(f),
+            Self::Startup(error) => f.write_str(error),
         }
     }
 }
@@ -98,7 +100,7 @@ impl std::fmt::Display for DetectError {
 impl std::error::Error for DetectError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Uncertain => None,
+            Self::Uncertain | Self::Startup(_) => None,
             Self::Io(error) => Some(error),
             Self::Archive(error) => Some(error),
             Self::Format(error) => Some(error),
@@ -147,32 +149,47 @@ pub fn detect_game_with_fs(
     files: &cmvs_core::profile::GameFiles,
     startup: &cmvs_core::format::ps3::Script,
 ) -> Result<TextEncoding, DetectError> {
+    detect_game_for_profile(fs, root, files, startup, None)
+}
+
+/// Resolve archive settings using the selected profile when startup text is inconclusive.
+pub fn detect_game_for_profile(
+    fs: &dyn cmvs_core::host::filesystem::HostFs,
+    root: &std::path::Path,
+    files: &cmvs_core::profile::GameFiles,
+    startup: &cmvs_core::format::ps3::Script,
+    profile: Option<&cmvs_core::profile::EngineProfile>,
+) -> Result<TextEncoding, DetectError> {
     use cmvs_core::{
-        format::ps3::Header, format::ps3::Script, runtime::script_control::archive_index_from_start,
+        format::ps3::{Header, Script},
+        runtime::script_control::archive_index_for_profile,
     };
     if let Ok(encoding) = detect(startup.text()) {
         return Ok(encoding);
     }
     let mut reader = fs.open_read(&root.join(&files.script_archive))?;
-    let basename = files
-        .script_archive
-        .file_name()
-        .ok_or(DetectError::Uncertain)?;
-    let index = archive_index_from_start(&mut reader, startup, basename.as_encoded_bytes())
-        .map_err(|error| {
-            let error = match error.downcast::<std::io::Error>() {
-                Ok(error) => return DetectError::Io(*error),
-                Err(error) => error,
-            };
-            let error = match error.downcast::<cmvs_core::format::cpz::ArchiveError>() {
-                Ok(error) => return DetectError::Archive(*error),
-                Err(error) => error,
-            };
-            match error.downcast::<FormatError>() {
-                Ok(error) => (*error).into(),
-                Err(_) => DetectError::Format(FormatError("failed to open script archive")),
-            }
-        })?;
+    let index = archive_index_for_profile(
+        &mut reader,
+        startup,
+        fs,
+        root,
+        &files.script_archive,
+        profile,
+    )
+    .map_err(|error| {
+        let error = match error.downcast::<std::io::Error>() {
+            Ok(error) => return DetectError::Io(*error),
+            Err(error) => error,
+        };
+        let error = match error.downcast::<cmvs_core::format::cpz::ArchiveError>() {
+            Ok(error) => return DetectError::Archive(*error),
+            Err(error) => error,
+        };
+        match error.downcast::<FormatError>() {
+            Ok(error) => (*error).into(),
+            Err(e) => DetectError::Startup(e.to_string()),
+        }
+    })?;
     let mut stored_budget = 16 * 1024 * 1024;
     let mut decoded_budget = stored_budget;
     let mut scripts = 0;

@@ -1,8 +1,7 @@
 //! Read and update CPZ resource archives.
 //!
 //! Use [`ArchiveIndex`] to open any supported archive version. [`ArchiveLayout`]
-//! reads headers without decrypting the index. CPZ1/CPZ2 are read-only;
-//! CPZ3/CPZ5/CPZ6/CPZ7 also support replacing existing entries.
+//! reads headers without decrypting the index. All six versions support entry replacement.
 //!
 //! # Read an entry
 //!
@@ -120,7 +119,7 @@ pub use cpz7::{CPZ7_HEADER_SIZE, Cpz7Index, Cpz7Layout, Cpz7Parameters};
 pub use crypto::data_checksum;
 pub use entry::Entry;
 pub use error::ArchiveError;
-pub use write::{ArchiveDirectory, ArchiveFile};
+pub use write::{ArchiveDirectory, ArchiveFile, DirectoryFormat, DirectoryNames};
 
 /// Recognized signatures; recognition alone does not imply decoding support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +133,10 @@ pub enum ArchiveVersion {
 }
 
 impl ArchiveVersion {
+    pub fn is_flat(self) -> bool {
+        matches!(self, Self::Cpz1 | Self::Cpz2 | Self::Cpz3)
+    }
+
     pub fn detect(bytes: &[u8]) -> Result<Self, ArchiveError> {
         let signature: [u8; 4] = bytes
             .get(..4)
@@ -152,7 +155,7 @@ impl ArchiveVersion {
     }
 }
 
-fn read_version<R: Read + Seek>(reader: &mut R) -> Result<ArchiveVersion, ArchiveError> {
+pub(crate) fn read_version<R: Read + Seek>(reader: &mut R) -> Result<ArchiveVersion, ArchiveError> {
     reader.seek(SeekFrom::Start(0))?;
     let mut signature = [0; 4];
     reader.read_exact(&mut signature)?;
@@ -256,6 +259,22 @@ impl ArchiveIndex {
         Self::read_with_cpz7_parameters(reader, Cpz7Parameters::default())
     }
 
+    /// Reopen an archive of the same version, using this index's packing mode or keys.
+    pub fn read_with_same_settings<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+    ) -> Result<Self, ArchiveError> {
+        let index = match self {
+            Self::Cpz5(index) => Self::read_with_cpz5_mode(reader, index.mode)?,
+            Self::Cpz7(index) => Self::read_with_cpz7_parameters(reader, index.parameters)?,
+            _ => Self::read(reader)?,
+        };
+        if index.version() != self.version() {
+            return Err(FormatError("archive version changed").into());
+        }
+        Ok(index)
+    }
+
     /// Read an index with explicit CPZ7 keys; other archive versions ignore them.
     pub fn read_with_cpz7_parameters<R: Read + Seek>(
         reader: &mut R,
@@ -303,6 +322,31 @@ impl ArchiveIndex {
             Self::Cpz5(_) => ArchiveVersion::Cpz5,
             Self::Cpz6(_) => ArchiveVersion::Cpz6,
             Self::Cpz7(_) => ArchiveVersion::Cpz7,
+        }
+    }
+
+    /// Ordered directory records, including empty or repeated directories.
+    pub fn directories(&self) -> &[(std::sync::Arc<[u8]>, u32)] {
+        match self {
+            Self::Cpz5(i) => &i.directories,
+            Self::Cpz6(i) => &i.directories,
+            Self::Cpz7(i) => &i.directories,
+            _ => &[],
+        }
+    }
+
+    pub fn directory_format(&self) -> Option<DirectoryFormat> {
+        match self {
+            Self::Cpz5(i) => Some(DirectoryFormat::Cpz5 {
+                mode: i.mode,
+                encrypted: i.layout.encryption_mode == 1,
+            }),
+            Self::Cpz6(_) => Some(DirectoryFormat::Cpz6),
+            Self::Cpz7(i) => Some(DirectoryFormat::Cpz7 {
+                parameters: i.parameters,
+                encrypted: i.layout.encryption_mode == 1,
+            }),
+            _ => None,
         }
     }
 

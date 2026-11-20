@@ -16,6 +16,10 @@ mod cache;
 use cache::Cache;
 /// 0x2011 / 0x1400717c0: image manager has ten registration slots.
 pub const IMAGE_ENTRIES: u32 = ResourceKind::Image.slot_count();
+/// Maximum number of files in one contextual image load, including its root.
+pub const MAX_REFERENCE_DEPTH: usize = 16;
+/// Total encoded and decoded bytes allowed in one reference chain.
+pub const MAX_REFERENCE_BYTES: usize = crate::MAX_PAYLOAD * 2;
 /// Threads an image decode may use besides the calling one, for formats with
 /// independently coded parts. They live only for the decode. The default uses none.
 #[derive(Debug, Clone, Copy, Default)]
@@ -449,10 +453,21 @@ fn charge(bytes: usize, budget: &mut usize) -> Result<(), Box<dyn Error + Send +
     *budget = budget
         .checked_add(bytes)
         .ok_or("PB3 reference budget overflow")?;
-    if *budget > crate::MAX_PAYLOAD * 2 {
+    if *budget > MAX_REFERENCE_BYTES {
         return Err("PB3 reference chain exceeds the byte budget".into());
     }
     Ok(())
+}
+
+/// Count one PB3 file and its RGBA plane toward a reference chain's byte budget.
+pub fn charge_pb3(
+    raw: &[u8],
+    budget: &mut usize,
+) -> Result<pb3::Header, Box<dyn Error + Send + Sync>> {
+    charge(raw.len(), budget)?;
+    let h = pb3::Header::parse(raw)?;
+    charge(usize::from(h.width) * usize::from(h.height) * 4, budget)?;
+    Ok(h)
 }
 
 fn load_inner(
@@ -463,7 +478,7 @@ fn load_inner(
     reference_read: bool,
 ) -> Result<Option<Identified>, Box<dyn Error + Send + Sync>> {
     let key = crate::cpz::lookup_key(name)?;
-    if chain.len() >= 16 || chain.contains(&key) {
+    if chain.len() >= MAX_REFERENCE_DEPTH || chain.contains(&key) {
         return Err("PB3 reference cycle or depth limit exceeded".into());
     }
     if reference_read {
@@ -492,14 +507,12 @@ fn load_from_read(
     budget: &mut usize,
 ) -> Result<Option<Identified>, Box<dyn Error + Send + Sync>> {
     let result = (|| {
-        charge(read.bytes.len(), budget)?;
         let threads = source.decode_threads();
         let identity = source
             .caches_decodes()
             .then(|| crate::raster::content_hash(&read.bytes));
         let decoded = if read.bytes.starts_with(b"PB3B") {
-            let h = pb3::Header::parse(&read.bytes)?;
-            charge(usize::from(h.width) * usize::from(h.height) * 4, budget)?;
+            let h = charge_pb3(&read.bytes, budget)?;
             if let Some(reference) = pb3::reference_name(&read.bytes)? {
                 let (base, base_identity) = load_inner(source, &reference, chain, budget, true)?
                     .ok_or("PB3 reference codec returned no image")?;
@@ -520,6 +533,7 @@ fn load_from_read(
                 decode_cached(source, identity, || Ok(decode_with(&read.bytes, threads)?))?
             }
         } else {
+            charge(read.bytes.len(), budget)?;
             decode_cached(source, identity, || Ok(decode_with(&read.bytes, threads)?))?
         };
         Ok(decoded)

@@ -114,43 +114,20 @@ fn assign_records(records: &[Record], index: &StringIndex) -> Result<Vec<usize>>
         .collect()
 }
 
-fn bmp_rgba(raw: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
-    fn word(raw: &[u8], at: usize) -> Result<u32> {
-        Ok(u32::from_le_bytes(
-            raw.get(at..at + 4)
-                .ok_or("truncated BMP header")?
-                .try_into()?,
-        ))
-    }
-    if raw.len() < 54
-        || &raw[..2] != b"BM"
-        || word(raw, 2)? as usize != raw.len()
-        || word(raw, 10)? != 54
-        || word(raw, 14)? != 40
-        || raw[26..30] != [1, 0, 32, 0]
-        || word(raw, 30)? != 0
+// This patch DLL copies top-down BGRA pixels at +54, followed by two NUL bytes.
+fn patch_bitmap(raw: &[u8]) -> Result<cmvs_core::render::raster::RgbaImage> {
+    if raw.len() < 56
+        || raw[10..14] != 54u32.to_le_bytes()
+        || raw[25] & 0x80 == 0
+        || !raw.ends_with(&[0, 0])
     {
-        return Err("expected uncompressed top-down BGRA32 BMP".into());
+        return Err("expected a top-down patch BMP with a two-byte trailer".into());
     }
-    let width = word(raw, 18)? as i32;
-    let height = word(raw, 22)? as i32;
-    if width <= 0 || width > 65535 || !(-65535..0).contains(&height) {
-        return Err("unsupported BMP dimensions or row order".into());
+    let image = cmvs_assembler::image::decode_bmp(std::io::Cursor::new(raw))?;
+    if raw.len() != 56 + image.pixels().len() {
+        return Err("unexpected patch BMP length".into());
     }
-    let (width, height) = (width as u32, (-height) as u32);
-    let count = u64::from(width) * u64::from(height) * 4;
-    if count > cmvs_core::MAX_PAYLOAD as u64
-        || raw.len() as u64 != count + 56
-        || raw[raw.len() - 2..] != [0, 0]
-    {
-        return Err("BMP pixels/trailer exceed bounds".into());
-    }
-    // DLL sub_10001650 copies bytes at +54 directly, including the alpha byte.
-    let mut rgba = raw[54..raw.len() - 2].to_vec();
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
-    Ok((rgba, width, height))
+    Ok(image)
 }
 
 fn image_dimensions_match(name: &[u8], original: [u32; 2], replacement: [u32; 2]) -> bool {
@@ -299,7 +276,8 @@ pub fn run(game: &Path, stage: &Path, encoding: OutputEncoding) -> Result<()> {
                     return Err("ambiguous image basename".into());
                 }
                 let header = pb3::Header::parse(&original)?;
-                let (rgba, width, height) = bmp_rgba(&fs::read(path)?)?;
+                let image = patch_bitmap(&fs::read(path)?)?;
+                let (width, height) = (image.width(), image.height());
                 if !image_dimensions_match(
                     &entry.name,
                     [u32::from(header.width), u32::from(header.height)],
@@ -309,10 +287,7 @@ pub fn run(game: &Path, stage: &Path, encoding: OutputEncoding) -> Result<()> {
                         format!("BMP/original dimensions differ: {}", path.display()).into(),
                     );
                 }
-                let out = pb3::encode_rgba(&rgba, width, height, EncodeDepth::Rgba32)?;
-                if pb3::decode(&out)?.pixels() != rgba {
-                    return Err("PB3B full RGBA roundtrip differs".into());
-                }
+                let out = cmvs_assembler::image::encode_pb3(&image, EncodeDepth::Rgba32)?;
                 report.push_str(&format!(
                     "{archive}\t{}\t{width}\t{height}\t{}\t{}\n",
                     std::str::from_utf8(&entry.name)?,
@@ -387,7 +362,8 @@ mod tests {
     #[test]
     fn bmp_bgra_alpha_and_top_down_rows_survive_pb3_roundtrip() -> Result<()> {
         let b = bmp();
-        let (rgba, w, h) = bmp_rgba(&b)?;
+        let image = patch_bitmap(&b)?;
+        let (rgba, w, h) = (image.pixels(), image.width(), image.height());
         assert_eq!(
             rgba,
             [
@@ -395,7 +371,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            pb3::decode(&pb3::encode_rgba(&rgba, w, h, EncodeDepth::Rgba32)?)?.pixels(),
+            pb3::decode(&pb3::encode_rgba(rgba, w, h, EncodeDepth::Rgba32)?)?.pixels(),
             rgba
         );
         assert!(pb3::encode_rgba(&rgba[..15], w, h, EncodeDepth::Rgba32).is_err());
@@ -404,11 +380,11 @@ mod tests {
             invalid[at] ^= 1;
             // Changing a negative height by one also changes the expected size.
             assert!(
-                bmp_rgba(&invalid).is_err(),
+                patch_bitmap(&invalid).is_err(),
                 "accepted mutated header/trailer at {at}"
             );
         }
-        assert!(bmp_rgba(&b[..53]).is_err());
+        assert!(patch_bitmap(&b[..53]).is_err());
         Ok(())
     }
 

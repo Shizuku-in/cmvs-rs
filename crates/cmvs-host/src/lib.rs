@@ -24,7 +24,10 @@ mod storage;
 
 pub use backend::HostBackend;
 pub use comment_input::{CommentInput, CommentInputRequest};
-pub use encoding::{EncodingPolicy, conversion_encoding_with_fs, resolve_encoding_with_fs};
+pub use encoding::{
+    EncodingPolicy, conversion_encoding_with_fs, resolve_encoding_with_fs,
+    resolve_profile_encoding_with_fs,
+};
 pub use error::PlayerError;
 pub use frame::{
     GpuFrameSource, GpuTarget, compose_cpu_frame, compose_cpu_frame_with_capture,

@@ -341,6 +341,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmvs-assembler"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
+ "cmvs-disassembler",
+ "cmvs-tooling",
+ "png",
+ "tempfile",
+]
+
+[[package]]
 name = "cmvs-audio"
 version = "0.1.0"
 dependencies = [
@@ -365,6 +376,7 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-desktop",
+ "cmvs-disassembler",
  "cmvs-video",
 ]
 
@@ -401,6 +413,14 @@ dependencies = [
  "ico",
  "softbuffer",
  "winit",
+]
+
+[[package]]
+name = "cmvs-disassembler"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
+ "cmvs-tooling",
 ]
 
 [[package]]
@@ -448,6 +468,7 @@ dependencies = [
 name = "cmvs-patch"
 version = "0.1.0"
 dependencies = [
+ "cmvs-assembler",
  "cmvs-core",
  "encoding_rs",
  "png",
@@ -490,6 +511,15 @@ dependencies = [
  "cmvs-font",
  "cmvs-host",
  "cmvs-native",
+]
+
+[[package]]
+name = "cmvs-tooling"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
+ "encoding_rs",
+ "tempfile",
 ]
 
 [[package]]
@@ -2463,6 +2493,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "once_cell",
+ "rustix 1.1.6",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

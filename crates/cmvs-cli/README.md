@@ -7,7 +7,7 @@ Read-only format inspectors, linear bytecode disassembler, bounded VM trace tool
 | Binary | Features | Purpose |
 |---|---|---|
 | `cmvs-inspect` | default (`default-run`) | PS2A/PSS0 script header, segment and raw hex string inspection |
-| `cmvs-disasm` | default | Linear PS2A/PSS0 bytecode disassembly and system command counts |
+| `cmvs-disasm` | default | Compatibility entry point for [cmvs-disassembler](../cmvs-disassembler), including translation table export |
 | `cmvs-trace` | default | Bounded read-only VM execution trace and profile gate diagnostics |
 | `cmvs-cpz` | default | CPZ1/2/3/5/6/7 archive header inspection, directory listing and extraction |
 | `cmvs-save` | default | CMVS CSV2 gameplay save layout and snapshot inspection |

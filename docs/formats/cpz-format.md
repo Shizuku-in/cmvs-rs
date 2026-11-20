@@ -1,11 +1,11 @@
 # CPZ 读写
 
-`cmvs_core::cpz::ArchiveIndex` 统一读取和替换写回 CPZ3、CPZ5（模式 5～9）、CPZ6（模式 1）、CPZ7（模式 0/1）。另外只读支持 CVNS 时代的 CPZ1/CPZ2（见文末），不支持写回。
+`cmvs_core::format::cpz::ArchiveIndex` 统一读取和替换写回 CPZ1、CPZ2、CPZ3、CPZ5（模式 5～9）、CPZ6（模式 1）与 CPZ7（模式 0/1）。
 
 ## 替换写回
 
 ```rust
-use cmvs_core::cpz::ArchiveIndex;
+use cmvs_core::format::cpz::ArchiveIndex;
 use std::{collections::BTreeMap, fs::File};
 
 let mut source = File::open("input.cpz")?;
@@ -19,16 +19,18 @@ index.write_replacements(&mut source, &mut output, &replacements)?;
 
 需要显式参数时，先用 `read_with_cpz5_mode`、`read_with_cpz7_parameters` 或 `script_control::archive_index_from_start` 读取索引；写回自动沿用选定参数。条目按编号替换，可区分重复文件名。
 
-写回保留版本、条目数量与顺序、原始名称、目录、密钥、打包/加密模式及索引保留字段；CPZ3 的索引填充和 CPZ7 的索引密钥块也保留。所有源资源先验证密文校验和，未替换资源原样复制密文，替换资源重新加密，最后更新索引摘要和头部校验和。CPZ3/5 使用 32 位数据偏移，CPZ6/7 使用 64 位偏移。
+写回保留版本、条目数量与顺序、原始名称、目录、密钥、打包/加密模式及索引保留字段；CPZ1/2/3 的索引填充和 CPZ7 的索引密钥块也保留。有校验和的源资源先校验密文，未替换资源原样复制密文，替换资源重新加密，最后更新索引摘要和头部校验和。CPZ1/2/3/5 使用 32 位数据偏移，CPZ6/7 使用 64 位偏移。
 
-源流须匹配所读索引，输出流必须为空。输入不修改；失败可能留下不完整输出。单项资源及索引沿用 core 的分配上限，不将整个封包装入内存。CPZ6 读取仍不强制验证头部/索引摘要，写回会重新计算这两项。
+源流须匹配所读索引，输出流必须为空。所有版本都可用 `write_replacement_streams` 和 `copy_entry_verified` 分块处理资源。CPZ6 保留原读取策略，发布前用 `verify_written_index` 核对头部校验和与索引 MD5。
 
 ## 新建封包
+
+`ArchiveVersion::write_flat` 为 CPZ1/2/3 按传入顺序写入原始名称，逐个打开资源流。CLI 的 `cpz pack` 从清单读取输入，发布前回读索引和所有条目，逐项核对明文 SHA-256。 [清单用法](../guides/cli.md#归档与资源)
 
 `Cpz3Index::write(&mut output, &entries)` 接受按顺序排列的 `(Vec<u8>, Vec<u8>)` 文件名与内容，默认使用零密钥。名称保留原始编码字节，长度为 1～4096，不含 NUL；允许同名条目。CPZ5/6 使用 `ArchiveDirectory`、`ArchiveFile` 显式描述目录和明文内容：
 
 ```rust
-use cmvs_core::cpz::{ArchiveDirectory, ArchiveFile, Cpz5Index, Cpz5Mode, Cpz6Index};
+use cmvs_core::format::cpz::{ArchiveDirectory, ArchiveFile, Cpz5Index, Cpz5Mode, Cpz6Index};
 
 let directories = vec![ArchiveDirectory {
     name: b"code".to_vec(),
@@ -39,7 +41,7 @@ Cpz5Index::write(&mut output, Cpz5Mode::Mode9, &directories)?;
 Cpz6Index::write(&mut another_output, &directories)?;
 ```
 
-CPZ5 新建可选模式 5～9；CPZ6 使用模式 1。新建 CPZ5/6 默认启用资源加密，使用确定性的头部及目录/文件密钥。目录名称可为空，文件名称规则与 CPZ3 相同，同名条目保留顺序；允许空目录和空封包。空 CPZ5 不携带模式信息，读取时可显式指定所需模式。CPZ7 目前提供已有封包的替换写回。
+`DirectoryFormat::write` 为 CPZ5/6/7 逐项打开明文输入，保留空目录与重名项。CPZ5 可选打包模式 5～9，CPZ5/7 可选资源加密模式 0/1，CPZ6 使用模式 1。CPZ7 接受逐包参数，生成确定性的单叶 Huffman 索引密钥块。空 CPZ5 需显式选择模式才能保留打包设定。
 
 ## 验证
 
@@ -50,7 +52,7 @@ cargo test --offline --locked -p cmvs-cli --test cli cpz_cli
 
 独立合成向量覆盖各版本和模式、每包参数、重复名称、目录与索引填充、空/变长资源及加密尾字节；检查替换内容回读、未替换密文不变；新建 CPZ3/5/6 覆盖目录、名称、空资源和加密边界，并拒绝错误条目、损坏或不匹配的输入及非空输出。9 个原版脚本包共 1,113 项已完成替换回读，覆盖全部上述版本和 CPZ5 模式；另以 7 个原版脚本包的 907 项内容新建 CPZ5/6，全部回读一致。CPZ6 头部摘要和校验和公式另与 25 个原版封包核对。
 
-## CPZ1 / CPZ2（CVNS，只读）
+## CPZ1 / CPZ2（CVNS）
 
 两者都是 CPZ3 沿用的平坦索引：每条记录依次为记录长度、资源大小、数据偏移（低 32 位）、偏移高位、校验和、密钥、以 NUL 结尾的文件名，之后可以有填充。名称保留原始大小写，查找时两侧都折叠 ASCII 大小写（Shift-JIS 双字节原样比较）；原引擎另有无扩展名的前缀查找，对应 `lookup_prefix`。
 

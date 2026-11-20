@@ -92,24 +92,12 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             .get(1)
             .and_then(|s| s.to_str())
             .ok_or("expected four CPZ7 keys")?;
-        let values: Vec<u32> = raw
-            .split(',')
-            .map(|s| {
-                if let Some(hex) = s.strip_prefix("0x") {
-                    u32::from_str_radix(hex, 16)
-                } else {
-                    s.parse()
-                }
-            })
-            .collect::<Result<_, _>>()?;
-        let keys: [u32; 4] = values
-            .try_into()
-            .map_err(|_| "expected exactly four CPZ7 keys")?;
+        let parameters = raw.parse::<Cpz7Parameters>()?;
         paths.drain(..2);
         if paths.is_empty() {
             return Err("expected archive mode; use --help".into());
         }
-        Cpz7Parameters::from(keys)
+        parameters
     } else {
         Cpz7Parameters::default()
     };

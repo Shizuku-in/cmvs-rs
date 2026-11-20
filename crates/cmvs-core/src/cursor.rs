@@ -43,56 +43,21 @@ fn dword(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(b[at..at + 4].try_into().expect("checked range"))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CursorBitmap {
-    width: usize,
-    height: usize,
-    hotspot: (u16, u16),
-    xor_rgb: Vec<[u8; 3]>,
-    and_mask: Vec<bool>,
-    alpha: Option<Vec<u8>>,
+/// Single BI_RGB DIB with original BGRA palette and bottom-up, DWORD-padded planes.
+pub struct CursorDib<'a> {
+    pub width: usize,
+    pub height: usize,
+    pub hotspot: (u16, u16),
+    pub bits: u16,
+    pub palette: &'a [u8],
+    pub xor: &'a [u8],
+    pub and: &'a [u8],
 }
-impl CursorBitmap {
-    pub fn width(&self) -> usize {
-        self.width
-    }
-    pub fn height(&self) -> usize {
-        self.height
-    }
-    pub fn hotspot(&self) -> (u16, u16) {
-        self.hotspot
-    }
-    /// Top-down RGB values: XOR colors for legacy cursors, straight colors with alpha.
-    pub fn xor_rgb(&self) -> &[[u8; 3]] {
-        &self.xor_rgb
-    }
-    pub fn and_mask(&self) -> &[bool] {
-        &self.and_mask
-    }
-    /// A nonzero 32-bit alpha plane selects alpha blending instead of AND/XOR.
-    pub fn alpha(&self) -> Option<&[u8]> {
-        self.alpha.as_deref()
-    }
-    /// Straight RGBA for native cursors; legacy inversion cannot be represented.
-    pub fn rgba(&self) -> Result<Vec<u8>, FormatError> {
-        let mut out = Vec::with_capacity(self.width * self.height * 4);
-        for (i, rgb) in self.xor_rgb.iter().enumerate() {
-            let alpha = if let Some(alpha) = &self.alpha {
-                alpha[i]
-            } else {
-                if self.and_mask[i] && *rgb != [0, 0, 0] {
-                    return Err(FormatError(
-                        "native RGBA cursor cannot represent AND/XOR inversion",
-                    ));
-                }
-                if self.and_mask[i] { 0 } else { 255 }
-            };
-            out.extend_from_slice(rgb);
-            out.push(alpha);
-        }
-        Ok(out)
-    }
-    pub fn decode(raw: &[u8]) -> Result<Self, FormatError> {
+fn stride(width: usize, bits: u16) -> usize {
+    (width * usize::from(bits)).div_ceil(32) * 4
+}
+impl<'a> CursorDib<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self, FormatError> {
         if raw.len() < 22 || word(raw, 0) != 0 || word(raw, 2) != 2 || word(raw, 4) != 1 {
             return Err(FormatError("expected single-image CUR directory"));
         }
@@ -149,13 +114,138 @@ impl CursorBitmap {
             }
             _ => unreachable!("validated bit depth"),
         };
-        let xor_stride = (width * usize::from(bits)).div_ceil(32) * 4;
-        let and_stride = width.div_ceil(32) * 4;
+        let xor_stride = stride(width, bits);
+        let and_stride = stride(width, 1);
         let pixels = 40 + colors * 4;
         let mask = pixels + xor_stride * height;
         if mask + and_stride * height != b.len() {
             return Err(FormatError("CUR palette or pixel planes are truncated"));
         }
+        Ok(Self {
+            width,
+            height,
+            hotspot,
+            bits,
+            palette: &b[40..pixels],
+            xor: &b[pixels..mask],
+            and: &b[mask..],
+        })
+    }
+
+    #[cfg(feature = "encode")]
+    pub fn encode(&self) -> Result<Vec<u8>, FormatError> {
+        let (w, h) = (self.width, self.height);
+        if !(1..=256).contains(&w)
+            || !(1..=256).contains(&h)
+            || !matches!(self.bits, 4 | 8 | 24 | 32)
+            || !self.palette.len().is_multiple_of(4)
+            || self.palette.len() > 1024
+            || self.xor.len() != stride(w, self.bits) * h
+            || self.and.len() != stride(w, 1) * h
+        {
+            return Err(FormatError("invalid CUR dimensions, palette or planes"));
+        }
+        let colors = self.palette.len() / 4;
+        if (self.bits <= 8 && !(1..=1 << self.bits).contains(&colors))
+            || (self.bits > 8 && colors != 0)
+        {
+            return Err(FormatError("invalid CUR palette for bit depth"));
+        }
+        let mut out = vec![0; 62];
+        for (at, v) in [
+            (2, 2),
+            (4, 1),
+            (10, self.hotspot.0),
+            (12, self.hotspot.1),
+            (34, 1),
+            (36, self.bits),
+        ] {
+            out[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        }
+        out[6] = w as u8;
+        out[7] = h as u8;
+        out[8] = colors as u8;
+        let payload = self.xor.len() + self.and.len();
+        for (at, v) in [
+            (14, 40 + self.palette.len() + payload),
+            (18, 22),
+            (22, 40),
+            (26, w),
+            (30, h * 2),
+            (42, payload),
+            (54, colors),
+        ] {
+            out[at..at + 4].copy_from_slice(&(v as u32).to_le_bytes());
+        }
+        out.extend(self.palette);
+        out.extend(self.xor);
+        out.extend(self.and);
+        CursorBitmap::decode(&out)?;
+        Ok(out)
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorBitmap {
+    width: usize,
+    height: usize,
+    hotspot: (u16, u16),
+    xor_rgb: Vec<[u8; 3]>,
+    and_mask: Vec<bool>,
+    alpha: Option<Vec<u8>>,
+}
+impl CursorBitmap {
+    pub fn width(&self) -> usize {
+        self.width
+    }
+    pub fn height(&self) -> usize {
+        self.height
+    }
+    pub fn hotspot(&self) -> (u16, u16) {
+        self.hotspot
+    }
+    /// Top-down RGB values: XOR colors for legacy cursors, straight colors with alpha.
+    pub fn xor_rgb(&self) -> &[[u8; 3]] {
+        &self.xor_rgb
+    }
+    pub fn and_mask(&self) -> &[bool] {
+        &self.and_mask
+    }
+    /// A nonzero 32-bit alpha plane selects alpha blending instead of AND/XOR.
+    pub fn alpha(&self) -> Option<&[u8]> {
+        self.alpha.as_deref()
+    }
+    /// Straight RGBA for native cursors; legacy inversion cannot be represented.
+    pub fn rgba(&self) -> Result<Vec<u8>, FormatError> {
+        let mut out = Vec::with_capacity(self.width * self.height * 4);
+        for (i, rgb) in self.xor_rgb.iter().enumerate() {
+            let alpha = if let Some(alpha) = &self.alpha {
+                alpha[i]
+            } else {
+                if self.and_mask[i] && *rgb != [0, 0, 0] {
+                    return Err(FormatError(
+                        "native RGBA cursor cannot represent AND/XOR inversion",
+                    ));
+                }
+                if self.and_mask[i] { 0 } else { 255 }
+            };
+            out.extend_from_slice(rgb);
+            out.push(alpha);
+        }
+        Ok(out)
+    }
+    pub fn decode(raw: &[u8]) -> Result<Self, FormatError> {
+        let dib = CursorDib::parse(raw)?;
+        let CursorDib {
+            width,
+            height,
+            hotspot,
+            bits,
+            palette,
+            xor,
+            and,
+        } = dib;
+        let xor_stride = stride(width, bits);
+        let and_stride = stride(width, 1);
         let mut xor_rgb = Vec::with_capacity(width * height);
         let mut and_mask = Vec::with_capacity(width * height);
         let mut alpha = Vec::with_capacity(if bits == 32 { width * height } else { 0 });
@@ -163,30 +253,30 @@ impl CursorBitmap {
             for x in 0..width {
                 let color = match bits {
                     32 => {
-                        let color = pixels + y * xor_stride + x * 4;
-                        alpha.push(b[color + 3]);
-                        color
+                        let at = y * xor_stride + x * 4;
+                        alpha.push(xor[at + 3]);
+                        &xor[at..]
                     }
-                    24 => pixels + y * xor_stride + x * 3,
+                    24 => &xor[y * xor_stride + x * 3..],
                     _ => {
                         let index = if bits == 4 {
-                            let byte = b[pixels + y * xor_stride + x / 2];
+                            let byte = xor[y * xor_stride + x / 2];
                             usize::from(if x.is_multiple_of(2) {
                                 byte >> 4
                             } else {
                                 byte & 0x0f
                             })
                         } else {
-                            usize::from(b[pixels + y * xor_stride + x])
+                            usize::from(xor[y * xor_stride + x])
                         };
-                        if index >= colors {
+                        if index >= palette.len() / 4 {
                             return Err(FormatError("CUR pixel index outside palette"));
                         }
-                        40 + index * 4
+                        &palette[index * 4..]
                     }
                 };
-                xor_rgb.push([b[color + 2], b[color + 1], b[color]]);
-                and_mask.push(b[mask + y * and_stride + x / 8] & (128 >> (x % 8)) != 0);
+                xor_rgb.push([color[2], color[1], color[0]]);
+                and_mask.push(and[y * and_stride + x / 8] & (128 >> (x % 8)) != 0);
             }
         }
         Ok(Self {

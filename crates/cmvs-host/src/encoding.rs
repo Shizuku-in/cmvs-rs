@@ -40,6 +40,16 @@ pub fn resolve_encoding_with_fs(
     startup: &Script,
     policy: EncodingPolicy,
 ) -> Result<TextEncoding, Box<dyn Error + Send + Sync>> {
+    resolve_profile_encoding_with_fs(fs, root, files, startup, policy, None)
+}
+pub fn resolve_profile_encoding_with_fs(
+    fs: &dyn HostFs,
+    root: &Path,
+    files: &GameFiles,
+    startup: &Script,
+    policy: EncodingPolicy,
+    profile: Option<&cmvs_core::profile::EngineProfile>,
+) -> Result<TextEncoding, Box<dyn Error + Send + Sync>> {
     if let EncodingPolicy::Explicit(encoding) = policy {
         return Ok(encoding);
     }
@@ -49,18 +59,14 @@ pub fn resolve_encoding_with_fs(
     if let Some(encoding) = conversion_encoding_with_fs(fs, root)? {
         return Ok(encoding);
     }
-    match policy {
-        EncodingPolicy::Explicit(encoding) => Ok(encoding),
-        EncodingPolicy::AutoDefaultShiftJis => {
-            text_codec::select_or_default_with_fs(fs, root, files, startup)
-        }
-        EncodingPolicy::AutoStrict(uncertain_message) => {
-            match text_codec::detect_game_with_fs(fs, root, files, startup) {
-                Ok(encoding) => Ok(encoding),
-                Err(DetectError::Uncertain) => Err(uncertain_message.into()),
-                Err(error) => Err(Box::new(error)),
-            }
-        }
+    match text_codec::detect_game_for_profile(fs, root, files, startup, profile) {
+        Ok(encoding) => Ok(encoding),
+        Err(DetectError::Uncertain) => match policy {
+            EncodingPolicy::AutoDefaultShiftJis => Ok(TextEncoding::ShiftJis),
+            EncodingPolicy::AutoStrict(message) => Err(message.into()),
+            EncodingPolicy::Explicit(_) => unreachable!(),
+        },
+        Err(error) => Err(Box::new(error)),
     }
 }
 

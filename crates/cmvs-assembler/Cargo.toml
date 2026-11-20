@@ -1,0 +1,20 @@
+[package]
+license.workspace = true
+name = "cmvs-assembler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Offline CMVS resource assembly and archive editing"
+
+[lints]
+workspace = true
+
+[dependencies]
+cmvs-core = { path = "../cmvs-core", features = ["encode"] }
+cmvs-tooling = { path = "../cmvs-tooling" }
+png.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+cmvs-disassembler = { path = "../cmvs-disassembler" }

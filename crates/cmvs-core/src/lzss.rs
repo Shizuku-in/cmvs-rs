@@ -169,46 +169,31 @@ impl Dictionary {
     }
 }
 
-/// Shared tree encoder: literal flag bit 1, flags low bit first, references as
-/// `position low byte, high(position) | (length - 2)`. The window starts zeroed and
-/// writing begins at `window - lookahead`, which is where both decoders start.
-pub(crate) fn encode_tree(
+/// Walk the shared ring dictionary. References shorter than the format's minimum
+/// are emitted as individual literals so the decoder advances by the same distance.
+fn tokens(
     input: &[u8],
     window: usize,
     lookahead: usize,
-    high: fn(usize) -> u8,
-) -> Vec<u8> {
+    min_match: usize,
+    mut emit: impl FnMut(usize, usize, u8),
+) {
     let mut tree = Dictionary::new(window, lookahead);
     let (mut start, mut read) = (0, window - lookahead);
     let mut remaining = input.len().min(lookahead);
     tree.bytes[read..read + remaining].copy_from_slice(&input[..remaining]);
     if remaining == 0 {
-        return Vec::new();
+        return;
     }
     let mut cursor = remaining;
     for i in 1..=lookahead {
         tree.insert(read - i);
     }
     tree.insert(read);
-    let mut output = Vec::new();
-    let mut group = vec![0];
-    let mut mask = 1u8;
     while remaining > 0 {
-        let count = tree.matched.min(remaining).max(1);
-        if count == 1 {
-            group[0] |= mask;
-            group.push(tree.bytes[read]);
-        } else {
-            group.push(tree.position as u8);
-            group.push(high(tree.position) | (count - 2) as u8);
-        }
-        mask = mask.wrapping_mul(2);
-        if mask == 0 {
-            output.extend_from_slice(&group);
-            group.clear();
-            group.push(0);
-            mask = 1;
-        }
+        let matched = tree.matched.min(remaining);
+        let count = if matched >= min_match { matched } else { 1 };
+        emit(count, tree.position, tree.bytes[read]);
         for _ in 0..count {
             tree.remove(start);
             if let Some(&byte) = input.get(cursor) {
@@ -227,10 +212,59 @@ pub(crate) fn encode_tree(
             }
         }
     }
+}
+
+/// Script and save streams interleave one low-bit-first literal flag byte with each group.
+pub(crate) fn encode_tree(
+    input: &[u8],
+    window: usize,
+    lookahead: usize,
+    high: fn(usize) -> u8,
+) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut group = vec![0];
+    let mut mask = 1u8;
+    tokens(input, window, lookahead, 2, |count, position, literal| {
+        if count == 1 {
+            group[0] |= mask;
+            group.push(literal);
+        } else {
+            group.push(position as u8);
+            group.push(high(position) | (count - 2) as u8);
+        }
+        mask = mask.wrapping_mul(2);
+        if mask == 0 {
+            output.extend_from_slice(&group);
+            group.clear();
+            group.push(0);
+            mask = 1;
+        }
+    });
     if group.len() > 1 {
         output.extend(group);
     }
     output
+}
+
+/// PB2/PB3 split streams have high-bit-first reference flags and 11:5 little-endian pairs.
+#[cfg(feature = "encode")]
+pub(crate) fn encode_split(input: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut flags = Vec::new();
+    let mut data = Vec::new();
+    let mut bit = 0;
+    tokens(input, 2048, 34, 3, |count, position, literal| {
+        if bit == 0 {
+            flags.push(0);
+        }
+        if count == 1 {
+            data.push(literal);
+        } else {
+            *flags.last_mut().unwrap() |= 0x80 >> bit;
+            data.extend((((position << 5) | (count - 3)) as u16).to_le_bytes());
+        }
+        bit = (bit + 1) % 8;
+    });
+    (flags, data)
 }
 
 /// CSV2 section encoder 0x140068210: 2048-byte window, 33-byte lookahead (start 2015),

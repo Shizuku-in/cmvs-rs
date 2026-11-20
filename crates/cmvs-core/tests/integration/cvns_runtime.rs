@@ -58,6 +58,17 @@ fn css0_payload() -> (Vec<u8>, PersistentStarts) {
 }
 
 #[test]
+fn offline_startup_stops_at_unmapped_source_command() {
+    use crate::support::bytecode::script;
+    use cmvs_core::{profile::Registry, runtime::script_control::Startup};
+    let profile = Registry::builtin().profile("cvns-20040515").unwrap();
+    let startup = Startup::execute(&script(&0x2011u16.to_le_bytes()), profile).unwrap();
+    assert_eq!(startup.pc, 0);
+    assert!(startup.stopped.contains("0x2011"));
+    assert!(startup.bootstrap.paths().is_empty());
+}
+
+#[test]
 fn css0_restores_the_persistent_tails_and_rejects_inconsistent_files() {
     let (payload, starts) = css0_payload();
     let raw = css0(&payload, [1, 0], [0x5a, 0xc3]);

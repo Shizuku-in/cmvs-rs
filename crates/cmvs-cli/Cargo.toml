@@ -66,6 +66,7 @@ required-features = ["desktop"]
 workspace = true
 
 [dependencies]
+cmvs-disassembler = { path = "../cmvs-disassembler" }
 cmvs-core = { path = "../cmvs-core" }
 cmvs-video = { path = "../cmvs-video" }
 cmvs-audio = { path = "../cmvs-audio", optional = true }

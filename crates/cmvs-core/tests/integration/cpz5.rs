@@ -30,6 +30,26 @@ fn fixture(mode: u32) -> Vec<u8> {
 }
 
 #[test]
+fn early_inspection_detects_cpz5_mode_before_registration() {
+    use crate::support::bytecode::{command, script};
+    use cmvs_core::{profile::Registry, runtime::script_control::archive_index_for_profile};
+    let mut code = Vec::new();
+    command(&mut code, 0x22b8, &[]);
+    command(&mut code, 0x201f, &[7]);
+    let mut reader = Cursor::new(fixture(7));
+    let index = archive_index_for_profile(
+        &mut reader,
+        &script(&code),
+        &cmvs_core::host::filesystem::StdFs,
+        std::path::Path::new("."),
+        std::path::Path::new("data/pack/script.cpz"),
+        Some(Registry::builtin().profile("cmvs-20190305").unwrap()),
+    )
+    .unwrap();
+    assert!(matches!(index, ArchiveIndex::Cpz5(i) if i.mode == Cpz5Mode::Mode7));
+}
+
+#[test]
 fn all_five_modes_decode_independent_vectors_and_are_detected_from_index() {
     for mode in 5..=9 {
         let bytes = fixture(mode);

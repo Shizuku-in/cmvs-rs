@@ -15,6 +15,11 @@ use crate::{
 };
 use std::ops::Range;
 
+#[cfg(feature = "encode")]
+mod write;
+#[cfg(feature = "encode")]
+pub use write::{CollectionWriter, StaticType, encode, encode_static};
+
 const HEADER_SIZE: usize = 32;
 const KEY_TAIL_OFFSET: usize = 31;
 
@@ -80,7 +85,7 @@ pub fn decode_part_with(
         2 => decode_blocked(raw, &h, threads),
         3 | 4 => decode_jbp1(raw, &h),
         5 => decode_frame_with(raw, &h, 0, threads),
-        6 => decode_multipart(raw, &h, part, threads),
+        6 => decode_multipart(raw, &h, part, None, threads),
         _ => Err(FormatError("unsupported PB2 image codec")),
     }
 }
@@ -373,10 +378,20 @@ fn decode_frame_with(
 }
 
 /// 0x479180: named chunk 0 base image plus optional named 8x8 BGRA replacement chunks.
+/// Decode a part in file order, including shadowed or empty names.
+pub fn decode_part_index(raw: &[u8], index: usize) -> Result<RgbaImage, FormatError> {
+    let h = Header::parse(raw)?;
+    if h.kind != 6 || index >= h.count as usize {
+        return Err(FormatError("invalid PB2 part index"));
+    }
+    decode_multipart(raw, &h, None, Some(index), DecodeThreads::default())
+}
+
 fn decode_multipart(
     raw: &[u8],
     h: &Header,
     part: Option<&[u8]>,
+    index: Option<usize>,
     threads: DecodeThreads,
 ) -> Result<RgbaImage, FormatError> {
     if h.count == 0 {
@@ -386,26 +401,27 @@ fn decode_multipart(
     let height = usize::from(h.height);
     let (chunk0_size, base_name, payload_at) = read_part_chunk(raw, HEADER_SIZE)?;
     let mut rgba = decode_xor_base(raw, payload_at, payload_at + 32, width, height, threads)?;
-    let Some(target) = part else {
-        return RgbaImage::new(u32::from(h.width), u32::from(h.height), rgba);
+    let matches = |i, name: &[u8]| {
+        if let Some(index) = index {
+            return Ok(i == index);
+        }
+        match part {
+            None => Ok(i == 0),
+            Some([]) => Err(FormatError("PB2 type-6 part name is empty")),
+            Some(target) => equal_ignoring_ascii_case(TextEncoding::ShiftJis, name, target)
+                .map_err(|_| FormatError("invalid Shift-JIS sequence in PB2 part name")),
+        }
     };
-    if target.is_empty() {
-        return Err(FormatError("PB2 type-6 part name is empty"));
-    }
-    if equal_ignoring_ascii_case(TextEncoding::ShiftJis, base_name, target)
-        .map_err(|_| FormatError("invalid Shift-JIS sequence in PB2 part name"))?
-    {
+    if matches(0, base_name)? {
         return RgbaImage::new(u32::from(h.width), u32::from(h.height), rgba);
     }
 
     let mut pos = HEADER_SIZE
         .checked_add(chunk0_size)
         .ok_or(FormatError("PB2 type-6 chunk offset overflow"))?;
-    for _ in 1..h.count {
+    for i in 1..h.count {
         let (chunk_size, name, sub_at) = read_part_chunk(raw, pos)?;
-        if equal_ignoring_ascii_case(TextEncoding::ShiftJis, name, target)
-            .map_err(|_| FormatError("invalid Shift-JIS sequence in PB2 part name"))?
-        {
+        if matches(i as usize, name)? {
             let flags_off = u32_at(raw, sub_at)? as usize;
             let unpacked_len = u32_at(raw, sub_at + 8)? as usize;
             let tiles = width.div_ceil(8) * height.div_ceil(8);

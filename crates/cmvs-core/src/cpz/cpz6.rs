@@ -24,9 +24,10 @@ pub struct Cpz6Layout {
 #[derive(Debug)]
 pub struct Cpz6Index {
     pub layout: Cpz6Layout,
+    pub(super) directories: Vec<(std::sync::Arc<[u8]>, u32)>,
     entries: Vec<Entry>,
     lookup: LookupTable,
-    entry_keys: Vec<(u32, u32)>,
+    pub(super) entry_keys: Vec<(u32, u32)>,
     keys: crypto::Keys,
     file_bytes: u64,
 }
@@ -160,6 +161,10 @@ impl Cpz6Index {
         }
         let lookup = LookupTable::from_entries(&entries, <[u8]>::to_vec);
         Ok(Self {
+            directories: directories
+                .into_iter()
+                .map(|dir| (dir.name, dir.count))
+                .collect(),
             layout,
             entries,
             lookup,

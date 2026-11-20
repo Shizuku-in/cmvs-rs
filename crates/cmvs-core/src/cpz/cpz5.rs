@@ -239,9 +239,10 @@ pub struct Cpz5Layout {
 pub struct Cpz5Index {
     pub layout: Cpz5Layout,
     pub mode: Cpz5Mode,
+    pub(super) directories: Vec<(std::sync::Arc<[u8]>, u32)>,
     entries: Vec<Entry>,
     lookup: LookupTable,
-    entry_keys: Vec<(u32, u32)>,
+    pub(super) entry_keys: Vec<(u32, u32)>,
     keys: crypto::Keys,
     file_bytes: u64,
 }
@@ -457,6 +458,10 @@ impl Cpz5Index {
         }
         let lookup = LookupTable::from_entries(&entries, <[u8]>::to_vec);
         Ok(Self {
+            directories: directories
+                .into_iter()
+                .map(|dir| (dir.name, dir.count))
+                .collect(),
             layout,
             mode,
             entries,

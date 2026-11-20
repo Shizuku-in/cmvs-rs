@@ -104,6 +104,8 @@ mod modules {
     pub mod mv2;
     pub mod pb2;
     pub mod pb3;
+    #[cfg(feature = "encode")]
+    pub(crate) mod pb_write;
     pub mod platform;
     pub mod ps3;
     pub mod random;
@@ -125,6 +127,9 @@ mod modules {
     #[path = "vm.rs"]
     pub mod vm_core;
 }
+
+#[cfg(feature = "encode")]
+pub(crate) use modules::pb_write;
 
 #[allow(unused_imports)]
 pub(crate) use modules::{

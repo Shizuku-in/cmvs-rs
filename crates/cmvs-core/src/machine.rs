@@ -56,7 +56,7 @@ impl IntoSharedScript for &Arc<Script> {
 /// Frame table +82548 has 64 entries indexed by depth +82804; entry 0 is the base.
 const MAX_CALL_DEPTH: usize = 63;
 /// The +82864 accumulator and each string slot are 1024 bytes including the NUL.
-const STRING_CAPACITY: usize = 1023;
+pub const STRING_CAPACITY: usize = 1023;
 
 fn c_string(bytes: &[u8], offset: u32, pc: usize, tag: u16) -> Result<&[u8], DecodeError> {
     let tail = bytes
@@ -500,6 +500,33 @@ impl Machine {
         self.pending
     }
     /// Translate later system commands; the pending one keeps the number it was issued with.
+    pub(crate) fn initialize_profile(
+        &mut self,
+        profile: &crate::profile::EngineProfile,
+    ) -> Result<(), crate::FormatError> {
+        self.set_command_map(profile.command_map());
+        self.state_mut().set_string_slots(profile.string_slots());
+        if let Some([integers, bits, floats, strings]) = profile.initial_globals() {
+            // Verified PE zero-fill globals (docs/games/aoitori/README.md
+            // and docs/games/hapymaherfd/README.md). Keep standalone
+            // research VMs and other profiles unknown until separately verified.
+            let state = self.state_mut();
+            state
+                .fill_integers(0, integers, 0)
+                .map_err(crate::FormatError)?;
+            state
+                .fill_bits(0, bits, false)
+                .map_err(crate::FormatError)?;
+            state
+                .fill_floats(0, floats, 0)
+                .map_err(crate::FormatError)?;
+            state
+                .fill_strings(0, strings, b"")
+                .map_err(crate::FormatError)?;
+        }
+        Ok(())
+    }
+
     pub fn set_command_map(&mut self, map: Option<crate::cvns::CommandMap>) {
         self.command_map = map;
     }

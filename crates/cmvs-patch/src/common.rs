@@ -2,11 +2,8 @@
 
 use cmvs_core::{
     format::cpz::ArchiveDirectory, format::cpz::ArchiveFile, format::cpz::ArchiveIndex,
-    format::cpz::Cpz3Index, format::cpz::Cpz5Index, format::cpz::Cpz7Index, format::pb3,
-    format::pb3::EncodeDepth, format::ps3, format::ps3::Script, format::ps3::TextEntry,
-    runtime::script_control::archive_index_from_start,
-    runtime::script_control::cpz7_parameters_from_start, vm::bytecode, vm::bytecode::Expression,
-    vm::bytecode::InstructionKind, vm::bytecode::Term,
+    format::cpz::Cpz3Index, format::cpz::Cpz5Index, format::pb3, format::pb3::EncodeDepth,
+    format::ps3, format::ps3::Script, runtime::script_control::archive_index_from_start,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -79,43 +76,6 @@ pub fn encode_memory(raw: &[u8]) -> Result<Vec<u8>> {
     Ok(ps3::encode_memory_image(raw)?)
 }
 
-fn put_u32(data: &mut [u8], at: usize, value: u32) {
-    data[at..at + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn rewrite_expression(
-    expr: &Expression,
-    code: &mut [u8],
-    offsets: &BTreeMap<u32, u32>,
-) -> Result<usize> {
-    let mut changed = 0;
-    for term in &expr.terms {
-        match term {
-            Term::Scalar {
-                pc,
-                tag: 0x120,
-                raw,
-            } if expr.kind == 0x201 => {
-                let &target = offsets.get(raw).ok_or_else(|| {
-                    format!("literal at {pc:x} points outside string boundaries: {raw:x}")
-                })?;
-                put_u32(code, pc + 2, target);
-                changed += usize::from(*raw != target);
-            }
-            Term::Nested { expression, .. } => {
-                changed += rewrite_expression(expression, code, offsets)?;
-            }
-            Term::Indexed { indices, .. } => {
-                for index in indices {
-                    changed += rewrite_expression(index, code, offsets)?;
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(changed)
-}
-
 pub fn rewrite_encoded(
     raw: &[u8],
     rows: &BTreeMap<u32, Vec<u8>>,
@@ -123,60 +83,36 @@ pub fn rewrite_encoded(
     substitutions: &[(char, &str)],
 ) -> Result<(Vec<u8>, usize)> {
     let script = Script::decode(raw)?;
-    script.strings()?; // Validate terminators, then include empty strings too.
-    let mut start = 0;
-    let strings: Vec<_> = script
-        .text()
-        .split_inclusive(|&b| b == 0)
-        .map(|bytes| {
-            let entry = TextEntry {
-                offset: start,
-                bytes: &bytes[..bytes.len() - 1],
-            };
-            start += bytes.len();
-            entry
-        })
-        .collect();
-    let starts: BTreeSet<_> = strings.iter().map(|s| s.offset as u32).collect();
-    if rows.keys().any(|k| !starts.contains(k)) {
-        return Err("patch offset outside original string table".into());
-    }
-    let mut text = Vec::new();
-    let mut offsets = BTreeMap::new();
-    for string in strings {
-        offsets.insert(string.offset as u32, text.len() as u32);
-        let recoded;
-        let value = if let Some(translated) = rows.get(&(string.offset as u32)) {
-            translated.as_slice()
-        } else {
-            let (unicode, _, bad) = encoding_rs::SHIFT_JIS.decode(string.bytes);
-            if bad {
-                return Err("invalid untranslated Shift-JIS string".into());
+    use cmvs_assembler::script::{ScriptText, Segment};
+    let layout = ScriptText::new(&script)?;
+    let mut edits = BTreeMap::new();
+    let mut used = 0;
+    for (segment, offset, original) in layout.strings() {
+        if segment == Segment::Data {
+            continue;
+        }
+        let value = match rows.get(&(offset as u32)) {
+            Some(translated) => {
+                used += 1;
+                encoding.encode(std::str::from_utf8(translated)?, substitutions)?
             }
-            recoded = unicode.as_bytes().to_vec();
-            &recoded
+            None => {
+                let (unicode, _, bad) = encoding_rs::SHIFT_JIS.decode(original);
+                if bad {
+                    return Err("invalid untranslated Shift-JIS string".into());
+                }
+                encoding.encode(&unicode, substitutions)?
+            }
         };
-        text.extend(encoding.encode(std::str::from_utf8(value)?, substitutions)?);
-        text.push(0);
-    }
-    let mut code = script.code().to_vec();
-    let instructions = bytecode::decode_layout(&code, script.header().entry_pc, &script.labels())?;
-    let mut changed = 0;
-    for insn in &instructions {
-        if let InstructionKind::Expression(expr) = &insn.kind {
-            changed += rewrite_expression(expr, &mut code, &offsets)?;
+        if value != original {
+            edits.insert((segment, offset), value);
         }
     }
-    // Code length, PCs, labels, branches and the mutable data segment are preserved.
-    let after = bytecode::decode_layout(&code, script.header().entry_pc, &script.labels())?;
-    if !instructions
-        .iter()
-        .zip(&after)
-        .all(|(a, b)| (a.pc, a.end, a.opcode) == (b.pc, b.end, b.opcode))
-    {
-        return Err("instruction layout changed".into());
+    if used != rows.len() {
+        return Err("patch offset outside original string table".into());
     }
-    Ok((rebuild_script(raw, &code, &text)?, changed))
+    let (updated, relocated) = cmvs_assembler::script::rewrite(&layout, &edits)?;
+    Ok((updated.encode()?, relocated))
 }
 
 pub fn rebuild_script(raw: &[u8], code: &[u8], text: &[u8]) -> Result<Vec<u8>> {
@@ -213,24 +149,14 @@ pub fn png_to_pb3(
     allow_rgb: bool,
     policy: PngDepthPolicy,
 ) -> Result<ConvertedImage> {
-    let mut reader = png::Decoder::new(Cursor::new(raw)).read_info()?;
-    let info = reader.info();
-    let (width, height) = (info.width, info.height);
-    let color_ok = match info.color_type {
-        png::ColorType::Rgba => true,
-        png::ColorType::Rgb => allow_rgb,
-        _ => false,
-    };
-    if !color_ok
-        || info.bit_depth != png::BitDepth::Eight
-        || width == 0
-        || height == 0
-        || width > 65535
-        || height > 65535
-        || u64::from(width) * u64::from(height) * 4 > cmvs_core::MAX_PAYLOAD as u64
+    let reader = png::Decoder::new(Cursor::new(raw)).read_info()?;
+    let color = reader.info().color_type;
+    if reader.info().bit_depth != png::BitDepth::Eight
+        || (color != png::ColorType::Rgba && !(allow_rgb && color == png::ColorType::Rgb))
     {
-        return Err("expected bounded 8-bit patch PNG".into());
+        return Err("expected 8-bit RGB or RGBA patch PNG".into());
     }
+    let (width, height) = reader.info().size();
     let header = pb3::Header::parse(original)?;
     if u32::from(header.width) != width || u32::from(header.height) != height {
         return Err(format!(
@@ -239,32 +165,12 @@ pub fn png_to_pb3(
         )
         .into());
     }
-    let mut rgba = vec![0; reader.output_buffer_size().ok_or("PNG exceeds limit")?];
-    let color = reader.info().color_type;
-    let frame = reader.next_frame(&mut rgba)?;
-    rgba.truncate(frame.buffer_size());
-    reader.finish()?;
-    if color == png::ColorType::Rgb {
-        rgba = rgba
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|p| [p[0], p[1], p[2], 255])
-            .collect();
-    }
-    let count = (width * height) as usize;
-    if rgba.len() != count * 4 {
-        return Err("PNG pixel count differs".into());
-    }
     let depth = match policy {
         PngDepthPolicy::ForceRgba32 => EncodeDepth::Rgba32,
         PngDepthPolicy::PreserveOriginal => EncodeDepth::from_bpp(header.bpp)?,
     };
-    let bytes = pb3::encode_rgba(&rgba, width, height, depth)?;
-    let decoded = pb3::decode(&bytes)?;
-    if decoded.width() != width || decoded.height() != height || decoded.pixels() != rgba {
-        return Err("PB3B full RGBA roundtrip differs".into());
-    }
+    let bytes =
+        cmvs_assembler::image::encode_pb3(&cmvs_assembler::image::png_pixels(reader)?, depth)?;
     Ok(ConvertedImage {
         bytes,
         width,
@@ -317,78 +223,59 @@ pub fn write_archive<R: Read + Seek>(
     if replacements.keys().any(|i| *i >= index.entries().len()) {
         return Err("replacement outside source archive".into());
     }
-    let mut rebuilt = None;
-    if !additions.is_empty() {
-        let ArchiveIndex::Cpz5(original) = index else {
-            return Err("additional patch files require CPZ5".into());
-        };
-        if original.layout.encryption_mode != 1 {
-            return Err("additional patch files require CPZ5 resource mode 1".into());
-        }
-        let mut dirs: Vec<ArchiveDirectory> = Vec::new();
-        for (i, entry) in index.entries().iter().enumerate() {
-            if dirs
-                .last()
-                .is_none_or(|d| d.name != entry.directory.as_ref())
-            {
-                dirs.push(ArchiveDirectory {
-                    name: entry.directory.to_vec(),
-                    files: Vec::new(),
-                });
-            }
-            let raw = index.read_entry_verified(source, i)?;
-            dirs.last_mut().expect("directory").files.push(ArchiveFile {
-                name: entry.name.clone(),
-                data: replacements.get(&i).cloned().unwrap_or(raw),
+    if additions.is_empty() {
+        return cmvs_assembler::archive::replace(source, index, destination, replacements, true);
+    }
+    let ArchiveIndex::Cpz5(original) = index else {
+        return Err("additional patch files require CPZ5".into());
+    };
+    if original.layout.encryption_mode != 1 {
+        return Err("additional patch files require CPZ5 resource mode 1".into());
+    }
+    let mut dirs: Vec<ArchiveDirectory> = Vec::new();
+    for (i, entry) in index.entries().iter().enumerate() {
+        if dirs
+            .last()
+            .is_none_or(|d| d.name != entry.directory.as_ref())
+        {
+            dirs.push(ArchiveDirectory {
+                name: entry.directory.to_vec(),
+                files: Vec::new(),
             });
         }
-        let mut names: BTreeSet<_> = index.entries().iter().map(|e| e.name.clone()).collect();
-        for addition in additions {
-            if !names.insert(addition.name.clone()) {
-                return Err("duplicate additional filename".into());
-            }
-            let directory = &index
-                .entries()
-                .get(addition.template)
-                .ok_or("invalid additional file template")?
-                .directory;
-            let targets: Vec<_> = dirs
-                .iter()
-                .enumerate()
-                .filter(|(_, d)| d.name == directory.as_ref())
-                .map(|(i, _)| i)
-                .collect();
-            if targets.len() != 1 {
-                return Err("ambiguous additional file directory".into());
-            }
-            dirs[targets[0]].files.push(ArchiveFile {
-                name: addition.name.clone(),
-                data: addition.bytes.clone(),
-            });
+        let raw = index.read_entry_verified(source, i)?;
+        dirs.last_mut().expect("directory").files.push(ArchiveFile {
+            name: entry.name.clone(),
+            data: replacements.get(&i).cloned().unwrap_or(raw),
+        });
+    }
+    let mut names: BTreeSet<_> = index.entries().iter().map(|e| e.name.clone()).collect();
+    for addition in additions {
+        if !names.insert(addition.name.clone()) {
+            return Err("duplicate additional filename".into());
         }
-        rebuilt = Some((original.mode, dirs));
+        let directory = &index
+            .entries()
+            .get(addition.template)
+            .ok_or("invalid additional file template")?
+            .directory;
+        let targets: Vec<_> = dirs
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.name == directory.as_ref())
+            .map(|(i, _)| i)
+            .collect();
+        if targets.len() != 1 {
+            return Err("ambiguous additional file directory".into());
+        }
+        dirs[targets[0]].files.push(ArchiveFile {
+            name: addition.name.clone(),
+            data: addition.bytes.clone(),
+        });
     }
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(destination)?;
-    if let Some((mode, dirs)) = &rebuilt {
-        Cpz5Index::write(&mut output, *mode, dirs)?;
-    } else {
-        index.write_replacements(source, &mut output, replacements)?;
-    }
-    drop(output);
-    let mut output = File::open(destination)?;
-    let checked = ArchiveIndex::read(&mut output)?;
-    if checked.version() != index.version() {
-        return Err("archive format changed".into());
-    }
-    if let (ArchiveIndex::Cpz5(before), ArchiveIndex::Cpz5(after)) = (index, &checked)
-        && before.mode != after.mode
-    {
-        return Err("CPZ5 packing mode changed".into());
-    }
-    if let Some((_, dirs)) = &rebuilt {
+    cmvs_assembler::write_new(destination, |output| {
+        Cpz5Index::write(output, original.mode, &dirs)?;
+        let checked = index.read_with_same_settings(output)?;
         let expected: Vec<_> = dirs
             .iter()
             .flat_map(|d| d.files.iter().map(move |f| (d, f)))
@@ -399,29 +286,13 @@ pub fn write_archive<R: Read + Seek>(
         for (i, (entry, (dir, file))) in checked.entries().iter().zip(expected).enumerate() {
             if entry.directory.as_ref() != dir.name
                 || entry.name != file.name
-                || checked.read_entry_verified(&mut output, i)? != file.data
+                || checked.read_entry_verified(output, i)? != file.data
             {
                 return Err("rebuilt archive roundtrip differs".into());
             }
         }
-    } else {
-        if checked.entries().len() != index.entries().len() {
-            return Err("archive entry count changed".into());
-        }
-        for (i, (before, after)) in index.entries().iter().zip(checked.entries()).enumerate() {
-            let expected = match replacements.get(&i) {
-                Some(bytes) => bytes.clone(),
-                None => index.read_entry_verified(source, i)?,
-            };
-            if before.directory != after.directory
-                || before.name != after.name
-                || checked.read_entry_verified(&mut output, i)? != expected
-            {
-                return Err("archive replacement roundtrip differs".into());
-            }
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 pub fn rewrite_cpz7_archive(
@@ -431,25 +302,12 @@ pub fn rewrite_cpz7_archive(
     name: &str,
     replacements: &BTreeMap<usize, Vec<u8>>,
 ) -> Result<()> {
-    let parameters = cpz7_parameters_from_start(start, name.as_bytes())?
-        .ok_or("missing original CPZ7 registration")?;
     let mut source = File::open(game.join("data/pack").join(name))?;
-    let mut destination = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(output.join(name))?;
     let index = archive_index_from_start(&mut source, start, name.as_bytes())?;
-    index.write_replacements(&mut source, &mut destination, replacements)?;
-    destination.flush()?;
-    drop(destination);
-    let mut verified = File::open(output.join(name))?;
-    let index = Cpz7Index::read_with_parameters(&mut verified, parameters)?;
-    for (&i, expected) in replacements {
-        if index.read_entry_verified(&mut verified, i)? != *expected {
-            return Err("CPZ7 replacement roundtrip differs".into());
-        }
+    if !matches!(index, ArchiveIndex::Cpz7(_)) {
+        return Err("expected a CPZ7 archive".into());
     }
-    Ok(())
+    cmvs_assembler::archive::replace(&mut source, &index, &output.join(name), replacements, false)
 }
 
 #[cfg(test)]
@@ -529,7 +387,7 @@ mod tests {
         assert_eq!(word(after.code(), 14)?, 17);
         assert_eq!(word(after.code(), 24)?, 0);
         let mut expected = before.code().to_vec();
-        put_u32(&mut expected, 14, 17);
+        expected[14..18].copy_from_slice(&17u32.to_le_bytes());
         assert_eq!(after.code(), expected);
         assert!(rewrite(&raw, &BTreeMap::from([(2, b"bad offset".to_vec())])).is_err());
         Ok(())

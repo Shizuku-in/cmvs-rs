@@ -3,7 +3,6 @@ use cmvs_core::{
     format::cpz::ArchiveIndex, format::cpz::ArchiveLayout, format::cpz::ArchiveVersion,
     format::cpz::Cpz2Index, format::cpz::Cpz7Parameters, format::cpz::cpz3_checksum,
 };
-use std::collections::BTreeMap;
 use std::io::Cursor;
 
 const PHRASE_V2: &[u8; 64] = b"\x88\xc3\x8d\x86\x82\xcd\x82\xcb\x81\x41\x89\xf0\x90\xcd\x82\xb5\x82\xbf\x82\xe1\x83\x5f\x83\x81\x82\xc8\x82\xcc\x81\x63\x82\xd9\x82\xf1\x82\xc6\x82\xbe\x82\xe6\x81\xf4\x82\xa0\x82\xea\x81\x63\x92\x4e\x82\xc9\x8c\xbe\x82\xc1\x82\xc4\x82\xe9\x82\xcc\x81\x48";
@@ -217,16 +216,31 @@ fn malformed_inputs_are_rejected() {
 }
 
 #[test]
-fn write_back_is_refused() {
-    let bytes = archive(2, &FILES, 3, 0);
-    let index = ArchiveIndex::read(&mut Cursor::new(&bytes)).unwrap();
-    let mut output = Cursor::new(Vec::new());
-    assert!(
+fn streamed_replacements_match_independent_archives_with_padding_and_word_tails() {
+    for version in [1, 2] {
+        let mut bytes = Cursor::new(archive(version, &FILES, 3, 257));
+        let index = ArchiveIndex::read(&mut bytes).unwrap();
+        let changed: Vec<u8> = (0..65540).map(|v| (v % 251) as u8).collect();
+        let mut files = FILES;
+        for (i, file) in files.iter_mut().take(3).enumerate() {
+            file.1 = &changed[..65537 + i];
+        }
+        let mut out = Cursor::new(Vec::new());
         index
-            .write_replacements(&mut Cursor::new(&bytes), &mut output, &BTreeMap::new())
-            .is_err()
-    );
-    assert!(output.into_inner().is_empty());
+            .write_flat_replacements(&mut bytes, &mut out, |i| {
+                Ok((i < 3).then(|| (files[i].1.len() as u32, files[i].1)))
+            })
+            .unwrap();
+        assert_eq!(out.get_ref(), &archive(version, &files, 3, 257));
+        let restored = ArchiveIndex::read(&mut out).unwrap();
+        for (i, file) in files.iter().enumerate() {
+            let mut plain = Vec::new();
+            restored
+                .copy_flat_entry_verified(&mut out, i, &mut plain)
+                .unwrap();
+            assert_eq!(plain, file.1);
+        }
+    }
 }
 
 /// Every entry of every listed CVNS archive: verified read, magic by extension,

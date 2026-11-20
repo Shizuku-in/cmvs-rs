@@ -86,7 +86,12 @@ impl Target {
             None => None,
         };
         if let Some(files) = &files
-            && let Ok((_, index)) = open_archive(root, files, &root.join(&files.script_archive))
+            && let Ok((_, index)) = open_profile_archive(
+                root,
+                files,
+                &root.join(&files.script_archive),
+                game.as_ref().map(|g| g.selection.profile),
+            )
         {
             capabilities.insert(cap::ARCHIVE);
             match index.version() {
@@ -204,12 +209,20 @@ pub fn open_archive(
     files: &GameFiles,
     path: &Path,
 ) -> Result<(File, ArchiveIndex), std::io::Error> {
+    open_profile_archive(root, files, path, None)
+}
+pub(crate) fn open_profile_archive(
+    root: &Path,
+    files: &GameFiles,
+    path: &Path,
+    profile: Option<&cmvs_core::profile::EngineProfile>,
+) -> Result<(File, ArchiveIndex), std::io::Error> {
     use std::io::{Read, Seek};
     let mut file = File::open(path)?;
     let mut magic = [0; 4];
     file.read_exact(&mut magic)?;
     file.rewind()?;
-    if &magic != b"CPZ7" {
+    if &magic != b"CPZ7" && !(profile.is_some() && &magic == b"CPZ5") {
         let index = ArchiveIndex::read(&mut file).map_err(std::io::Error::other)?;
         return Ok((file, index));
     }
@@ -218,14 +231,14 @@ pub fn open_archive(
         .take(cmvs_core::MAX_PAYLOAD as u64 + 49)
         .read_to_end(&mut raw)?;
     let script = cmvs_core::format::ps3::Script::decode(&raw).map_err(std::io::Error::other)?;
-    let name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| std::io::Error::other("archive basename is not UTF-8"))?;
-    let index = cmvs_core::runtime::script_control::archive_index_from_start(
+    let relative = path.strip_prefix(root).map_err(std::io::Error::other)?;
+    let index = cmvs_core::runtime::script_control::archive_index_for_profile(
         &mut file,
         &script,
-        name.as_bytes(),
+        &cmvs_core::host::filesystem::StdFs,
+        root,
+        relative,
+        profile,
     )
     .map_err(|e| std::io::Error::other(e.to_string()))?;
     Ok((file, index))

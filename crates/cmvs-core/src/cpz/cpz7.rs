@@ -26,6 +26,28 @@ pub struct Cpz7Parameters {
     pub resource_seed_xor: u32,
 }
 
+impl std::str::FromStr for Cpz7Parameters {
+    type Err = FormatError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut fields = s.split(',');
+        let mut keys = [0; 4];
+        for key in &mut keys {
+            let v = fields
+                .next()
+                .ok_or(FormatError("expected exactly four CPZ7 keys"))?;
+            *key = match v.strip_prefix("0x") {
+                Some(hex) => u32::from_str_radix(hex, 16),
+                None => v.parse(),
+            }
+            .map_err(|_| FormatError("invalid CPZ7 key"))?;
+        }
+        if fields.next().is_some() {
+            return Err(FormatError("expected exactly four CPZ7 keys"));
+        }
+        Ok(keys.into())
+    }
+}
+
 impl From<[u32; 4]> for Cpz7Parameters {
     fn from(
         [
@@ -59,9 +81,10 @@ pub struct Cpz7Layout {
 #[derive(Debug)]
 pub struct Cpz7Index {
     pub layout: Cpz7Layout,
+    pub(super) directories: Vec<(std::sync::Arc<[u8]>, u32)>,
     entries: Vec<Entry>,
     lookup: LookupTable,
-    entry_keys: Vec<(u32, u32)>,
+    pub(super) entry_keys: Vec<(u32, u32)>,
     keys: crypto::Keys,
     pub(super) parameters: Cpz7Parameters,
     file_bytes: u64,
@@ -225,6 +248,10 @@ impl Cpz7Index {
         }
         let lookup = LookupTable::from_entries(&entries, <[u8]>::to_vec);
         Ok(Self {
+            directories: directories
+                .into_iter()
+                .map(|dir| (dir.name, dir.count))
+                .collect(),
             layout,
             entries,
             lookup,

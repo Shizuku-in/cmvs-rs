@@ -19,9 +19,13 @@ const KEY: [u8; 64] = {
 };
 
 /// The key index restarts for every buffer (index or resource).
-fn decrypt(bytes: &mut [u8]) {
+pub(super) fn crypt(bytes: &mut [u8], encrypt: bool) {
     for (i, byte) in bytes.iter_mut().enumerate() {
-        *byte = (*byte ^ KEY[i & 63]).wrapping_sub(108);
+        *byte = if encrypt {
+            byte.wrapping_add(108) ^ KEY[i & 63]
+        } else {
+            (*byte ^ KEY[i & 63]).wrapping_sub(108)
+        };
     }
 }
 
@@ -70,7 +74,7 @@ impl Cpz1Index {
         }
         let mut bytes = vec![0; layout.index_bytes as usize];
         reader.read_exact(&mut bytes)?;
-        decrypt(&mut bytes);
+        crypt(&mut bytes, false);
         let (entries, _) =
             flat::records(&bytes, layout.file_count, layout.data_offset, file_bytes)?;
         let lookup = flat::FlatLookup::from_entries(&entries);
@@ -106,7 +110,7 @@ impl Cpz1Index {
         index: usize,
     ) -> Result<Vec<u8>, ArchiveError> {
         let mut bytes = flat::read_raw(reader, &self.entries, index)?;
-        decrypt(&mut bytes);
+        crypt(&mut bytes, false);
         Ok(bytes)
     }
 }

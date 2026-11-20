@@ -75,7 +75,7 @@ use crate::{
     resources::{ResourceArchives, ResourceKind},
     save_menu::{DirectorySaves, SaveMenuHost},
     scene::SceneHost,
-    script_control::{ArchiveScripts, ControlEvent, ScriptControl, ScriptSource},
+    script_control::{ArchiveScripts, ControlEvent, ScriptControl},
     snapshot::{SaveImage, SaveInfo, SaveTitle},
     system_save::{
         FileSystemSave, NewSystemSave, ProfileSystemSave, SystemSaveEvent, SystemSaveHost,
@@ -580,28 +580,7 @@ impl Runtime {
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let script = script.into_shared_script();
         let mut machine = Machine::new_with_encoding(Arc::clone(&script), encoding)?;
-        machine.set_command_map(game.selection.profile.command_map());
-        machine
-            .state_mut()
-            .set_string_slots(game.selection.profile.string_slots());
-        if let Some([integers, bits, floats, strings]) = game.selection.profile.initial_globals() {
-            // Verified PE zero-fill globals (docs/games/aoitori/README.md
-            // and docs/games/hapymaherfd/README.md). Keep standalone
-            // research VMs and other profiles unknown until separately verified.
-            let state = machine.state_mut();
-            state
-                .fill_integers(0, integers, 0)
-                .map_err(crate::FormatError)?;
-            state
-                .fill_bits(0, bits, false)
-                .map_err(crate::FormatError)?;
-            state
-                .fill_floats(0, floats, 0)
-                .map_err(crate::FormatError)?;
-            state
-                .fill_strings(0, strings, b"")
-                .map_err(crate::FormatError)?;
-        }
+        machine.initialize_profile(game.selection.profile)?;
         machine.set_current_name(game.files.start_name());
         // 0x14000a3c0 reads the startup settings; cmvs.cfg (or CVNS cvns.cfg) is optional and read only.
         let profile = game.selection.profile;
@@ -651,15 +630,11 @@ impl Runtime {
             focused: true,
             bootstrap: Bootstrap::default(),
             control: ScriptControl::for_profile(game.selection.profile, virtual_tick),
-            source: ArchiveScripts::from_start(
+            source: ArchiveScripts::deferred(
                 fs.open_read(&root.join(&game.files.script_archive))?,
-                &script,
-                game.files
-                    .script_archive
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .ok_or(crate::FormatError("archive basename is not UTF-8"))?
-                    .as_bytes(),
+                &*fs,
+                &canonical_root,
+                &game.files.script_archive,
             )?,
             saves: DirectorySaves::with_fs(root.join("save"), Arc::clone(&fs))?,
             save_menu,
@@ -731,7 +706,13 @@ impl Runtime {
             (true, Some(record)) => {
                 let inferred = self
                     .source
-                    .load(self.main_script_name)
+                    .preview(
+                        self.main_script_name,
+                        &*self.fs,
+                        &self.root,
+                        self.machine.loaded_script(0),
+                        self.gate.profile(),
+                    )
                     .ok()
                     .and_then(|script| {
                         let instructions = crate::bytecode::decode_layout(
@@ -1459,6 +1440,7 @@ impl Runtime {
                 RuntimeEvent::Progress
             });
         };
+        self.source.set_lookup_pc(pc);
         let resolved = self.gate.resolve(&self.machine, pc, command)?;
         if let Some(first) = resolved.first_unreviewed {
             self.notices.push(first);
@@ -1548,6 +1530,8 @@ impl Runtime {
             {
                 self.settings.cvns_mut().frame_interval_ms = interval;
             }
+            self.source
+                .configure(&self.bootstrap, &*self.fs, &self.root);
             self.images
                 .configure_parameters(self.bootstrap.archive_parameters());
             self.scene_movies

@@ -1,0 +1,16 @@
+[package]
+license.workspace = true
+name = "cmvs-tooling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Shared offline CMVS script layout, translation format and file operations"
+
+[lints]
+workspace = true
+
+[dependencies]
+cmvs-core = { path = "../cmvs-core" }
+encoding_rs.workspace = true
+tempfile.workspace = true

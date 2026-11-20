@@ -31,6 +31,15 @@ impl Container {
     }
 }
 
+/// Container fields independent of segment sizes and storage compression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScriptFormat {
+    pub container: Container,
+    pub version_raw: u32,
+    pub key: u32,
+    pub reserved: u32,
+}
+
 /// Script container metadata; sizes and entry offsets are measured in bytes.
 #[derive(Debug, Clone)]
 pub struct Header {
@@ -126,6 +135,64 @@ impl Script {
     /// Original header fields, including the container's packed-size metadata.
     pub fn header(&self) -> &Header {
         &self.header
+    }
+
+    pub fn format(&self) -> ScriptFormat {
+        let h = self.header();
+        ScriptFormat {
+            container: h.container,
+            version_raw: h.version_raw,
+            key: h.key,
+            reserved: h.reserved,
+        }
+    }
+
+    /// Build a script with a new layout. Labels and entry are byte offsets into code.
+    #[cfg(feature = "encode")]
+    pub fn from_segments(
+        format: ScriptFormat,
+        entry_pc: u32,
+        labels: &[u32],
+        code: &[u8],
+        data: &[u8],
+        text: &[u8],
+    ) -> Result<Self, FormatError> {
+        let total =
+            4 * labels.len() as u64 + code.len() as u64 + data.len() as u64 + text.len() as u64;
+        if total > MAX_PAYLOAD as u64 {
+            return Err(FormatError("script exceeds research allocation limit"));
+        }
+        if code.len() < 2
+            || entry_pc as usize >= code.len()
+            || labels.iter().any(|&pc| pc as usize >= code.len())
+        {
+            return Err(FormatError("entry or label outside code segment"));
+        }
+        let header = Header {
+            container: format.container,
+            version_raw: format.version_raw,
+            key: format.key,
+            reserved: format.reserved,
+            entry_pc,
+            label_count: labels.len() as u32,
+            code_size: code.len() as u32,
+            unknown_size: data.len() as u32,
+            text_size: text.len() as u32,
+            compressed_size: 0,
+            decoded_size: total as u32,
+        };
+        let mut payload = Vec::with_capacity(total as usize);
+        for target in labels {
+            payload.extend(target.to_le_bytes());
+        }
+        payload.extend_from_slice(code);
+        payload.extend_from_slice(data);
+        payload.extend_from_slice(text);
+        Ok(Self {
+            header,
+            payload,
+            trailing_file_bytes: 0,
+        })
     }
 
     /// Read an already-decoded script memory image from a gameplay save.
@@ -292,6 +359,13 @@ impl Script {
         &self.payload[start..start + self.header.unknown_size as usize]
     }
 
+    /// Edit initial data in place, preserving byte addresses shared with numeric operands.
+    #[cfg(feature = "encode")]
+    pub fn initial_data_mut(&mut self) -> &mut [u8] {
+        let start = self.code_start() + self.header.code_size as usize;
+        &mut self.payload[start..start + self.header.unknown_size as usize]
+    }
+
     /// Raw text segment, including NUL terminators.
     pub fn text(&self) -> &[u8] {
         let start =
@@ -358,13 +432,27 @@ impl Script {
     /// [`Header::entry_pc`], [`Header::reserved`], and all decoded segments, setting
     /// `compressed_size` to `0` and applying the PS2A byte transform when needed.
     pub fn encode(&self) -> Result<Vec<u8>, FormatError> {
+        self.encode_payload(&self.payload, 0)
+    }
+
+    /// Compress with the script LZSS codec before applying the container transform.
+    #[cfg(feature = "encode")]
+    pub fn encode_compressed(&self) -> Result<Vec<u8>, FormatError> {
+        let packed = lzss::encode(&self.payload);
+        if packed.len() > MAX_PAYLOAD {
+            return Err(FormatError("compressed script exceeds payload limit"));
+        }
+        self.encode_payload(&packed, packed.len() as u32)
+    }
+
+    fn encode_payload(&self, stored: &[u8], compressed_size: u32) -> Result<Vec<u8>, FormatError> {
         if self.payload.len() > MAX_PAYLOAD
             || self.payload.len() as u64 != self.header.segment_size()
         {
             return Err(FormatError("script segment lengths disagree"));
         }
         let h = &self.header;
-        let mut out = Vec::with_capacity(HEADER_SIZE + self.payload.len());
+        let mut out = Vec::with_capacity(HEADER_SIZE + stored.len());
         out.extend_from_slice(h.container.magic());
         for word in [
             HEADER_SIZE as u32,
@@ -375,7 +463,7 @@ impl Script {
             h.unknown_size,
             h.text_size,
             h.entry_pc,
-            0,
+            compressed_size,
             self.payload.len() as u32,
             h.reserved,
         ] {
@@ -386,12 +474,12 @@ impl Script {
                 let xor = ((h.key >> 3).wrapping_add(h.key >> 24)) as u8;
                 let shift = (h.key >> 20) % 5 + 1;
                 out.extend(
-                    self.payload
+                    stored
                         .iter()
                         .map(|&b| (b.rotate_left(shift) ^ xor).wrapping_add(124)),
                 );
             }
-            Container::Pss0 => out.extend_from_slice(&self.payload),
+            Container::Pss0 => out.extend_from_slice(stored),
         }
         Ok(out)
     }

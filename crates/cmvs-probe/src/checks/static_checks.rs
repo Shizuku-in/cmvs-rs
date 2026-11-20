@@ -86,10 +86,11 @@ pub fn scripts(target: &Target) -> (CheckResult, Option<ScriptInventory>) {
     // and skip an archive entry of the same name.
     let start_name = files.start_name();
     inventory.add(start_name.escape_ascii().to_string(), start);
-    let archive = crate::target::open_archive(
+    let archive = crate::target::open_profile_archive(
         &target.root,
         files,
         &target.root.join(&files.script_archive),
+        target.game.as_ref().map(|g| g.selection.profile),
     );
     match archive {
         Ok((mut file, index)) => {
@@ -320,7 +321,12 @@ pub fn resources(target: &Target) -> CheckResult {
                 continue;
             }
             archives += 1;
-            let opened = crate::target::open_archive(&target.root, files, &path);
+            let opened = crate::target::open_profile_archive(
+                &target.root,
+                files,
+                &path,
+                target.game.as_ref().map(|g| g.selection.profile),
+            );
             let (mut file, index) = match opened {
                 Ok(opened) => opened,
                 Err(e) => {
