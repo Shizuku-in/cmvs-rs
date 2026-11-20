@@ -140,7 +140,7 @@ fn synthetic_game(name: &str, code: &[u8], text: &[u8]) -> crate::support::temp_
     fs::create_dir_all(root.join("data/pack")).unwrap();
     fs::create_dir_all(root.join("save")).unwrap();
     fs::write(root.join("data/pack/start.ps3"), ps2a(code, text)).unwrap();
-    let archive: Vec<_> = include_str!("../../../../tests/fixtures/cpz6-script.hex")
+    let archive: Vec<_> = include_str!("../fixtures/cpz6-script.hex")
         .trim()
         .as_bytes()
         .as_chunks::<2>()

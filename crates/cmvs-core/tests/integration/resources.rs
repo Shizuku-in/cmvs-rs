@@ -85,7 +85,7 @@ fn resource_families_and_slot_limits_are_independent() {
 fn keyed_archives_reopen_when_only_the_parameters_change() {
     use cmvs_core::{format::cpz::ArchiveIndex, format::cpz::Cpz7Parameters};
     let root = Root::new();
-    let bytes: Vec<_> = include_str!("../../../../tests/fixtures/cpz7-keyed.hex")
+    let bytes: Vec<_> = include_str!("../fixtures/cpz7-keyed.hex")
         .trim()
         .as_bytes()
         .as_chunks::<2>()

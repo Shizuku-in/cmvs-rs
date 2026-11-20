@@ -850,7 +850,7 @@ fn registered_entries_are_searched_in_slot_order_and_misses_skip() {
 #[test]
 fn archive_entries_fold_case_verify_checksums_and_reopen_on_reregistration() {
     let root = temp_root("archive");
-    let bytes: Vec<u8> = include_str!("../../../../tests/fixtures/cpz6-multiple.hex")
+    let bytes: Vec<u8> = include_str!("../fixtures/cpz6-multiple.hex")
         .trim()
         .as_bytes()
         .as_chunks::<2>()

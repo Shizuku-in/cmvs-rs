@@ -48,7 +48,7 @@ fn observing_a_message_wait_twice_does_not_require_an_input_edge() {
     }
     raw.extend(code.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     std::fs::write(root.join("data/pack/start.ps3"), raw).unwrap();
-    let archive: Vec<u8> = include_str!("../../../tests/fixtures/cpz6-script.hex")
+    let archive: Vec<u8> = include_str!("../../cmvs-core/tests/fixtures/cpz6-script.hex")
         .trim()
         .as_bytes()
         .as_chunks::<2>()

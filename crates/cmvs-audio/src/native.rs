@@ -1200,7 +1200,7 @@ mod output_gate_tests {
 
     #[test]
     fn cvns_voice_length_and_channel_balance_reach_pull_output() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         let voice = |name: &[u8]| AudioRequest::PlayVoice {
             channel: 0,
             name: name.to_vec(),
@@ -1263,7 +1263,7 @@ mod output_gate_tests {
 
     #[test]
     fn pull_output_resamples_channels_and_pads_with_silence() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/audio");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio");
         let bytes = std::fs::read(root.join("mono440.ogg")).unwrap();
         let (audio, mut output) = NativeAudio::pull(&root, 48_000, 2).unwrap();
         let mut silence = [1i16; 64];
@@ -1299,7 +1299,7 @@ mod output_gate_tests {
 
     #[test]
     fn host_and_game_mutes_are_independent_and_preserve_stream_consumption() {
-        let bytes = include_bytes!("../../../tests/fixtures/audio/mono440.ogg");
+        let bytes = include_bytes!("../tests/fixtures/audio/mono440.ogg");
         let gate = Arc::new(AtomicBool::new(true));
         let host = HostAudioControl {
             active: Arc::new(AtomicBool::new(true)),

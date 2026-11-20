@@ -15,42 +15,42 @@ fn hex(text: &str) -> Vec<u8> {
 }
 fn fixtures() -> Vec<(Vec<u8>, Cpz7Parameters)> {
     let mut cases: Vec<_> = [
-        include_str!("../../../../tests/fixtures/cpz3-0.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-1.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-2.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-3.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-4.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-padded.hex"),
-        include_str!("../../../../tests/fixtures/cpz5-5.hex"),
-        include_str!("../../../../tests/fixtures/cpz5-6.hex"),
-        include_str!("../../../../tests/fixtures/cpz5-7.hex"),
-        include_str!("../../../../tests/fixtures/cpz5-8.hex"),
-        include_str!("../../../../tests/fixtures/cpz5-9.hex"),
-        include_str!("../../../../tests/fixtures/cpz5-plain.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-0.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-1.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-2.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-3.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-4.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-5.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-6.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-7.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-multiple.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-0.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-1.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-2.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-3.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-4.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-5.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-6.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-7.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-plain.hex"),
+        include_str!("../fixtures/cpz3-0.hex"),
+        include_str!("../fixtures/cpz3-1.hex"),
+        include_str!("../fixtures/cpz3-2.hex"),
+        include_str!("../fixtures/cpz3-3.hex"),
+        include_str!("../fixtures/cpz3-4.hex"),
+        include_str!("../fixtures/cpz3-padded.hex"),
+        include_str!("../fixtures/cpz5-5.hex"),
+        include_str!("../fixtures/cpz5-6.hex"),
+        include_str!("../fixtures/cpz5-7.hex"),
+        include_str!("../fixtures/cpz5-8.hex"),
+        include_str!("../fixtures/cpz5-9.hex"),
+        include_str!("../fixtures/cpz5-plain.hex"),
+        include_str!("../fixtures/cpz6-0.hex"),
+        include_str!("../fixtures/cpz6-1.hex"),
+        include_str!("../fixtures/cpz6-2.hex"),
+        include_str!("../fixtures/cpz6-3.hex"),
+        include_str!("../fixtures/cpz6-4.hex"),
+        include_str!("../fixtures/cpz6-5.hex"),
+        include_str!("../fixtures/cpz6-6.hex"),
+        include_str!("../fixtures/cpz6-7.hex"),
+        include_str!("../fixtures/cpz6-multiple.hex"),
+        include_str!("../fixtures/cpz7-0.hex"),
+        include_str!("../fixtures/cpz7-1.hex"),
+        include_str!("../fixtures/cpz7-2.hex"),
+        include_str!("../fixtures/cpz7-3.hex"),
+        include_str!("../fixtures/cpz7-4.hex"),
+        include_str!("../fixtures/cpz7-5.hex"),
+        include_str!("../fixtures/cpz7-6.hex"),
+        include_str!("../fixtures/cpz7-7.hex"),
+        include_str!("../fixtures/cpz7-plain.hex"),
     ]
     .into_iter()
     .map(|s| (hex(s), Cpz7Parameters::default()))
     .collect();
     cases.push((
-        hex(include_str!("../../../../tests/fixtures/cpz7-keyed.hex")),
+        hex(include_str!("../fixtures/cpz7-keyed.hex")),
         [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210].into(),
     ));
     // Legacy CPZ6 vectors deliberately store zero resource checksums. Adjust
@@ -188,7 +188,7 @@ fn rewriting_rejects_invalid_entries_existing_outputs_mismatched_sources_and_cor
                     .is_err()
             );
         }
-        let other = hex(include_str!("../../../../tests/fixtures/cpz3-empty.hex"));
+        let other = hex(include_str!("../fixtures/cpz3-empty.hex"));
         let mut output = Cursor::new(Vec::new());
         assert!(
             index

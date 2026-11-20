@@ -37,10 +37,10 @@ function scriptBytes() {
   return raw;
 }
 mount('data/pack/start.ps3',scriptBytes());
-mount('data/pack/script.cpz',new Uint8Array(Buffer.from(readFileSync(new URL('../../tests/fixtures/cpz6-script.hex',import.meta.url),'utf8').trim(),'hex')));
-mount('audio/tone.ogg',new Uint8Array(readFileSync(new URL('../../tests/fixtures/audio/mono440.ogg',import.meta.url))));
-mount('audio/loop.ogg',new Uint8Array(readFileSync(new URL('../../tests/fixtures/audio/mono880.ogg',import.meta.url))));
-mount('audio/voice.ogg',new Uint8Array(readFileSync(new URL('../../tests/fixtures/audio/mono660voice.ogg',import.meta.url))));
+mount('data/pack/script.cpz',new Uint8Array(Buffer.from(readFileSync(new URL('../../crates/cmvs-core/tests/fixtures/cpz6-script.hex',import.meta.url),'utf8').trim(),'hex')));
+mount('audio/tone.ogg',new Uint8Array(readFileSync(new URL('../../crates/cmvs-audio/tests/fixtures/audio/mono440.ogg',import.meta.url))));
+mount('audio/loop.ogg',new Uint8Array(readFileSync(new URL('../../crates/cmvs-audio/tests/fixtures/audio/mono880.ogg',import.meta.url))));
+mount('audio/voice.ogg',new Uint8Array(readFileSync(new URL('../../crates/cmvs-audio/tests/fixtures/audio/mono660voice.ogg',import.meta.url))));
 mount('cmvs.cfg',new TextEncoder().encode('[WINDOW_RESOLVING]\nBASE=64,48\n'));
 globalThis.cmvsFs=fs;
 await init({module_or_path:readFileSync(new URL('./pkg/cmvs_web_bg.wasm',import.meta.url))});

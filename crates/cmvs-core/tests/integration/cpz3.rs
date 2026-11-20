@@ -17,14 +17,14 @@ fn hex(text: &str) -> Vec<u8> {
 
 fn fixture(i: usize) -> Vec<u8> {
     hex([
-        include_str!("../../../../tests/fixtures/cpz3-0.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-1.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-2.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-3.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-4.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-5.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-6.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-7.hex"),
+        include_str!("../fixtures/cpz3-0.hex"),
+        include_str!("../fixtures/cpz3-1.hex"),
+        include_str!("../fixtures/cpz3-2.hex"),
+        include_str!("../fixtures/cpz3-3.hex"),
+        include_str!("../fixtures/cpz3-4.hex"),
+        include_str!("../fixtures/cpz3-5.hex"),
+        include_str!("../fixtures/cpz3-6.hex"),
+        include_str!("../fixtures/cpz3-7.hex"),
     ][i])
 }
 
@@ -70,7 +70,7 @@ fn independent_vectors_cover_tail_lengths_keys_duplicates_and_dispatch() {
             .is_err()
         );
     }
-    let empty = hex(include_str!("../../../../tests/fixtures/cpz3-empty.hex"));
+    let empty = hex(include_str!("../fixtures/cpz3-empty.hex"));
     assert!(
         Cpz3Index::read(&mut Cursor::new(empty))
             .unwrap()
@@ -112,7 +112,7 @@ fn checksums_bounds_and_every_truncated_prefix_are_checked() {
     );
     assert!(
         Cpz3Index::read(&mut Cursor::new(hex(include_str!(
-            "../../../../tests/fixtures/cpz3-offset.hex"
+            "../fixtures/cpz3-offset.hex"
         ))))
         .is_err()
     );
@@ -153,7 +153,7 @@ fn large_indexes_fail_before_allocation_and_records_are_bounded() {
             .to_string()
             .contains("allocation limit")
     );
-    let bytes = hex(include_str!("../../../../tests/fixtures/cpz3-padded.hex"));
+    let bytes = hex(include_str!("../fixtures/cpz3-padded.hex"));
     let mut reader = Cursor::new(bytes);
     let index = Cpz3Index::read(&mut reader).unwrap();
     assert_eq!(
@@ -161,10 +161,10 @@ fn large_indexes_fail_before_allocation_and_records_are_bounded() {
         b"synthetic CPZ3 payload"
     );
     for vector in [
-        include_str!("../../../../tests/fixtures/cpz3-short-record.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-long-record.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-no-nul.hex"),
-        include_str!("../../../../tests/fixtures/cpz3-empty-name.hex"),
+        include_str!("../fixtures/cpz3-short-record.hex"),
+        include_str!("../fixtures/cpz3-long-record.hex"),
+        include_str!("../fixtures/cpz3-no-nul.hex"),
+        include_str!("../fixtures/cpz3-empty-name.hex"),
     ] {
         assert!(Cpz3Index::read(&mut Cursor::new(hex(vector))).is_err());
     }

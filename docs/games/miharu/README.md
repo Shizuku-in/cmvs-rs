@@ -33,7 +33,7 @@
 原版读档回归使用上述《みはる》样本及验证用的 `save/save000.dat` 至 `save/save003.dat`。
 
 ```sh
-CMVS_CVNS_GAME_ROOT="<样本目录>" cargo test --offline --release -p cmvs-cli --test cli external_cvns_original_slots_resume -- --ignored
+CMVS_CVNS_GAME_ROOT="<样本目录>" cargo test --offline --release -p cmvs-desktop --test save_slots external_cvns_original_slots_resume -- --ignored
 ```
 
 ## 命令映射

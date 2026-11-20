@@ -1,8 +1,9 @@
-use cmvs_audio::{AudioProgram, Envelope, vorbis::Vorbis};
+use cmvs_audio::{AudioProgram, vorbis::Vorbis};
 use std::sync::Arc;
-const FIRST: &[u8] = include_bytes!("../../../../tests/fixtures/audio/mono440.ogg");
-const SECOND: &[u8] = include_bytes!("../../../../tests/fixtures/audio/mono880.ogg");
-const VOICE: &[u8] = include_bytes!("../../../../tests/fixtures/audio/mono660voice.ogg");
+const FIRST: &[u8] = include_bytes!("fixtures/audio/mono440.ogg");
+const SECOND: &[u8] = include_bytes!("fixtures/audio/mono880.ogg");
+#[cfg(feature = "native")]
+const VOICE: &[u8] = include_bytes!("fixtures/audio/mono660voice.ogg");
 fn samples(bytes: &[u8]) -> Vec<f32> {
     let mut program = AudioProgram::new(bytes.to_vec(), None, false).unwrap();
     let mut samples = vec![];
@@ -113,8 +114,10 @@ fn malformed_headers_and_packets_fail_before_output() {
         assert!(failed);
     }
 }
+#[cfg(feature = "mixer")]
 #[test]
 fn fade_envelopes_reach_exact_endpoints_without_overshoot() {
+    use cmvs_audio::Envelope;
     let fade = Envelope::new(0.75, 0.0, 2000);
     assert_eq!(fade.value_at(0), 0.75);
     assert_eq!(fade.value_at(1000), 0.375);
@@ -125,6 +128,7 @@ fn fade_envelopes_reach_exact_endpoints_without_overshoot() {
 
 /// Explicit hardware diagnostic: synthetic quiet tones only, no game files or window.
 /// Keep ignored so normal offline/CI tests never open a device or require audio hardware.
+#[cfg(feature = "native")]
 #[test]
 #[ignore = "opens the default native audio device; run explicitly outside restricted sandboxes"]
 fn native_device_smoke() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -156,10 +160,11 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         }
         Ok(())
     }
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
-        "cmvs-native-audio-smoke-{}-{}",
+        "cmvs-native-audio-smoke-{}-{seq}",
         std::process::id(),
-        crate::support::unique_id()
     ));
     fs::create_dir(&path)?;
     let scratch = Scratch(path);

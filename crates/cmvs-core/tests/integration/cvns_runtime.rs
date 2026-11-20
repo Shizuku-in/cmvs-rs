@@ -257,7 +257,7 @@ fn cvns_movie_fixture(tag: &str, audio_flag: u32) -> (crate::support::temp_dir::
     std::fs::create_dir_all(root.join("data/pack")).unwrap();
     std::fs::create_dir_all(root.join("data/video")).unwrap();
     std::fs::create_dir_all(root.join("save")).unwrap();
-    let archive: Vec<u8> = include_str!("../../../../tests/fixtures/cpz6-script.hex")
+    let archive: Vec<u8> = include_str!("../fixtures/cpz6-script.hex")
         .trim()
         .as_bytes()
         .as_chunks::<2>()

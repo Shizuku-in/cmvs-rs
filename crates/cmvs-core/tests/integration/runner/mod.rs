@@ -210,7 +210,7 @@ impl Root {
                 .map(|b| b.rotate_left(1).wrapping_add(124)),
         );
         fs::write(root.join("data/pack/start.ps3"), raw).unwrap();
-        let bytes: Vec<_> = include_str!("../../../../../tests/fixtures/cpz6-script.hex")
+        let bytes: Vec<_> = include_str!("../../fixtures/cpz6-script.hex")
             .trim()
             .as_bytes()
             .as_chunks::<2>()

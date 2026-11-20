@@ -19,7 +19,7 @@ fn extract_cli_never_overwrites_an_existing_file() {
     let output = root.join("existing.bin");
     fs::write(
         &input,
-        hex(include_str!("../../../../tests/fixtures/cpz6-0.hex")),
+        hex(include_str!("../../../cmvs-core/tests/fixtures/cpz6-0.hex")),
     )
     .unwrap();
     fs::write(&output, b"keep me").unwrap();
@@ -40,7 +40,9 @@ fn trace_cli_loads_and_steps_synthetic_ps3_directly_from_archive() {
     let path = root.join("script.bin");
     fs::write(
         &path,
-        hex(include_str!("../../../../tests/fixtures/cpz6-script.hex")),
+        hex(include_str!(
+            "../../../cmvs-core/tests/fixtures/cpz6-script.hex"
+        )),
     )
     .unwrap();
     let trace = |profile| {
@@ -69,7 +71,7 @@ fn cli_lists_extracts_and_rejects_inapplicable_settings() {
     let output = root.join("payload.bin");
     fs::write(
         &archive,
-        hex(include_str!("../../../../tests/fixtures/cpz3-0.hex")),
+        hex(include_str!("../../../cmvs-core/tests/fixtures/cpz3-0.hex")),
     )
     .unwrap();
     // CPZ3 must not try to load adjacent startup settings.
@@ -112,7 +114,7 @@ fn cli_lists_extracts_and_rejects_inapplicable_settings() {
 #[test]
 fn plain_resources_and_startup_mode_selection_work_through_cli() {
     let mut reader = Cursor::new(hex(include_str!(
-        "../../../../tests/fixtures/cpz5-plain.hex"
+        "../../../cmvs-core/tests/fixtures/cpz5-plain.hex"
     )));
     let index = Cpz5Index::read(&mut reader).unwrap();
     assert_eq!(index.layout.encryption_mode, 0);
@@ -125,7 +127,7 @@ fn plain_resources_and_startup_mode_selection_work_through_cli() {
     let start = root.join("start.ps2");
     fs::write(
         &archive,
-        hex(include_str!("../../../../tests/fixtures/cpz5-5.hex")),
+        hex(include_str!("../../../cmvs-core/tests/fixtures/cpz5-5.hex")),
     )
     .unwrap();
     let run = |args: &[&std::ffi::OsStr]| {
@@ -224,7 +226,9 @@ fn cli_discovers_startup_beside_cpz7_and_respects_explicit_overrides() {
     let cpz6 = root.join("cpz6.cpz");
     fs::write(
         &archive,
-        hex(include_str!("../../../../tests/fixtures/cpz7-keyed.hex")),
+        hex(include_str!(
+            "../../../cmvs-core/tests/fixtures/cpz7-keyed.hex"
+        )),
     )
     .unwrap();
     let run = |args: &[&std::ffi::OsStr]| {
@@ -285,7 +289,7 @@ fn cli_discovers_startup_beside_cpz7_and_respects_explicit_overrides() {
     );
     fs::write(
         &cpz6,
-        hex(include_str!("../../../../tests/fixtures/cpz6-0.hex")),
+        hex(include_str!("../../../cmvs-core/tests/fixtures/cpz6-0.hex")),
     )
     .unwrap();
     assert!(run(&["--list".as_ref(), cpz6.as_os_str()]).status.success());

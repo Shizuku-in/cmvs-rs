@@ -7,7 +7,7 @@ use std::io::Cursor;
 #[test]
 fn cpz7_uses_per_archive_keys_and_countdown_index_tails() {
     use cmvs_core::format::cpz::Cpz7Parameters;
-    let bytes = hex(include_str!("../../../../tests/fixtures/cpz7-keyed.hex"));
+    let bytes = hex(include_str!("../fixtures/cpz7-keyed.hex"));
     let original_keys = [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210];
     let parameters = Cpz7Parameters::from(original_keys);
     let mut reader = Cursor::new(&bytes);
@@ -22,7 +22,7 @@ fn cpz7_uses_per_archive_keys_and_countdown_index_tails() {
         assert_eq!(index.read_entry_verified(&mut reader, j).unwrap(), expected);
     }
     assert!(ArchiveIndex::read(&mut Cursor::new(&bytes)).is_err());
-    let cpz6 = hex(include_str!("../../../../tests/fixtures/cpz6-0.hex"));
+    let cpz6 = hex(include_str!("../fixtures/cpz6-0.hex"));
     assert!(
         ArchiveIndex::read_with_cpz7_parameters(&mut Cursor::new(cpz6), parameters)
             .unwrap_err()
@@ -154,7 +154,7 @@ fn startup_archive_reader_uses_per_archive_keys_and_detects_cpz6() {
     code.extend(0x201fu16.to_le_bytes());
     registration(&mut code, [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210]);
     let script = memory_script(code, b"\0data\\pack\\script.cpz\0");
-    let bytes = hex(include_str!("../../../../tests/fixtures/cpz7-keyed.hex"));
+    let bytes = hex(include_str!("../fixtures/cpz7-keyed.hex"));
     let mut reader = Cursor::new(bytes.clone());
     reader.set_position(8);
     let index = archive_index_from_start(&mut reader, &script, b"SCRIPT.CPZ").unwrap();
@@ -165,7 +165,7 @@ fn startup_archive_reader_uses_per_archive_keys_and_detects_cpz6() {
     assert!(ArchiveScripts::from_start(Cursor::new(bytes.clone()), &script, b"script.cpz").is_ok());
     assert!(archive_index_from_start(&mut Cursor::new(bytes), &script, b"other.cpz").is_err());
     let cpz6_start = memory_script(0x2000u16.to_le_bytes().to_vec(), b"");
-    let mut cpz6 = Cursor::new(hex(include_str!("../../../../tests/fixtures/cpz6-0.hex")));
+    let mut cpz6 = Cursor::new(hex(include_str!("../fixtures/cpz6-0.hex")));
     let index = archive_index_from_start(&mut cpz6, &cpz6_start, b"cpz6.cpz").unwrap();
     assert_eq!(
         index.version(),
@@ -271,14 +271,14 @@ fn hex(text: &str) -> Vec<u8> {
 
 fn fixture(i: usize) -> Vec<u8> {
     hex([
-        include_str!("../../../../tests/fixtures/cpz7-0.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-1.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-2.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-3.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-4.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-5.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-6.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-7.hex"),
+        include_str!("../fixtures/cpz7-0.hex"),
+        include_str!("../fixtures/cpz7-1.hex"),
+        include_str!("../fixtures/cpz7-2.hex"),
+        include_str!("../fixtures/cpz7-3.hex"),
+        include_str!("../fixtures/cpz7-4.hex"),
+        include_str!("../fixtures/cpz7-5.hex"),
+        include_str!("../fixtures/cpz7-6.hex"),
+        include_str!("../fixtures/cpz7-7.hex"),
     ][i])
 }
 
@@ -327,9 +327,7 @@ fn independent_vectors_cover_directories_keys_and_unaligned_resources() {
 
 #[test]
 fn unencrypted_resources_still_verify_and_use_encrypted_indexes() {
-    let mut reader = Cursor::new(hex(include_str!(
-        "../../../../tests/fixtures/cpz7-plain.hex"
-    )));
+    let mut reader = Cursor::new(hex(include_str!("../fixtures/cpz7-plain.hex")));
     let index = Cpz7Index::read(&mut reader).unwrap();
     assert_eq!(index.layout.encryption_mode, 0);
     assert_eq!(
@@ -374,8 +372,8 @@ fn truncated_archives_and_authenticated_invalid_entry_ranges_fail() {
         );
     }
     for vector in [
-        include_str!("../../../../tests/fixtures/cpz7-offset.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-size.hex"),
+        include_str!("../fixtures/cpz7-offset.hex"),
+        include_str!("../fixtures/cpz7-size.hex"),
     ] {
         assert!(Cpz7Index::read(&mut Cursor::new(hex(vector))).is_err());
     }
@@ -469,19 +467,19 @@ fn cpz7_replacements_preserve_keys_directories_and_unmodified_ciphertext() {
     use std::collections::BTreeMap;
     for (fixture, parameters) in [
         (
-            include_str!("../../../../tests/fixtures/cpz7-keyed.hex"),
+            include_str!("../fixtures/cpz7-keyed.hex"),
             [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210].into(),
         ),
         (
-            include_str!("../../../../tests/fixtures/cpz7-plain.hex"),
+            include_str!("../fixtures/cpz7-plain.hex"),
             Cpz7Parameters::default(),
         ),
         (
-            include_str!("../../../../tests/fixtures/cpz7-0.hex"),
+            include_str!("../fixtures/cpz7-0.hex"),
             Cpz7Parameters::default(),
         ),
         (
-            include_str!("../../../../tests/fixtures/cpz7-7.hex"),
+            include_str!("../fixtures/cpz7-7.hex"),
             Cpz7Parameters::default(),
         ),
     ] {

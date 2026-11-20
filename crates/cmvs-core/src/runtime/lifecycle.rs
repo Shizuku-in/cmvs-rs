@@ -78,7 +78,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("cmvs-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(root.join("data/pack")).unwrap();
         std::fs::create_dir_all(root.join("save")).unwrap();
-        let archive: Vec<_> = include_str!("../../../../tests/fixtures/cpz6-script.hex")
+        let archive: Vec<_> = include_str!("../../tests/fixtures/cpz6-script.hex")
             .trim()
             .as_bytes()
             .as_chunks::<2>()
@@ -378,7 +378,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("cmvs-reset-hosts-{}", std::process::id()));
         std::fs::create_dir_all(root.join("data/pack")).unwrap();
         std::fs::create_dir_all(root.join("save")).unwrap();
-        let archive: Vec<_> = include_str!("../../../../tests/fixtures/cpz6-script.hex")
+        let archive: Vec<_> = include_str!("../../tests/fixtures/cpz6-script.hex")
             .trim()
             .as_bytes()
             .as_chunks::<2>()
@@ -763,7 +763,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(root.join("data/pack")).unwrap();
         std::fs::create_dir_all(&user).unwrap();
-        let archive: Vec<_> = include_str!("../../../../tests/fixtures/cpz6-script.hex")
+        let archive: Vec<_> = include_str!("../../tests/fixtures/cpz6-script.hex")
             .trim()
             .as_bytes()
             .as_chunks::<2>()

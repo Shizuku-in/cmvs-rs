@@ -137,14 +137,14 @@ fn index_arithmetic_uses_64_bits_and_does_not_allocate_from_header_fields() {
 
 fn vector(index: usize) -> Vec<u8> {
     let fixtures = [
-        include_str!("../../../../tests/fixtures/cpz6-0.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-1.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-2.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-3.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-4.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-5.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-6.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-7.hex"),
+        include_str!("../fixtures/cpz6-0.hex"),
+        include_str!("../fixtures/cpz6-1.hex"),
+        include_str!("../fixtures/cpz6-2.hex"),
+        include_str!("../fixtures/cpz6-3.hex"),
+        include_str!("../fixtures/cpz6-4.hex"),
+        include_str!("../fixtures/cpz6-5.hex"),
+        include_str!("../fixtures/cpz6-6.hex"),
+        include_str!("../fixtures/cpz6-7.hex"),
     ];
     fixtures[index]
         .trim()
@@ -224,9 +224,7 @@ fn from_hex(hex: &str) -> Vec<u8> {
 
 #[test]
 fn multiple_directories_have_separate_keys_and_ambiguous_basenames() {
-    let mut reader = Cursor::new(from_hex(include_str!(
-        "../../../../tests/fixtures/cpz6-multiple.hex"
-    )));
+    let mut reader = Cursor::new(from_hex(include_str!("../fixtures/cpz6-multiple.hex")));
     let index = Cpz6Index::read(&mut reader).unwrap();
     assert_eq!(index.entries().len(), 2);
     assert_eq!(index.entries()[0].directory.as_ref(), b"first");
@@ -238,9 +236,7 @@ fn multiple_directories_have_separate_keys_and_ambiguous_basenames() {
 
 #[test]
 fn decrypted_resource_offset_overflow_is_rejected() {
-    let bytes = from_hex(include_str!(
-        "../../../../tests/fixtures/cpz6-invalid-offset.hex"
-    ));
+    let bytes = from_hex(include_str!("../fixtures/cpz6-invalid-offset.hex"));
     let error = Cpz6Index::read(&mut Cursor::new(bytes)).unwrap_err();
     assert!(error.to_string().contains("offset overflow"));
 }
@@ -263,9 +259,7 @@ fn lookup_key_folds_ascii_case_but_not_shift_jis_trail_bytes() {
 
 #[test]
 fn lookup_takes_the_first_folded_basename_in_index_order() {
-    let reader = Cursor::new(from_hex(include_str!(
-        "../../../../tests/fixtures/cpz6-multiple.hex"
-    )));
+    let reader = Cursor::new(from_hex(include_str!("../fixtures/cpz6-multiple.hex")));
     let index = Cpz6Index::read(&mut reader.clone()).unwrap();
     assert_eq!(index.lookup(b"FIXTURE.BIN").unwrap(), Some(0));
     assert_eq!(index.entries()[0].directory.as_ref(), b"first");

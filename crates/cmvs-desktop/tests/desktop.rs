@@ -1,7 +1,8 @@
 use cmvs_core::format::cursor::CursorBitmap;
 use cmvs_desktop::{DesktopInput, InputEvent, TextEncoding, cursor_rgba, decode_icon, text_codec};
 
-use crate::support::bytecode;
+#[path = "../../cmvs-core/tests/integration/support/bytecode.rs"]
+mod bytecode;
 
 #[test]
 #[ignore = "requires CMVS_FONT_PATH; synthetic scene and external font, no game data"]

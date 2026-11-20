@@ -363,10 +363,10 @@ fn seed_corpus() -> Vec<Vec<u8>> {
 
     // Valid CPZ3/5/6/7 fixtures + synthetic CMV6 & CMV9
     for hex in [
-        include_str!("../../../../tests/fixtures/cpz3-0.hex"),
-        include_str!("../../../../tests/fixtures/cpz5-9.hex"),
-        include_str!("../../../../tests/fixtures/cpz6-0.hex"),
-        include_str!("../../../../tests/fixtures/cpz7-0.hex"),
+        include_str!("../fixtures/cpz3-0.hex"),
+        include_str!("../fixtures/cpz5-9.hex"),
+        include_str!("../fixtures/cpz6-0.hex"),
+        include_str!("../fixtures/cpz7-0.hex"),
     ] {
         seeds.push(hex_fixture(hex));
     }
@@ -484,7 +484,7 @@ fn oversized_headers_on_sparse_streams_reject_before_unbounded_allocation() {
     assert!(cpz::ArchiveIndex::read(&mut SparseReader::new(&cpz3, huge_file)).is_err());
 
     // CPZ5: authenticated header with index_bytes > MAX_PAYLOAD
-    let mut cpz5 = hex_fixture(include_str!("../../../../tests/fixtures/cpz5-9.hex"));
+    let mut cpz5 = hex_fixture(include_str!("../fixtures/cpz5-9.hex"));
     cpz5[8..12].copy_from_slice(&(over ^ 0x37f2_98e7).to_le_bytes());
     let sum5 = cpz::data_checksum(&cpz5[..60])
         .wrapping_sub(0x5a90_2b7c)
@@ -493,12 +493,12 @@ fn oversized_headers_on_sparse_streams_reject_before_unbounded_allocation() {
     assert!(cpz::ArchiveIndex::read(&mut SparseReader::new(&cpz5[..64], huge_file)).is_err());
 
     // CPZ6: directory_index_bytes > MAX_PAYLOAD
-    let mut cpz6 = hex_fixture(include_str!("../../../../tests/fixtures/cpz6-0.hex"));
+    let mut cpz6 = hex_fixture(include_str!("../fixtures/cpz6-0.hex"));
     cpz6[8..12].copy_from_slice(&(over ^ 0x37f2_98e8).to_le_bytes());
     assert!(cpz::ArchiveIndex::read(&mut SparseReader::new(&cpz6[..64], huge_file)).is_err());
 
     // CPZ7: authenticated header with directory_index_bytes > MAX_PAYLOAD
-    let mut cpz7 = hex_fixture(include_str!("../../../../tests/fixtures/cpz7-0.hex"));
+    let mut cpz7 = hex_fixture(include_str!("../fixtures/cpz7-0.hex"));
     cpz7[8..12].copy_from_slice(&(over ^ 0x37f2_98e8).to_le_bytes());
     let init7 = u32::from_le_bytes(cpz7[64..68].try_into().unwrap()).wrapping_sub(0x6dc5_a9b4);
     let sum7 = cpz::data_checksum(&cpz7[..64])

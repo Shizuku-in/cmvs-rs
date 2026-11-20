@@ -671,7 +671,7 @@ mod tests {
         raw.extend(code.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
         let start = game_root.join(["data", "pack", "start"].join("/") + ".ps3");
         std::fs::write(start, raw).unwrap();
-        let archive: Vec<u8> = include_str!("../../../tests/fixtures/cpz6-script.hex")
+        let archive: Vec<u8> = include_str!("../../cmvs-core/tests/fixtures/cpz6-script.hex")
             .trim()
             .as_bytes()
             .as_chunks::<2>()

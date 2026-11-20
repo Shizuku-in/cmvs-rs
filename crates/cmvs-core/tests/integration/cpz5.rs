@@ -20,11 +20,11 @@ fn hex(text: &str) -> Vec<u8> {
 
 fn fixture(mode: u32) -> Vec<u8> {
     hex(match mode {
-        5 => include_str!("../../../../tests/fixtures/cpz5-5.hex"),
-        6 => include_str!("../../../../tests/fixtures/cpz5-6.hex"),
-        7 => include_str!("../../../../tests/fixtures/cpz5-7.hex"),
-        8 => include_str!("../../../../tests/fixtures/cpz5-8.hex"),
-        9 => include_str!("../../../../tests/fixtures/cpz5-9.hex"),
+        5 => include_str!("../fixtures/cpz5-5.hex"),
+        6 => include_str!("../fixtures/cpz5-6.hex"),
+        7 => include_str!("../fixtures/cpz5-7.hex"),
+        8 => include_str!("../fixtures/cpz5-8.hex"),
+        9 => include_str!("../fixtures/cpz5-9.hex"),
         _ => unreachable!(),
     })
 }
@@ -115,7 +115,7 @@ fn checksum_layers_truncated_inputs_and_invalid_ranges_are_rejected() {
     );
     assert!(
         Cpz5Index::read(&mut Cursor::new(hex(include_str!(
-            "../../../../tests/fixtures/cpz5-offset.hex"
+            "../fixtures/cpz5-offset.hex"
         ))))
         .is_err()
     );

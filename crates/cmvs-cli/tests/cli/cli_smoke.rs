@@ -2,7 +2,7 @@ use crate::support::{TempDir, bytecode::command};
 use cmvs_core::format::cmv::{KIND_JBPX, KIND_OGG};
 use std::{fs, path::Path, process::Command};
 
-const OGG_FIXTURE: &[u8] = include_bytes!("../../../../tests/fixtures/audio/mono440.ogg");
+const OGG_FIXTURE: &[u8] = include_bytes!("../../../cmvs-audio/tests/fixtures/audio/mono440.ogg");
 
 fn hex(text: &str) -> Vec<u8> {
     text.trim()

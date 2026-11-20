@@ -1,7 +1,52 @@
 //! Gameplay save slots and the in-game menus through `Runtime` on the original game: external
 //! saves, route replays and the toolbar, save screens and backlog, read-only inputs.
-//! Synthetic save tests live in tests/runner.rs.
-use crate::support::command_trace;
+//! Synthetic save tests live in crates/cmvs-core/tests/integration/runner/.
+mod command_trace {
+    //! Opt-in metadata trace for external UI replays; no game text or resource bytes.
+    use std::{
+        fs::File,
+        io::Write,
+        sync::{Mutex, OnceLock},
+    };
+
+    pub fn newly_implemented(op: u16) -> bool {
+        matches!(
+            op,
+            0x203e | 0x2078 | 0x2154 | 0x2157 | 0x2158 | 0x2260
+                ..=0x2264 | 0x2287 | 0x2289 | 0x228c | 0x228e | 0x22c9 | 0x2322 | 0x2329
+        )
+    }
+
+    fn output() -> &'static Option<Mutex<File>> {
+        static OUTPUT: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+        OUTPUT.get_or_init(|| {
+            std::env::var_os("CMVS_RUNTIME_COMMAND_TRACE").map(|path| {
+                let mut file = File::create_new(path).expect("fresh command trace path");
+                writeln!(
+                    file,
+                    "# newly implemented commands; successful service, not branch coverage"
+                )
+                .unwrap();
+                Mutex::new(file)
+            })
+        })
+    }
+
+    pub fn begin() {
+        let _ = output();
+    }
+
+    pub fn record(script: &[u8], pc: usize, op: u16, complete: bool) {
+        if let Some(file) = output() {
+            writeln!(
+                file.lock().unwrap(),
+                "command\t{}\t{pc:x}\t0x{op:04x}\tcomplete={complete}",
+                script.escape_ascii()
+            )
+            .unwrap();
+        }
+    }
+}
 use cmvs_core::{
     format::save::Csv2Save,
     format::snapshot::{CvnsSnapshot, EngineSnapshot, SavedScene},
@@ -11,13 +56,18 @@ use cmvs_core::{
     render::message::AuxiliaryText,
     runtime::{HistoryEntry, Runtime, RuntimeEvent, SnapshotPolicy, load_start},
 };
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 fn user_directory(name: &str) -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "save-slots-{name}-{}-{}",
         std::process::id(),
-        crate::support::unique_id()
+        NEXT_ID.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
@@ -537,21 +587,19 @@ struct Ui<'b> {
 
 /// Title and toolbar settings entries, three pages and right-click return.
 /// Recording-audio variant; the native variant shares the same assertions below.
-#[cfg(feature = "desktop")]
 #[test]
 #[ignore = "requires CMVS_GAME_ROOT with system.dat/save000 and CMVS_FONT_PATH"]
 fn external_system_settings_entries_render_and_return() {
     system_settings_entries_render_and_return(false);
 }
 
-#[cfg(all(feature = "desktop", feature = "audio-output"))]
+#[cfg(feature = "audio-output")]
 #[test]
 #[ignore = "requires CMVS_GAME_ROOT, CMVS_FONT_PATH and the native audio device"]
 fn external_native_system_settings_entries_render_and_return() {
     system_settings_entries_render_and_return(true);
 }
 
-#[cfg(feature = "desktop")]
 fn system_settings_entries_render_and_return(native_audio: bool) {
     let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
     let font_path = PathBuf::from(std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH"));
@@ -1297,7 +1345,6 @@ impl Ui<'_> {
         self.press(at, 1, wait);
     }
     /// Presses at `from`, moves there while holding over 20 frames, releases at `to`.
-    #[cfg(feature = "desktop")]
     fn drag(&mut self, from: [i32; 2], to: [i32; 2]) {
         for i in 0..4 {
             self.frame(from, (i >= 2).then_some(1));
@@ -1384,7 +1431,6 @@ fn external_in_game_menus_save_and_load() {
     // Capture visible real-script glyphs between VM commands, then restore the
     // exact snapshot through the normal slot loader. Inputs remain read-only.
     let visible = ui.run.inspect_snapshot().unwrap();
-    #[cfg(feature = "desktop")]
     let mut visual = std::env::var_os("CMVS_FONT_PATH").map(|path| {
         let mut font =
             cmvs_desktop::font::FontRenderer::read(std::path::Path::new(&path), 0).unwrap();
@@ -1435,7 +1481,6 @@ fn external_in_game_menus_save_and_load() {
         fs::write(directory.join("glyphs.txt"), manifest).unwrap();
     }
     ui.run.load_slot(5, &mut ui.backend).unwrap();
-    #[cfg(feature = "desktop")]
     if let Some((font, before)) = &mut visual {
         let after = font
             .render(ui.run.scene(), ui.run.camera(), ui.run.messages())

@@ -467,7 +467,7 @@ mod tests {
     use std::io::Cursor;
 
     fn fixture() -> Vec<u8> {
-        include_str!("../../../../tests/fixtures/cpz7-0.hex")
+        include_str!("../../tests/fixtures/cpz7-0.hex")
             .trim()
             .as_bytes()
             .as_chunks::<2>()
