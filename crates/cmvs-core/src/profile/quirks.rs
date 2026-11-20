@@ -201,7 +201,12 @@ impl EngineProfile {
     /// startup profiles reuse the canonical IDs without the real binary SHA-256.
     pub(crate) fn initial_globals(&self) -> Option<[u32; 4]> {
         match self.id.as_str() {
-            "cmvs-20140217" | "cmvs-20160201" | "cmvs-20171114" => Some([4096, 262144, 2048, 128]),
+            "cmvs-20071117" | "cmvs-20080719" | "cmvs-20080903" | "cmvs-20090815"
+            | "cmvs-20100314" | "cmvs-20101211" | "cmvs-20110525" | "cmvs-20120309"
+            | "cmvs-20130131" | "cmvs-20140217" | "cmvs-20150405" | "cmvs-20160201"
+            | "cmvs-20171114" | "cmvs-20190305" | "cmvs-20190405" | "cmvs-20221105" => {
+                Some([4096, 262144, 2048, 128])
+            }
             // docs/games/puriring: .data file bytes end at 0x4ae000; the banks at 0x4b6708,
             // 0x4dc710 (0x8000 bytes of packed bits, 0x440be0), 0x4da710 and 0x4ba710.
             "cmvs-20070119" => Some([4096, 262144, 2048, 128]),
