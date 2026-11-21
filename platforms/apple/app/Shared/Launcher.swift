@@ -1,5 +1,4 @@
 import CmvsAppleC
-import ImageIO
 import Metal
 import SwiftUI
 import UniformTypeIdentifiers
@@ -11,45 +10,97 @@ import UniformTypeIdentifiers
     @State private var library = Library()
     @State private var player: Playback?
     var body: some Scene {
-        #if os(macOS)
-            Window("CMVS", id: "library") {
-                Launcher(library: library, player: $player)
-                    .frame(minWidth: 660, minHeight: 440)
-            }
-            .commands {
-                CommandGroup(after: .newItem) {
-                    Button("Add game") { NotificationCenter.default.post(name: .addGame, object: nil) }
-                        .keyboardShortcut("o").disabled(player != nil)
+        Group {
+            #if os(macOS)
+                Window("CMVS", id: "library") {
+                    Launcher(library: library, player: $player)
+                        .frame(minWidth: 660, minHeight: 440)
                 }
-                CommandMenu("Game") {
-                    Button("Full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }.keyboardShortcut("f")
-                    Button("Screenshot") { player?.capture() }.keyboardShortcut("s").disabled(player?.canCapture != true)
+                Window("Player", id: "player") { PlayerWindow(current: $player) }
+                Settings {
+                    OptionsForm(options: $library.data.defaults, fonts: library.fonts, global: true)
+                        .disabled(!library.writable)
+                        .frame(minWidth: 480, minHeight: 500)
                 }
-            }
-            Window("Player", id: "player") {
-                if let player { PlayerWindow(player: player, current: $player) }
-            }
-            .defaultSize(width: 960, height: 540)
+            #else
+                WindowGroup { Launcher(library: library, player: $player) }
+            #endif
+        }
+        .commands { LauncherCommands(player: player) }
+        .onChange(of: library.data) { library.persist() }
+    }
+}
+
+private struct LauncherCommands: Commands {
+    let player: Playback?
+    @AppStorage("showPerformance") private var showPerformance = false
+    @FocusedValue(\.addGame) private var addGame
+    @FocusedValue(\.gamePlayer) private var gamePlayer
+
+    var body: some Commands {
+        CommandGroup(after: .newItem) {
+            Button("Add Game…") { addGame?() }
+                .keyboardShortcut("o").disabled(addGame == nil || player != nil)
+        }
+        CommandMenu("Game") {
+            Button("Screenshot") { gamePlayer?.capture() }.disabled(gamePlayer?.canCapture != true)
+            Divider()
+            Toggle("Shift Fast-Forward", isOn: gamePlayer?.fastForwardBinding(.shift) ?? .constant(false))
+                .disabled(gamePlayer?.canFastForward != true)
+            Toggle("Ctrl Fast-Forward", isOn: gamePlayer?.fastForwardBinding(.control) ?? .constant(false))
+                .disabled(gamePlayer?.canFastForward != true)
+            Button("Hide Text") { gamePlayer?.pulse(26) }.disabled(gamePlayer?.canFastForward != true)
+            Toggle("Show Performance", isOn: $showPerformance)
+        }
+    }
+}
+
+private struct AddGameKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+private struct GamePlayerKey: FocusedValueKey {
+    typealias Value = Playback
+}
+
+extension FocusedValues {
+    var gamePlayer: Playback? {
+        get { self[GamePlayerKey.self] }
+        set { self[GamePlayerKey.self] = newValue }
+    }
+
+    var addGame: (() -> Void)? {
+        get { self[AddGameKey.self] }
+        set { self[AddGameKey.self] = newValue }
+    }
+}
+
+extension View {
+    func controlHitArea() -> some View {
+        #if os(iOS)
+            frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         #else
-            WindowGroup { Launcher(library: library, player: $player) }
+            frame(minWidth: 20, minHeight: 20).contentShape(Rectangle())
         #endif
     }
 }
 
-extension Notification.Name { static let addGame = Notification.Name("CMVS.AddGame") }
-
 #if os(macOS)
     private struct PlayerWindow: View {
-        let player: Playback
         @Binding var current: Playback?
-        @Environment(\.dismissWindow) var dismiss
+        @Environment(\.dismissWindow) private var dismiss
         var body: some View {
-            PlayerScreen(player: player)
-                .onAppear { player.quit = { dismiss(id: "player") } }
-                .onDisappear {
-                    player.close()
-                    current = nil
-                }
+            if let player = current {
+                PlayerScreen(player: player)
+                    .frame(minWidth: 320, minHeight: 240)
+                    .onAppear { player.quit = { dismiss(id: "player") } }
+                    .onDisappear {
+                        player.close()
+                        if current === player { current = nil }
+                    }
+            } else {
+                Color.clear.task { if current == nil { dismiss(id: "player") } }
+            }
         }
     }
 #endif
@@ -82,18 +133,31 @@ private struct Launcher: View {
     #if os(macOS)
         @Environment(\.openWindow) var openWindow
     #endif
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 160
     @State private var section: SectionName? = .games
     @State private var picking = false
     @State private var pickFont = false
     @State private var copyGame = false
     @State private var progress: Progress?
-    @State private var editing: UUID?
+    @State private var editing: Game?
+    @State private var removing: Game?
+    @State private var targeted = false
     @State private var grid = true
     @State private var smokeStarted = false
 
     var body: some View {
         Group {
-            if compact {
+            if let reason = library.loadError {
+                ContentUnavailableView {
+                    Label("Couldn’t Open Library", systemImage: "books.vertical")
+                } description: {
+                    Text(verbatim: reason).textSelection(.enabled)
+                } actions: {
+                    Button("Retry") { library.reload() }
+                }
+            } else if compact {
                 TabView(selection: $section) {
                     ForEach(SectionName.allCases) { item in
                         NavigationStack { content(item) }.tabItem {
@@ -111,33 +175,28 @@ private struct Launcher: View {
                 }
             }
         }
-        .onChange(of: library.data) { _, _ in library.persist() }
-        .onReceive(NotificationCenter.default.publisher(for: .addGame)) { _ in choose(false, false) }
+        .focusedSceneValue(\.addGame, canChooseGame ? { choose(false, false) } : nil)
         .fileImporter(isPresented: $picking, allowedContentTypes: pickFont ? [.font] : [.folder]) { result in
             do {
                 let url = try result.get()
                 if pickFont { addFont(url) } else { addGame(url, copyGame) }
             } catch {
-                if (error as NSError).code != NSUserCancelledError { library.error = error.localizedDescription }
+                if (error as NSError).code != NSUserCancelledError {
+                    library.error = .init(pickFont ? "Couldn’t Import Font" : "Couldn’t Add Game", error.localizedDescription)
+                }
             }
         }
-        .sheet(isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
-            if let i = library.data.games.firstIndex(where: { $0.id == editing }) {
-                NavigationStack {
-                    OptionsForm(options: $library.data.games[i].options, fonts: library.fonts, global: false)
-                        .navigationTitle(library.data.games[i].name)
-                        .toolbar { Button("Done") { editing = nil } }
-                }.frame(minWidth: 300, minHeight: 350)
-            }
-        }
-        .alert("CMVS", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
+        .sheet(item: $editing) { game in GameConfiguration(game: game, library: library) }
+        .alert(Text(verbatim: library.error?.title ?? ""), isPresented: Binding(
+            get: { library.error != nil }, set: { if !$0 { library.error = nil } })
+        ) {
             Button("OK") { library.error = nil }
         } message: {
-            Text(library.error ?? "")
+            Text(verbatim: library.error?.message ?? "")
         }
         #if os(iOS)
             .fullScreenCover(item: $player) { session in
-                PlayerScreen(player: session).persistentSystemOverlays(.hidden)
+                PlayerScreen(player: session).persistentSystemOverlays(.hidden).statusBarHidden(true)
                 .onAppear {
                     OrientationDelegate.playing(true)
                     session.quit = { player = nil }
@@ -177,10 +236,14 @@ private struct Launcher: View {
                     play(game)
                 } catch {
                     NSLog("CMVS_SMOKE launch failed: %@", error.localizedDescription)
-                    library.error = error.localizedDescription
+                    library.error = .init("Couldn’t Open Game", error.localizedDescription)
                 }
             }
         }
+    }
+
+    private var canChooseGame: Bool {
+        library.writable && progress == nil && !picking && editing == nil
     }
 
     @ViewBuilder func content(_ item: SectionName) -> some View {
@@ -188,24 +251,19 @@ private struct Launcher: View {
             switch item {
             case .games:
                 VStack {
-                    if let progress {
-                        HStack {
-                            ProgressView(progress)
-                            Button("Cancel") { progress.cancel() }
-                        }.padding()
-                    }
                     if library.data.games.isEmpty {
-                        ContentUnavailableView(
-                            "Game library", systemImage: "books.vertical",
-                            description: Text("Add a folder containing data/pack."))
+                        ContentUnavailableView {
+                            Label("Game Library", systemImage: "books.vertical")
+                        } description: { Text("Add a folder containing data/pack.") } actions: { addGameButton }
                     } else {
                         ScrollView {
-                            LazyVGrid(
-                                columns: grid ? [GridItem(.adaptive(minimum: 190))] : [GridItem(.flexible())],
-                                alignment: .leading
-                            ) {
-                                ForEach(library.data.games) { game in card(game) }
-                            }.padding()
+                            if grid {
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: cardWidth))], alignment: .leading) {
+                                    ForEach(library.data.games) { game in card(game) }
+                                }.padding()
+                            } else {
+                                LazyVStack { ForEach(library.data.games) { game in card(game) } }.padding()
+                            }
                         }
                     }
                 }
@@ -213,79 +271,126 @@ private struct Launcher: View {
                     guard let url = urls.first, progress == nil else { return false }
                     addGame(url, false)
                     return true
+                } isTargeted: { targeted = $0 }
+                .overlay {
+                    if targeted { RoundedRectangle(cornerRadius: 10).strokeBorder(.tint, lineWidth: 3).allowsHitTesting(false) }
+                }
+                .confirmationDialog("Remove from Library?", isPresented: Binding(
+                    get: { removing != nil }, set: { if !$0 { removing = nil } }
+                ), titleVisibility: .visible, presenting: removing) { game in
+                    Button("Remove from Library", role: .destructive) {
+                        do { try library.remove(game) } catch { library.error = .init("Couldn’t Remove Game", error.localizedDescription) }
+                    }
+                } message: { game in
+                    if game.bookmark == nil {
+                        Text("Delete the library copy of \(game.name) and its cover?")
+                    } else {
+                        Text("Remove \(game.name) and its cover? The referenced folder will be kept.")
+                    }
                 }
                 .toolbar {
                     Button {
                         grid.toggle()
                     } label: {
-                        Label("Change layout", systemImage: grid ? "list.bullet" : "square.grid.2x2")
+                        Label("Change Layout", systemImage: grid ? "list.bullet" : "square.grid.2x2")
                     }
-                    #if os(iOS)
-                        Menu {
-                            Button("Reference folder") { choose(false, false) }
-                            Button("Copy into library") { choose(false, true) }
-                        } label: {
-                            Label("Add game", systemImage: "plus")
-                        }.disabled(progress != nil)
-                    #else
-                        Button {
-                            choose(false, false)
-                        } label: {
-                            Label("Add game", systemImage: "plus")
-                        }.disabled(progress != nil)
-                    #endif
+                    addGameButton
                 }
             case .fonts:
-                List(library.fonts) { face in
-                    VStack(alignment: .leading) {
-                        Text(face.name)
-                        if let preview = face.preview { Text(verbatim: "日本語 · 简体中文").font(Font(preview)) }
-                        Text(
-                            "\(ByteCountFormatter.string(fromByteCount: Int64(face.bytes),countStyle: .file)) · #\(face.index)"
-                        ).foregroundStyle(.secondary)
-                    }
-                    Button(library.data.defaults.font == face.id ? "Default" : "Set default") {
-                        library.data.defaults.font = face.id
-                    }
-                }
-                .toolbar { Button("Import font") { choose(true, false) } }
+                FontList(library: library, playing: player != nil) { choose(true, false) }
             case .settings:
                 OptionsForm(options: $library.data.defaults, fonts: library.fonts, global: true)
             case .saves:
-                List(library.data.games) { game in SaveRow(game: game, library: library).disabled(player != nil) }
+                if library.data.games.isEmpty {
+                    ContentUnavailableView(
+                        "No Games in the Library", systemImage: "archivebox",
+                        description: Text("Add a game to the library to manage its saves here."))
+                } else {
+                    List(library.data.games) { game in SaveRow(game: game, library: library).disabled(player != nil) }
+                }
             }
-        }.navigationTitle(LocalizedStringKey(item.rawValue))
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let progress {
+                HStack {
+                    ImportProgress(progress: progress)
+                    Spacer()
+                    Button("Cancel") { progress.cancel() }
+                }.padding().background(.bar)
+            }
+        }
+        .navigationTitle(LocalizedStringKey(item.rawValue))
     }
+    private var addGameButton: some View {
+        Group {
+            #if os(iOS)
+                Menu {
+                    Button("Reference Folder…") { choose(false, false) }
+                    Button("Copy into Library…") { choose(false, true) }
+                } label: { Label("Add Game…", systemImage: "plus") }
+            #else
+                Button("Add Game…", systemImage: "plus") { choose(false, false) }
+            #endif
+        }.disabled(progress != nil)
+    }
+
     func card(_ game: Game) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            let thumbnail = Library.base.appending(path: "\(game.id).png")
-            if let source = CGImageSourceCreateWithURL(thumbnail as CFURL, nil),
-                let image = CGImageSourceCreateThumbnailAtIndex(
-                    source, 0,
-                    [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 360]
-                        as CFDictionary)
-            {
-                Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit)
+        let cover = GameCover(game: game, revision: library.playbackRevision[game.id, default: 0])
+        let details = VStack(alignment: .leading, spacing: 4) {
+            Text(game.name).font(.headline).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(verbatim: "\(game.info.profile) · \(game.info.encodingLabel)").font(.caption).foregroundStyle(.secondary)
+            if let last = game.lastPlayed {
+                Text(last, format: .dateTime.year().month().day()).font(.caption).foregroundStyle(.secondary)
+            } else if grid {
+                Text(verbatim: " ").font(.caption).accessibilityHidden(true)
             }
-            Text(game.name).font(.headline)
-            Text("\(game.info.family) · \(game.info.encoding)").foregroundStyle(.secondary)
-            if let last = game.lastPlayed { Text(last, format: .dateTime.year().month().day()).font(.caption) }
-            HStack {
-                Button("Play") { play(game) }.disabled(player != nil)
-                Button("Configure") { editing = game.id }
+        }
+        let configure = Button { editing = game } label: {
+            if grid { Image(systemName: "gearshape").controlHitArea() }
+            else { Text("Configure") }
+        }.accessibilityLabel("Configure \(game.name)").help("Configure").disabled(player?.game.id == game.id)
+        let stackActions = typeSize.isAccessibilitySize || (compact && !grid)
+        let actions = (stackActions ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())) {
+            Button { play(game) } label: { Text("Play").controlHitArea() }
+                .buttonStyle(.borderedProminent).accessibilityLabel("Play \(game.name)").disabled(player != nil)
+            configure
+        }
+        return Group {
+            if grid || typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) {
+                    cover
+                    details
+                    actions
+                }
+            } else {
+                HStack {
+                    cover.frame(width: 76)
+                    details
+                    Spacer(minLength: 0)
+                    actions
+                }
             }
-        }.padding()
-            .contextMenu {
-                Button("Configure") { editing = game.id }
-                #if os(macOS)
-                    Button("Show in Finder") {
-                        if let url = try? game.resolve() { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                    }
-                #endif
-                Button("Remove from library", role: .destructive) { library.data.games.removeAll { $0.id == game.id } }
-            }
+        }
+        .padding(10).background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(.secondary.opacity(contrast == .increased ? 1 : 0.25)).allowsHitTesting(false) }
+        .contentShape(Rectangle())
+        #if os(macOS)
+            .onTapGesture(count: 2) { play(game) }
+        #endif
+        .contextMenu {
+            Button("Play") { play(game) }.disabled(player != nil)
+            Button("Configure") { editing = game }.disabled(player?.game.id == game.id)
+            #if os(macOS)
+                Button("Show in Finder") {
+                    if let url = try? game.resolve() { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                }
+            #endif
+            Button("Remove from Library", role: .destructive) { removing = game }.disabled(player?.game.id == game.id)
+        }
     }
     func choose(_ font: Bool, _ copy: Bool) {
+        guard font || progress == nil else { return }
         pickFont = font
         copyGame = copy
         picking = true
@@ -295,7 +400,7 @@ private struct Launcher: View {
             do {
                 let faces = try await Task.detached { try Library.importFont(url) }.value
                 library.data.fonts += faces
-            } catch { library.error = error.localizedDescription }
+            } catch { library.error = .init("Couldn’t Import Font", error.localizedDescription) }
         }
     }
     func addGame(_ url: URL, _ copy: Bool) {
@@ -310,10 +415,11 @@ private struct Launcher: View {
                 let game = try await Task.detached { try Library.add(url, copy: copy, options: options, progress: job) }
                     .value
                 library.data.games.append(game)
-            } catch { if !job.isCancelled { library.error = error.localizedDescription } }
+            } catch { if !job.isCancelled { library.error = .init("Couldn’t Add Game", error.localizedDescription) } }
         }
     }
     func play(_ game: Game) {
+        guard player == nil, editing?.id != game.id else { return }
         do {
             var game = game
             var stale = false
@@ -326,7 +432,9 @@ private struct Launcher: View {
             }
             let font = try library.font(for: game)
             let session = Playback(game, font, library.fonts)
-            session.closeError = { library.error = $0 }
+            let id = game.id
+            session.didClose = { library.playbackRevision[id, default: 0] += 1 }
+            session.closeError = { library.error = .init("Couldn’t Close Game", $0) }
             if let i = library.data.games.firstIndex(where: { $0.id == game.id }) {
                 game.lastPlayed = Date()
                 library.data.games[i] = game
@@ -337,7 +445,7 @@ private struct Launcher: View {
             #endif
         } catch {
             if smokeStarted { NSLog("CMVS_SMOKE playback setup failed: %@", error.localizedDescription) }
-            library.error = error.localizedDescription
+            library.error = .init("Couldn’t Open Game", error.localizedDescription)
         }
     }
 }
@@ -346,16 +454,32 @@ private struct OptionsForm: View {
     @Binding var options: Options
     var fonts: [FontFace]
     let global: Bool
+    var game: Game?
+    var defaultFont: FontFace?
+    var reset: (() -> Void)?
     @AppStorage("showPerformance") private var showPerformance = false
     @State private var showingLicenses = false
     private static let profiles = Bridge.profiles()
     var body: some View {
         Form {
-            Picker("Text encoding", selection: $options.encoding) {
-                ForEach(["auto", "shift-jis", "gbk", "utf-8"], id: \.self) { Text($0).tag($0) }
+            if let game {
+                let info = game.info
+                Section {
+                    LabeledContent("Resolved Profile", value: info.profile)
+                    LabeledContent("Storage") { Text(game.bookmark == nil ? "Library Copy" : "Referenced Folder") }
+                    if info.size.count == 2 { LabeledContent("Original Size", value: "\(info.size[0]) × \(info.size[1])") }
+                    LabeledContent("Global Default", value: defaultFont?.name ?? String(localized: "No Fonts"))
+                    Button("Restore Defaults") { reset?() }
+                }
+            }
+            Picker("Text Encoding", selection: $options.encoding) {
+                Text("Automatic").tag("auto")
+                ForEach(GameInfo.encodingLabels, id: \.self) { label in
+                    Text(verbatim: label).tag(label.lowercased())
+                }
             }
             Picker("Font", selection: $options.font) {
-                Text(global ? "Automatic" : "Global default").tag("")
+                Text(global ? "Automatic" : "Global Default").tag("")
                 ForEach(fonts) { Text($0.name).tag($0.id) }
             }
             Picker("Renderer", selection: $options.metal) {
@@ -363,46 +487,134 @@ private struct OptionsForm: View {
                 Text("CPU").tag(false)
             }
             Picker("Scaling", selection: $options.aspect) {
-                Text("Game preference").tag(nil as Int?)
-                Text("Original size").tag(Optional(0))
+                Text("Game Preference").tag(nil as Int?)
+                Text("Original Size").tag(Optional(0))
                 Text("Fit").tag(Optional(1))
                 Text("Fill").tag(Optional(2))
                 Text("Stretch").tag(Optional(3))
             }
-            Toggle("Native audio", isOn: $options.native_audio)
+            Toggle("Native Audio", isOn: $options.native_audio)
             #if os(macOS)
-                Toggle("Use game savedata folder", isOn: $options.game_savedata)
+                Toggle("Use Game Savedata Folder", isOn: $options.game_savedata)
             #else
-                Toggle("Multi-touch gestures", isOn: $options.gestures)
+                Toggle("Multi-Touch Gestures", isOn: $options.gestures)
             #endif
-            Section("Diagnostics") {
-                if global { Toggle("Show performance", isOn: $showPerformance) }
-                Picker("Engine profile", selection: $options.profile) {
+            Section {
+                if global { Toggle("Show Performance", isOn: $showPerformance) }
+                Picker("Engine Profile", selection: $options.profile) {
                     Text("Automatic").tag("")
                     ForEach(Self.profiles, id: \.self) { Text($0).tag($0) }
                 }
-                Toggle("Skip auto-resume", isOn: $options.skip_auto_resume)
-                Toggle("Continue without snapshot", isOn: $options.continue_without_snapshot)
-                Toggle("Block presumed commands", isOn: $options.block_presumed)
-                Toggle("Block unreviewed commands", isOn: $options.block_unreviewed)
+                Toggle("Skip Auto-Resume", isOn: $options.skip_auto_resume)
+                Toggle("Continue Without Snapshot", isOn: $options.continue_without_snapshot)
+                Toggle("Block Presumed Commands", isOn: $options.block_presumed)
+                Toggle("Block Unreviewed Commands", isOn: $options.block_unreviewed)
+            } header: { Text("Diagnostics") } footer: {
+                Text("Use these options to diagnose startup or script problems. They change how the game resumes and which commands it runs.")
             }
             if global {
                 Section {
-                    DisclosureGroup("Controls guide") {
+                    DisclosureGroup("Controls Guide") {
                         Text("Return confirms and Space hides text. Hold Shift or Ctrl for the game's corresponding fast-forward mode.")
                         #if os(macOS)
                             Text("Left-click to advance, right-click for the game menu, and scroll to browse history.")
-                            Text("Press ⌘S for a screenshot or ⌘F for full screen.")
+                            Text("Choose Game > Screenshot to capture a frame. Press ⌃⌘F for full screen.")
                         #else
                             Text("Tap to advance. Tap the ellipsis for game controls.")
                             Text("With multi-touch gestures on, tap with two fingers for the game menu, swipe with two to browse history, or tap with three for game controls.")
                         #endif
                     }
-                    Button("Open-source licenses") { showingLicenses = true }
+                    Button("Open-Source Licenses") { showingLicenses = true }
                 }
             }
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showingLicenses) { LicensesView() }
+    }
+}
+
+private struct ImportProgress: View {
+    let progress: Progress
+    @State private var bytes: Int64 = 0
+    @State private var total: Int64 = -1
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            if total > 0 {
+                ProgressView(value: Double(bytes), total: Double(total)) {
+                    Text("Copying \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))")
+                }
+            } else {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Scanning game folder…")
+                }.accessibilityElement(children: .combine)
+            }
+        }
+        .onReceive(progress.publisher(for: \.totalUnitCount).receive(on: DispatchQueue.main)) { total = $0 }
+        .onReceive(progress.publisher(for: \.completedUnitCount).receive(on: DispatchQueue.main)) { bytes = $0 }
+    }
+}
+
+private struct GameConfiguration: View {
+    let game: Game
+    let library: Library
+    @Environment(\.dismiss) private var dismiss
+    @State private var options: Options
+    @State private var saving = false
+    @State private var error: String?
+
+    init(game: Game, library: Library) {
+        self.game = game
+        self.library = library
+        _options = State(initialValue: game.options)
+    }
+
+    var body: some View {
+        NavigationStack {
+            OptionsForm(options: $options, fonts: library.fonts, global: false, game: game,
+                        defaultFont: library.defaultFont) {
+                options = library.data.defaults
+                options.font = ""
+            }
+            .navigationTitle(game.name)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { save() } }
+            }
+        }
+        .disabled(saving).interactiveDismissDisabled(saving || options != game.options)
+        #if os(macOS)
+            .frame(minWidth: 480, minHeight: 500)
+        #endif
+        .alert("Couldn’t Save Configuration", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK") { error = nil }
+        } message: { Text(error ?? "") }
+    }
+
+    private func save() {
+        saving = true
+        let options = options
+        Task {
+            defer { saving = false }
+            do {
+                var info = game.info
+                if options.profile != game.options.profile || options.encoding != game.options.encoding {
+                    let game = game
+                    info = try await Task.detached {
+                        let url = try game.resolve()
+                        return try scoped(url) { try Library.inspect(url, options: options) }
+                    }.value
+                }
+                if let i = library.data.games.firstIndex(where: { $0.id == game.id }) {
+                    if info.game != game.info.game {
+                        library.data.games[i].saveFolder = game.saves.lastPathComponent
+                    }
+                    library.data.games[i].info = info
+                    library.data.games[i].options = options
+                }
+                dismiss()
+            } catch { self.error = error.localizedDescription }
+        }
     }
 }

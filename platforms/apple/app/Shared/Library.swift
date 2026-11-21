@@ -5,7 +5,13 @@ import Observation
 
 struct PlayerError: LocalizedError {
     let errorDescription: String?
-    init(_ message: String) { errorDescription = message }
+    init(_ message: String) { errorDescription = NSLocalizedString(message, comment: "") }
+
+    init(engineMessage: String) {
+        let missing = "\0"
+        let message = Bundle.main.localizedString(forKey: engineMessage, value: missing, table: nil)
+        errorDescription = message == missing ? String(localized: "Engine error: \(engineMessage)") : message
+    }
 }
 
 struct GameInfo: Codable, Equatable {
@@ -13,6 +19,9 @@ struct GameInfo: Codable, Equatable {
     var profile, family, basis, encoding: String
     var size: [Int]
     var savedata: Bool
+
+    static let encodingLabels = ["Shift-JIS", "GBK", "UTF-8"]
+    var encodingLabel: String { Self.encodingLabels.first { $0.lowercased() == encoding } ?? encoding }
 }
 
 struct Options: Codable, Equatable {
@@ -37,6 +46,18 @@ struct Game: Identifiable, Codable, Equatable {
     var bookmark: Data?
     var options: Options
     var lastPlayed: Date?
+    var saveFolder: String?
+    var thumbnail: URL { Library.base.appending(path: "\(id).png") }
+    var filename: String {
+        let cleaned = name.components(separatedBy: CharacterSet(charactersIn: "/:\\").union(.controlCharacters))
+            .joined(separator: "-").trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        var stem = ""
+        for ch in cleaned {
+            guard stem.utf8.count + ch.utf8.count <= 180 else { break }
+            stem.append(ch)
+        }
+        return stem.isEmpty ? "CMVS" : stem
+    }
 
     func resolve() throws -> URL {
         var stale = false
@@ -54,13 +75,13 @@ struct Game: Identifiable, Codable, Equatable {
     }
 
     var saves: URL {
-        let name = info.game ?? id.uuidString
+        let name = saveFolder ?? info.game ?? id.uuidString
         let safe =
             !name.isEmpty
             && name.utf8.allSatisfy {
                 (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95
             }
-        return Library.base.appending(path: "Saves").appending(path: safe ? name : id.uuidString)
+        return Library.userFiles.appending(path: "Saves").appending(path: safe ? name : id.uuidString)
     }
 
     // The UIKit player keyed saves by the FNV-1a hash of the selected folder path.
@@ -84,14 +105,15 @@ struct FontFace: Identifiable, Codable, Hashable {
     var index: UInt32
     var name: String
     var bytes: Int
+    var family: String?
     var id: String { "\(file)#\(index)" }
     var url: URL { file.hasPrefix("/") ? URL(fileURLWithPath: file) : Library.base.appending(path: file) }
 
-    var preview: CTFont? {
+    func preview(size: CGFloat) -> CTFont? {
         guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
             descriptors.indices.contains(Int(index))
         else { return nil }
-        return CTFontCreateWithFontDescriptor(descriptors[Int(index)], 18, nil)
+        return CTFontCreateWithFontDescriptor(descriptors[Int(index)], size, nil)
     }
 
     static func read(_ url: URL, file: String, requireCJK: Bool = false) throws -> [Self] {
@@ -106,7 +128,8 @@ struct FontFace: Identifiable, Codable, Hashable {
             if requireCJK && ![0x4e2d, 0x3042].allSatisfy({ CFCharacterSetIsCharacterMember(set, UniChar($0)) }) {
                 return nil
             }
-            return Self(file: file, index: UInt32(index), name: CTFontCopyFullName(font) as String, bytes: size)
+            return Self(file: file, index: UInt32(index), name: CTFontCopyFullName(font) as String,
+                        bytes: size, family: CTFontCopyFamilyName(font) as String)
         }
     }
 }
@@ -123,43 +146,134 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
         var fonts = [FontFace]()
         var defaults = Options()
     }
-    static var base: URL {
+    static let base = URL.applicationSupportDirectory.appending(path: "org.cmvs.player")
+    static var userFiles: URL {
         #if os(macOS)
-            URL.applicationSupportDirectory.appending(path: "org.cmvs.player")
+            base
         #else
             URL.documentsDirectory
         #endif
     }
-    private static var index: URL { base.appending(path: "library.json") }
+    private let directory: URL
+    private let legacyDirectory: URL?
+    private var index: URL { directory.appending(path: "library.json") }
     var data = Catalog()
     var systemFonts = [FontFace]()
     var fonts: [FontFace] { data.fonts + systemFonts }
-    var error: String?
-    private var writable = true
-
-    init() {
-        do {
-            try FileManager.default.createDirectory(at: Self.base, withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: Self.index.path) {
-                data = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: Self.index))
-            }
-        } catch {
-            self.error = error.localizedDescription
-            writable = false
+    var playbackRevision = [UUID: Int]()
+    var defaultFont: FontFace? {
+        data.defaults.font.isEmpty ? fonts.first : fonts.first { $0.id == data.defaults.font }
+    }
+    struct Issue {
+        let title: String
+        let message: String
+        init(_ title: String.LocalizationValue, _ message: String) {
+            self.title = String(localized: title)
+            self.message = message
         }
     }
+    var error: Issue?
+    private(set) var loadError: String?
+    var writable: Bool { loadError == nil }
+
+    convenience init() {
+        #if os(iOS)
+            self.init(directory: Self.base, legacyDirectory: Self.userFiles)
+        #else
+            self.init(directory: Self.base)
+        #endif
+    }
+
+    init(directory: URL, legacyDirectory: URL? = nil) {
+        self.directory = directory
+        self.legacyDirectory = legacyDirectory
+        reload()
+    }
+
+    func reload() {
+        do {
+            let fm = FileManager.default
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            if let legacyDirectory { try Self.migrateCatalog(from: legacyDirectory, to: directory) }
+            data = fm.fileExists(atPath: index.path)
+                ? try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: index)) : Catalog()
+            loadError = nil
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+    // Move the index last so an interrupted upgrade can resume on the next launch.
+    static func migrateCatalog(from documents: URL, to support: URL) throws {
+        let fm = FileManager.default
+        let index = documents.appending(path: "library.json")
+        let destination = support.appending(path: "library.json")
+        guard !fm.fileExists(atPath: destination.path), fm.fileExists(atPath: index.path) else { return }
+        let catalog = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: index))
+        var paths = Set<String>()
+        for game in catalog.games {
+            paths.insert("\(game.id).png")
+            if game.bookmark == nil { paths.insert("Games/\(game.id)") }
+        }
+        for face in catalog.fonts {
+            let name = (face.file as NSString).lastPathComponent
+            if face.file == "Fonts/" + name, ![".", "..", ""].contains(name) { paths.insert(face.file) }
+        }
+        for path in paths.sorted() {
+            let source = documents.appending(path: path)
+            guard fm.fileExists(atPath: source.path) else { continue }
+            let target = support.appending(path: path)
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.moveItem(at: source, to: target)
+        }
+        for name in ["Games", "Fonts"] {
+            // rmdir leaves directories containing user files intact.
+            _ = rmdir(documents.appending(path: name).path)
+        }
+        try fm.moveItem(at: index, to: destination)
+    }
+
     func persist() {
         guard writable else { return }
-        do { try JSONEncoder().encode(data).write(to: Self.index, options: .atomic) } catch {
-            self.error = error.localizedDescription
+        do { try JSONEncoder().encode(data).write(to: index, options: .atomic) } catch {
+            self.error = Issue("Couldn’t Save Library", error.localizedDescription)
         }
     }
     func font(for game: Game) throws -> FontFace {
-        let id = game.options.font.isEmpty ? data.defaults.font : game.options.font
-        guard let face = id.isEmpty ? fonts.first : fonts.first(where: { $0.id == id }) else {
+        let face = game.options.font.isEmpty ? defaultFont : fonts.first { $0.id == game.options.font }
+        guard let face else {
             throw PlayerError("Select a font in Fonts before playing.")
         }
         return face
+    }
+
+    static func inspect(_ source: URL, options: Options) throws -> GameInfo {
+        let api = Bridge()
+        try api.check(cmvs_apple_inspect_game(api.handle, source.path, options.profile, options.encoding))
+        return try JSONDecoder().decode(GameInfo.self, from: Data(api.text.utf8))
+    }
+
+    private func removeIfPresent(_ url: URL) throws {
+        do { try FileManager.default.removeItem(at: url) }
+        catch let error as CocoaError where error.code == .fileNoSuchFile { }
+    }
+
+    func remove(_ game: Game) throws {
+        try removeIfPresent(game.thumbnail)
+        if game.bookmark == nil { try removeIfPresent(try game.resolve()) }
+        data.games.removeAll { $0.id == game.id }
+        playbackRevision.removeValue(forKey: game.id)
+    }
+
+    func removeFont(_ face: FontFace) throws {
+        let directory = Self.base.appending(path: "Fonts", directoryHint: .isDirectory)
+        guard data.fonts.contains(face), face.file == "Fonts/" + face.url.lastPathComponent,
+            face.url.standardizedFileURL.deletingLastPathComponent().path == directory.standardizedFileURL.path
+        else { return }
+        try removeIfPresent(face.url)
+        let ids = Set(data.fonts.filter { $0.file == face.file }.map(\.id))
+        data.fonts.removeAll { $0.file == face.file }
+        if ids.contains(data.defaults.font) { data.defaults.font = "" }
+        for i in data.games.indices where ids.contains(data.games[i].options.font) { data.games[i].options.font = "" }
     }
 
     static func add(_ source: URL, copy: Bool, options: Options, progress: Progress) throws -> Game {
@@ -167,9 +281,7 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
         let destination = base.appending(path: "Games/\(id)")
         return try scoped(source) {
             do {
-                let api = Bridge()
-                try api.check(cmvs_apple_inspect_game(api.handle, source.path, options.profile, options.encoding))
-                let info = try JSONDecoder().decode(GameInfo.self, from: Data(api.text.utf8))
+                let info = try inspect(source, options: options)
                 if progress.isCancelled { throw CancellationError() }
                 if copy { try copyGame(source, destination, progress) }
                 let bookmark =
@@ -193,7 +305,7 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
     static func copyGame(_ source: URL, _ destination: URL, _ progress: Progress) throws {
         let fm = FileManager.default
         guard !destination.standardizedFileURL.path.hasPrefix(source.resolvingSymlinksInPath().path + "/") else {
-            throw PlayerError("Choose the game directory inside Documents.")
+            throw PlayerError("Choose the individual game folder.")
         }
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
         var items = [(URL, URL, Bool)]()

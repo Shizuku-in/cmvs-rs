@@ -1,7 +1,10 @@
 use crate::{Result, renderer::Frame};
 use cmvs_core::{
     TextEncoding,
-    host::{platform::*, settings::DisplayPreferences},
+    host::{
+        platform::*,
+        settings::{DEFAULT_FONT_FACE, DisplayPreferences, font_face_for_encoding},
+    },
     render::raster::RgbaImage,
 };
 use cmvs_font::text_codec;
@@ -84,9 +87,13 @@ impl PlatformBackend for Backend {
     fn cancel_text_dialog(&mut self) {
         self.comment.cancel();
     }
-    fn poll_font_dialog(&mut self, _: &[u8]) -> Result<FontDialogResult> {
+    fn poll_font_dialog(&mut self, face: &[u8]) -> Result<FontDialogResult> {
         if self.font.is_none() {
-            self.events.push_back(json!({"kind":"font"}));
+            let default = face == DEFAULT_FONT_FACE
+                || face == font_face_for_encoding(DEFAULT_FONT_FACE, self.encoding);
+            let name = text_codec::decode(self.encoding, face).ok();
+            self.events
+                .push_back(json!({"kind":"font", "default":default, "face":name}));
         }
         match self.font.replace(FontDialogResult::Pending) {
             None | Some(FontDialogResult::Pending) => Ok(FontDialogResult::Pending),

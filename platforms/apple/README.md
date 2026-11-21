@@ -15,9 +15,9 @@ sh platforms/apple/build.sh xcframework
 
 | 运行平台 | 构建命令 | 产物 |
 |---|---|---|
-| macOS（Intel 和 Apple 芯片） | `sh platforms/apple/build.sh macos --reuse-framework` | `target/apple/macos/Cmvs.app` |
-| iOS 模拟器（arm64） | `sh platforms/apple/build.sh ios-simulator --reuse-framework` | `target/apple/ios-simulator/Cmvs.app` |
-| iPhone / iPad 真机 | `sh platforms/apple/build.sh ios --reuse-framework` | `target/apple/ios/Cmvs.app` |
+| macOS（Intel 和 Apple 芯片） | `sh platforms/apple/build.sh macos --reuse-framework` | `target/apple/macos/CMVS.app` |
+| iOS 模拟器（arm64） | `sh platforms/apple/build.sh ios-simulator --reuse-framework` | `target/apple/ios-simulator/CMVS.app` |
+| iPhone / iPad 真机 | `sh platforms/apple/build.sh ios --reuse-framework` | `target/apple/ios/CMVS.app` |
 
 Release 流程将 macOS 通用应用打包为 ZIP，将 iOS 真机应用打包为未签名 IPA。安装 IPA 前需使用自己的签名身份和描述文件签名。
 

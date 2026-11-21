@@ -14,7 +14,7 @@ settings:
 targetTemplates:
   Player:
     type: application
-    productName: Cmvs
+    productName: CMVS
     sources:
       - path: ../../THIRD_PARTY_NOTICES.txt
         buildPhase: resources
@@ -29,7 +29,8 @@ targetTemplates:
         embed: false
     settings:
       base:
-        PRODUCT_NAME: Cmvs
+        PRODUCT_NAME: CMVS
+        INFOPLIST_KEY_CFBundleDisplayName: CMVS
         PRODUCT_BUNDLE_IDENTIFIER: org.cmvs.player
         OTHER_LDFLAGS: "$(inherited) -lc++ -lz -framework Metal -framework QuartzCore -framework CoreGraphics -framework Security -framework SystemConfiguration -framework AudioToolbox -framework CoreAudio -framework AVFAudio -framework CoreFoundation -framework Foundation"
 targets:

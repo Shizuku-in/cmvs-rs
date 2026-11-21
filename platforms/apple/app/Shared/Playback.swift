@@ -14,8 +14,11 @@ enum FastForwardKey: UInt32 {
 @MainActor @Observable final class Playback: NSObject, Identifiable {
     let game: Game
     let font: FontFace
+    private var selectedFaces = [String: FontFace]()
+    private(set) var dialogFont: FontFace?
     let fonts: [FontFace]
     let engine = Engine()
+    let accessibility = GameAccessibility()
     let cpu = CALayer()
     private var clock: CADisplayLink?
     private var previous: CFTimeInterval?
@@ -31,8 +34,10 @@ enum FastForwardKey: UInt32 {
     private var focused = true
     private var closed = false
     private(set) var ready = false
-    var canCapture: Bool { ready && frames > 0 }
+    var canCapture: Bool { ready && frames > 0 && error == nil && dialog == nil }
     var captureError: String?
+    var screenshotName: String?
+    var didClose: (() -> Void)?
     var clearKeys: (() -> Void)?
     var warp: ((CGPoint) -> Void)?
     var title: String
@@ -130,6 +135,14 @@ enum FastForwardKey: UInt32 {
             height: target.height)
         CATransaction.commit()
     }
+    func canvasRect(_ rect: [Int]) -> CGRect {
+        let canvas = cpu.frame
+        let sx = canvas.width / CGFloat(logicalSize[0])
+        let sy = canvas.height / CGFloat(logicalSize[1])
+        return CGRect(x: canvas.minX + CGFloat(rect[0]) * sx, y: canvas.minY + CGFloat(rect[1]) * sy,
+                      width: CGFloat(rect[2]) * sx, height: CGFloat(rect[3]) * sy)
+    }
+
     func scene(_ value: Bool) {
         active = value
         syncActivity()
@@ -221,7 +234,7 @@ enum FastForwardKey: UInt32 {
                 guard let api = engine.api else { throw PlayerError("Game closed.") }
                 let result = cmvs_apple_tick(api.handle, delta)
                 if result < 0 {
-                    let fallback = PlayerError(api.text)
+                    let fallback = PlayerError(engineMessage: api.text)
                     if cmvs_apple_next_event(api.handle) == 1,
                        let stop = try? JSONDecoder().decode(StopDiagnostic.self, from: Data(api.text.utf8)) {
                         throw stop
@@ -256,12 +269,23 @@ enum FastForwardKey: UInt32 {
                 case "warp":
                     if let xy = e["point"] as? [Double], xy.count == 2 { warp?(CGPoint(x: xy[0], y: xy[1])) }
                 case "cursor": cursor?(e["cursor"] as? [String: Any])
-                case "message", "font", "comment":
+                case "font":
+                    let name = e["face"] as? String
+                    if let name, let selected = selectedFaces[name] { dialogFont = selected }
+                    else if e["default"] as? Bool == true { dialogFont = font }
+                    else if let name { dialogFont = fonts.first { $0.name == name || $0.family == name } }
+                    else { dialogFont = nil }
+                    fallthrough
+                case "message", "comment":
+                    controls = false
                     draft = e["text"] as? String ?? ""
                     dialog = e
                     syncActivity()
                 default: break
                 }
+            }
+            if result.0 == 1 && !paused && !controls {
+                accessibility.update(at: link.timestamp, engine: engine, cpuFrame: result.1)
             }
             if smokeFrames > 0 && frames == smokeFrames {
                 if let path = ProcessInfo.processInfo.environment["CMVS_SMOKE_OUTPUT"] {
@@ -306,29 +330,63 @@ enum FastForwardKey: UInt32 {
     func capture() {
         guard canCapture else { return }
         do {
-            let dir = Library.base.appending(path: "Screenshots")
+            let dir = Library.userFiles.appending(path: "Screenshots")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try engine.queue.sync { try engine.screenshot(to: dir.appending(path: "\(UUID()).png")) }
+            let stamp = Date().ISO8601Format(.iso8601(timeZone: .gmt, includingFractionalSeconds: true))
+                .replacingOccurrences(of: ":", with: "-")
+            let name = "\(game.filename)-\(stamp).png"
+            try engine.queue.sync { try engine.screenshot(to: dir.appending(path: name)) }
+            screenshotName = name
         } catch { captureError = error.localizedDescription }
     }
-    var validDraft: Bool {
-        guard let limit = dialog?["limit"] as? Int, let bytes = dialog?["bytes"] as? Int else { return true }
-        return engine.queue.sync {
-            guard let api = engine.api else { return false }
-            return cmvs_apple_comment_valid(api.handle, draft, UInt32(limit), UInt32(bytes)) == 1
-        }
+    struct CommentStatus {
+        let characters: Int
+        let limit: Int
+        let bytes: Int?
+        let byteLimit: Int
+        let problem: String?
     }
+    var commentStatus: CommentStatus {
+        let limit = dialog?["limit"] as? Int ?? 0
+        let byteLimit = dialog?["bytes"] as? Int ?? 0
+        let characters = draft.unicodeScalars.count
+        let control = draft.unicodeScalars.contains { $0.properties.generalCategory == .control }
+        let bytes: Int? = control ? nil : engine.queue.sync {
+            guard let api = engine.api else { return nil }
+            let size = cmvs_apple_comment_bytes(api.handle, draft)
+            return size < 0 ? nil : Int(size)
+        }
+        let problem: String?
+        if control { problem = String(localized: "Remove control characters.") }
+        else if characters > limit { problem = String(localized: "The comment has too many characters.") }
+        else if let bytes {
+            problem = bytes > byteLimit ? String(localized: "The encoded comment exceeds the byte limit.") : nil
+        } else { problem = String(localized: "Some characters cannot be encoded in \(encoding).") }
+        return CommentStatus(characters: characters, limit: limit, bytes: bytes, byteLimit: byteLimit, problem: problem)
+    }
+
+    func fastForwardBinding(_ key: FastForwardKey) -> Binding<Bool> {
+        Binding(get: { self.lockedFastForward.contains(key) }, set: { self.setFastForward(key, locked: $0) })
+    }
+
     func answer(_ accepted: Bool, face: FontFace? = nil) {
         guard let e = dialog else { return }
         switch e["kind"] as? String {
         case "comment":
+            guard !accepted || commentStatus.problem == nil else { return }
             let id = (e["id"] as? NSNumber)?.uint32Value ?? 0
             invoke { accepted ? cmvs_apple_comment($0, id, draft) : cmvs_apple_comment($0, id, nil) }
         case "font":
+            var key: String?
             invoke { handle in
-                if let face { return cmvs_apple_font(handle, face.url.path, face.index) }
+                if let face {
+                    let code = cmvs_apple_font(handle, face.url.path, face.index)
+                    if code == 0 { key = String(cString: cmvs_apple_text(handle)) }
+                    return code
+                }
                 return cmvs_apple_font(handle, nil, 0)
             }
+            if let key, let face { selectedFaces[key] = face }
         default: invoke { cmvs_apple_message($0, accepted) }
         }
         dialog = nil
@@ -343,6 +401,7 @@ enum FastForwardKey: UInt32 {
     func close() {
         guard !closed else { return }
         closed = true
+        accessibility.enable(false)
         clock?.invalidate()
         clock = nil
         NotificationCenter.default.removeObserver(self)
@@ -350,19 +409,22 @@ enum FastForwardKey: UInt32 {
         if !ready {
             let engine = engine
             let report = closeError
+            let didClose = didClose
             engine.queue.async {
                 do { try engine.close() }
                 catch { DispatchQueue.main.async { report?(error.localizedDescription) } }
+                DispatchQueue.main.async { didClose?() }
             }
         } else {
             do {
                 try engine.queue.sync {
                     if frames > 0 {
-                        try? engine.screenshot(to: Library.base.appending(path: "\(game.id).png"))
+                        try? engine.screenshot(to: game.thumbnail)
                     }
                     try engine.close()
                 }
             } catch { closeError?(error.localizedDescription) }
+            didClose?()
         }
         ready = false
         #if os(iOS)

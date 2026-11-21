@@ -206,6 +206,37 @@ extern "C" fn cmvs_apple_next_event(h: *mut Handle) -> i32 {
     })
 }
 #[unsafe(no_mangle)]
+extern "C" fn cmvs_apple_accessibility(h: *mut Handle, known_revision: u64) -> i32 {
+    call(h, |h| {
+        let p = h.player()?;
+        if !p.session.driver.ready() {
+            return Ok(0);
+        }
+        p.reader.update(crate::accessibility::Page::read(
+            &p.session.runtime,
+            p.session.encoding,
+        ));
+        if known_revision == p.reader.revision {
+            return Ok(0);
+        }
+        let page = json!({"revision":p.reader.revision, "content":p.reader.page});
+        h.output(page)?;
+        Ok(1)
+    })
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn cmvs_apple_choose(h: *mut Handle, revision: u64, index: u32) -> i32 {
+    call(h, |h| {
+        let p = h.player()?;
+        if !p.paused {
+            p.reader.choose(revision, index as usize);
+        }
+        Ok(0)
+    })
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn cmvs_apple_key(h: *mut Handle, code: u32, pressed: bool) -> i32 {
     call(h, |h| {
         let p = h.player()?;
@@ -304,15 +335,17 @@ extern "C" fn cmvs_apple_comment(h: *mut Handle, id: u32, text: *const c_char) -
 extern "C" fn cmvs_apple_font(h: *mut Handle, path: *const c_char, face: u32) -> i32 {
     call(h, |h| {
         let p = h.player()?;
-        p.backend.font = Some(if path.is_null() {
-            FontDialogResult::Cancelled
-        } else {
-            FontDialogResult::Selected(
-                p.session
-                    .font
-                    .import_font(Path::new(&string(path)?), face)?,
-            )
-        });
+        if path.is_null() {
+            p.backend.font = Some(FontDialogResult::Cancelled);
+            return Ok(0);
+        }
+        let key = p
+            .session
+            .font
+            .import_font(Path::new(&string(path)?), face)?;
+        let name = text_codec::decode(p.session.encoding, &key)?;
+        p.backend.font = Some(FontDialogResult::Selected(key));
+        h.text = CString::new(name)?;
         Ok(0)
     })
 }
@@ -365,6 +398,13 @@ extern "C" fn cmvs_apple_backup(
             import,
         )?;
         Ok(0)
+    })
+}
+#[unsafe(no_mangle)]
+extern "C" fn cmvs_apple_comment_bytes(h: *mut Handle, text: *const c_char) -> i32 {
+    call(h, |h| {
+        let encoded = text_codec::encode(h.player()?.session.encoding, &string(text)?)?;
+        Ok(i32::try_from(encoded.len())?)
     })
 }
 #[unsafe(no_mangle)]

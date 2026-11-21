@@ -25,6 +25,9 @@ int32_t cmvs_apple_tick(CmvsApple *, uint32_t delta_ms);
 /* Returns 1 with one JSON event in text, or 0 if empty. After a stopped
  * tick, the first event includes the script, PC, step count and reason. */
 int32_t cmvs_apple_next_event(CmvsApple *);
+/* Returns 1 with the changed accessible page in text; activations refer to that revision. */
+int32_t cmvs_apple_accessibility(CmvsApple *, uint64_t known_revision);
+int32_t cmvs_apple_choose(CmvsApple *, uint64_t revision, uint32_t index);
 int32_t cmvs_apple_key(CmvsApple *, uint32_t code, bool pressed);
 int32_t cmvs_apple_pointer(CmvsApple *, double x, double y);
 /* Physical surface pixels. Touch phases are begin/move/end/cancel (0..3). */
@@ -38,9 +41,12 @@ int32_t cmvs_apple_restart_audio(CmvsApple *);
 int32_t cmvs_apple_pause(CmvsApple *, bool paused);
 int32_t cmvs_apple_save_preferences(CmvsApple *);
 int32_t cmvs_apple_comment(CmvsApple *, uint32_t id, const char *text);
+/* Selecting a face returns its engine name in text. NULL cancels. */
 int32_t cmvs_apple_font(CmvsApple *, const char *path, uint32_t face);
 int32_t cmvs_apple_message(CmvsApple *, bool accept);
 int32_t cmvs_apple_backup(CmvsApple *, const char *game, const char *user, bool local, const char *zip, bool restore);
+/* Encoded byte count, or -1 if the text cannot be encoded. */
+int32_t cmvs_apple_comment_bytes(CmvsApple *, const char *text);
 int32_t cmvs_apple_comment_valid(CmvsApple *, const char *text, uint32_t chars, uint32_t bytes);
 int32_t cmvs_apple_read_frame(CmvsApple *, const uint8_t **pixels);
 #ifdef __cplusplus

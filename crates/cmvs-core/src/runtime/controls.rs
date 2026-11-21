@@ -1,6 +1,6 @@
-//! Probe group IDs 0..=5 are ordinary groups; 6..=13 are list groups 0..=7.
+//! Runtime group IDs 0..=5 are ordinary groups; 6..=13 are list groups 0..=7.
 //! List hit rectangles follow the bound object, then intersect the screen-space hit area.
-use cmvs_core::{runtime::BUTTON_GROUPS, runtime::Button, runtime::ButtonGroup, runtime::Runtime};
+use super::{BUTTON_GROUPS, Button, ButtonGroup, Runtime};
 
 pub const GROUPS: usize = BUTTON_GROUPS + 8;
 
@@ -78,6 +78,21 @@ impl<'a> Group<'a> {
             self.pointer
                 .map_or(centre, |group| group.to_pointer(centre)),
         )
+    }
+    /// Hit bounds in device pointer coordinates, after list clipping and script scaling.
+    pub fn pointer_rect(&self, index: usize) -> Option<[i32; 4]> {
+        let [x, y, w, h] = self.rect(index)?;
+        let Some(group) = self.pointer else {
+            return Some([x, y, w, h]);
+        };
+        let [left, top] = group.to_pointer([x, y]);
+        let [right, bottom] = group.to_pointer([x.checked_add(w)?, y.checked_add(h)?]);
+        Some([
+            left,
+            top,
+            right.checked_sub(left)?,
+            bottom.checked_sub(top)?,
+        ])
     }
     pub fn scroll_point(&self) -> Option<[i32; 2]> {
         let [x, y, w, h] = self.clip?;
@@ -166,7 +181,7 @@ pub fn enabled(run: &Runtime) -> Vec<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::{runtime::BUTTON_STATES, runtime::ButtonImage};
+    use crate::runtime::{BUTTON_STATES, ButtonImage};
 
     #[test]
     fn scaled_group_points_are_device_pointer_positions() {

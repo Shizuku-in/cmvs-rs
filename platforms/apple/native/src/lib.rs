@@ -1,3 +1,4 @@
+mod accessibility;
 mod backend;
 mod backup;
 #[allow(unsafe_code)]
@@ -43,6 +44,7 @@ struct Config {
 }
 struct Player {
     session: HostSession,
+    reader: accessibility::Reader,
     backend: Backend,
     audio: Option<HostAudioControl>,
     #[cfg(target_os = "ios")]
@@ -120,6 +122,7 @@ impl Player {
         touch.focus(true, session.runtime.input_mut());
         Ok(Self {
             session,
+            reader: Default::default(),
             output: backend.size,
             backend,
             audio,
@@ -144,6 +147,7 @@ impl Player {
         self.session.runtime.set_focused(!value);
         self.touch.focus(!value, self.session.runtime.input_mut());
         if value {
+            self.reader.cancel();
             self.session.driver.suspend();
             self.session.input.clear(self.session.runtime.input_mut());
             self.touching = false;
@@ -170,6 +174,16 @@ impl Player {
         let s = &mut self.session;
         s.runtime.poll_audio_output()?;
         let auto_clear = s.runtime.settings().cursor_auto_clear();
+        if s.driver.needs_input()
+            && self.reader.sample(
+                || accessibility::Page::read(&s.runtime, s.encoding),
+                &mut s.input,
+            )
+        {
+            self.touch.reset_contacts();
+            self.touching = false;
+            self.fresh_touch = false;
+        }
         s.driver.sample_input(s.runtime.input_mut(), |input| {
             if self.touching {
                 let (point, pressed) = self.touch.sample_pointer(viewport);

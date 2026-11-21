@@ -121,7 +121,7 @@ jobs:
           export CMVS_VERSION="${TAG#v}" CMVS_BUILD_NUMBER="$GITHUB_RUN_NUMBER"
           sh platforms/apple/build.sh macos
           sh platforms/apple/build.sh ios --reuse-framework
-          for root in target/apple/macos/Cmvs.app/Contents target/apple/ios/Cmvs.app; do
+          for root in target/apple/macos/CMVS.app/Contents target/apple/ios/CMVS.app; do
             test "$(plutil -extract CFBundleShortVersionString raw "$root/Info.plist")" = "$CMVS_VERSION"
             test "$(plutil -extract CFBundleVersion raw "$root/Info.plist")" = "$CMVS_BUILD_NUMBER"
             notices="$root/DEPENDENCY-LICENSES.txt"
@@ -129,8 +129,8 @@ jobs:
             grep -Fq 'Copyright (c) 2014 Mathijs van de Nes' "$notices"
           done
           mkdir -p dist target/apple/Payload
-          ditto -c -k --keepParent target/apple/macos/Cmvs.app "dist/cmvs-macos-$TAG.zip"
-          ditto target/apple/ios/Cmvs.app target/apple/Payload/Cmvs.app
+          ditto -c -k --keepParent target/apple/macos/CMVS.app "dist/cmvs-macos-$TAG.zip"
+          ditto target/apple/ios/CMVS.app target/apple/Payload/CMVS.app
           ditto -c -k --keepParent target/apple/Payload "dist/cmvs-ios-$TAG.ipa"
       - uses: actions/upload-artifact@v7
         with:

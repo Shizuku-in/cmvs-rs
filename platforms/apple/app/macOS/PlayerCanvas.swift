@@ -18,6 +18,8 @@ final class Canvas: NSView {
     private var track: NSTrackingArea?
     private var accepted = Set<UInt32>()
     private var started = false
+    private var sizedWindow = false
+    private var scrollDistance: CGFloat = 0
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
     init(_ player: Playback) {
@@ -32,6 +34,22 @@ final class Canvas: NSView {
         super.viewDidMoveToWindow()
         NotificationCenter.default.removeObserver(self)
         guard let window else { return }
+        window.isRestorable = false
+        let size = player.game.info.size
+        if !sizedWindow, size.count == 2, size.allSatisfy({ $0 > 0 }), !window.styleMask.contains(.fullScreen) {
+            sizedWindow = true
+            let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? window.frame
+            let available = window.contentRect(forFrameRect: visible).size
+            let w = CGFloat(size[0]), h = CGFloat(size[1])
+            let scale = min(1, available.width / w, available.height / h)
+            window.setContentSize(CGSize(width: w * scale, height: h * scale))
+            let frame = window.frame
+            if !visible.contains(frame) {
+                window.setFrameOrigin(NSPoint(
+                    x: max(visible.minX, min(frame.minX, visible.maxX - frame.width)),
+                    y: min(visible.maxY - frame.height, max(frame.minY, visible.minY))))
+            }
+        }
         window.makeFirstResponder(self)
         window.acceptsMouseMovedEvents = true
         for name in [
@@ -149,7 +167,19 @@ final class Canvas: NSView {
     override func otherMouseDown(with e: NSEvent) { button(e, down: true) }
     override func otherMouseUp(with e: NSEvent) { button(e, down: false) }
     override func scrollWheel(with e: NSEvent) {
-        if point(e), e.scrollingDeltaY != 0 { player.pulse(e.scrollingDeltaY > 0 ? 4 : 5) }
+        guard e.momentumPhase.isEmpty, point(e) else { return }
+        if e.phase == .began || e.phase == .cancelled { scrollDistance = 0 }
+        let delta = e.scrollingDeltaY
+        guard delta != 0 else { return }
+        if e.hasPreciseScrollingDeltas {
+            if scrollDistance * delta < 0 { scrollDistance = 0 }
+            scrollDistance += delta
+            guard abs(scrollDistance) >= 32 else { return }
+            player.pulse(scrollDistance > 0 ? 4 : 5)
+            scrollDistance = scrollDistance.truncatingRemainder(dividingBy: 32)
+        } else {
+            player.pulse(delta > 0 ? 4 : 5)
+        }
     }
     override func flagsChanged(with e: NSEvent) {
         player.key(23, e.modifierFlags.contains(.shift))

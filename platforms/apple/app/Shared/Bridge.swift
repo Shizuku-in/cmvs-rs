@@ -9,7 +9,7 @@ final class Bridge {
     deinit { cmvs_apple_destroy(handle) }
     var text: String { String(cString: cmvs_apple_text(handle)) }
     func check(_ status: Int32) throws {
-        if status < 0 { throw PlayerError(text) }
+        if status < 0 { throw PlayerError(engineMessage: text) }
     }
     func object() throws -> [String: Any] {
         guard let value = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else {
@@ -40,7 +40,10 @@ func rgbaImage(_ data: Data, width: Int, height: Int) -> CGImage? {
 struct StopDiagnostic: Decodable, LocalizedError {
     let script, reason: String
     let pc, steps: UInt64
-    var errorDescription: String? { "\(script) · PC 0x\(String(pc, radix: 16)) · \(steps) steps\n\(reason)" }
+    var errorDescription: String? {
+        let location = String(localized: "\(script) · PC 0x\(String(pc, radix: 16)) · \(steps) steps")
+        return "\(location)\n\(reason)"
+    }
 }
 
 final class Engine {

@@ -13,28 +13,35 @@ final class Canvas: UIView {
     let player: Playback
     private var started = false
     private var blocked = false
+    private var pending: (touch: UITouch, origin: CGPoint)?
+    private var pendingPress: Task<Void, Never>?
     private var contacts = Set<UITouch>()
     override class var layerClass: AnyClass { CAMetalLayer.self }
     override var canBecomeFirstResponder: Bool { true }
     init(_ player: Playback) {
         self.player = player
         super.init(frame: .zero)
-        player.clearKeys = { [weak self] in self?.accepted.removeAll() }
+        player.clearKeys = { [weak self] in
+            self?.accepted.removeAll()
+            self?.discardPending()
+            if self?.contacts.isEmpty == false { self?.blocked = true }
+        }
         isMultipleTouchEnabled = true
         backgroundColor = .black
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(history(_:)))
+        pan.allowedScrollTypesMask = .all
         if player.game.options.gestures {
             for count in [2, 3] {
                 let tap = UITapGestureRecognizer(target: self, action: #selector(tap(_:)))
                 tap.numberOfTouchesRequired = count
                 addGestureRecognizer(tap)
             }
-            for direction in [UISwipeGestureRecognizer.Direction.up, .down] {
-                let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swipe(_:)))
-                swipe.direction = direction
-                swipe.numberOfTouchesRequired = 2
-                addGestureRecognizer(swipe)
-            }
+            pan.minimumNumberOfTouches = 2
+            pan.maximumNumberOfTouches = 2
+        } else {
+            pan.allowedTouchTypes = []
         }
+        addGestureRecognizer(pan)
         addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
         let right = UITapGestureRecognizer(target: self, action: #selector(rightClick(_:)))
         right.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
@@ -62,7 +69,14 @@ final class Canvas: UIView {
     @objc func tap(_ gesture: UITapGestureRecognizer) {
         if gesture.numberOfTouchesRequired == 3 { player.controls.toggle() } else { player.pulse(3) }
     }
-    @objc func swipe(_ gesture: UISwipeGestureRecognizer) { player.pulse(gesture.direction == .up ? 4 : 5) }
+    @objc func history(_ pan: UIPanGestureRecognizer) {
+        guard pan.state == .changed || pan.state == .ended else { return }
+        let y = pan.translation(in: self).y
+        let step: CGFloat = 36
+        guard abs(y) >= step else { return }
+        player.pulse(y < 0 ? 4 : 5)
+        pan.setTranslation(CGPoint(x: 0, y: y.truncatingRemainder(dividingBy: step)), in: self)
+    }
     @objc func hover(_ gesture: UIHoverGestureRecognizer) {
         let p = gesture.location(in: self)
         let s = layer.contentsScale
@@ -79,33 +93,58 @@ final class Canvas: UIView {
         }
         if inside { player.pulse(3) }
     }
-    private func send(_ touches: Set<UITouch>, _ phase: UInt32) {
-        for t in touches {
-            let id = UInt64(UInt(bitPattern: Unmanaged.passUnretained(t).toOpaque()))
-            let p = t.location(in: self)
-            let s = layer.contentsScale
-            player.invoke { cmvs_apple_touch($0, id, phase, p.x * s, p.y * s) }
-        }
+    private func send(_ t: UITouch, _ phase: UInt32, at p: CGPoint) {
+        let id = UInt64(UInt(bitPattern: Unmanaged.passUnretained(t).toOpaque()))
+        let s = layer.contentsScale
+        player.invoke { cmvs_apple_touch($0, id, phase, p.x * s, p.y * s) }
+    }
+    private func discardPending() {
+        pendingPress?.cancel()
+        pendingPress = nil
+        pending = nil
+    }
+    private func beginPending() {
+        guard let pending else { return }
+        discardPending()
+        send(pending.touch, 0, at: pending.origin)
+        send(pending.touch, 1, at: pending.touch.location(in: self))
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if touches.allSatisfy({ $0.type == .indirectPointer }), event?.buttonMask.contains(.secondary) == true {
-            return
-        }
+        if touches.allSatisfy({ $0.type == .indirectPointer }), event?.buttonMask.contains(.secondary) == true { return }
         contacts.formUnion(touches)
         if contacts.count > 1 {
+            discardPending()
             blocked = true
-            send(contacts, 3)
+            for touch in contacts { send(touch, 3, at: touch.location(in: self)) }
         }
-        if !blocked { send(touches, 0) }
+        guard !blocked, let touch = touches.first else { return }
+        if player.game.options.gestures && touch.type == .direct {
+            // Let a second finger join before the engine samples a primary click.
+            pending = (touch, touch.location(in: self))
+            pendingPress = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                self?.beginPending()
+            }
+        } else {
+            send(touch, 0, at: touch.location(in: self))
+        }
     }
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { if !blocked { send(touches, 1) } }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if !blocked && pending == nil {
+            for t in touches.intersection(contacts) { send(t, 1, at: t.location(in: self)) }
+        }
+    }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if !blocked { send(touches.intersection(contacts), 2) }
+        if !blocked {
+            if let pending, touches.contains(pending.touch) { beginPending() }
+            for t in touches.intersection(contacts) { send(t, 2, at: t.location(in: self)) }
+        }
         contacts.subtract(touches)
         if contacts.isEmpty { blocked = false }
     }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        send(touches, 3)
+        if let pending, touches.contains(pending.touch) { discardPending() }
+        for t in touches { send(t, 3, at: t.location(in: self)) }
         contacts.subtract(touches)
         if contacts.isEmpty { blocked = false }
     }
@@ -159,8 +198,9 @@ final class Canvas: UIView {
     private static var mask: UIInterfaceOrientationMask = .allButUpsideDown
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?)
         -> UIInterfaceOrientationMask
-    { Self.mask }
+    { (window?.traitCollection.userInterfaceIdiom ?? UIDevice.current.userInterfaceIdiom) == .pad ? .all : Self.mask }
     static func playing(_ value: Bool) {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
         mask = value ? .landscape : .allButUpsideDown
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
         where scene.activationState == .foregroundActive {

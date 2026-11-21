@@ -90,4 +90,4 @@ xcodegen generate
 xcodebuild -project Cmvs.xcodeproj -scheme "$scheme" -configuration "$configuration" \
     -sdk "$sdk" -derivedDataPath "$out/DerivedData" ONLY_ACTIVE_ARCH=NO "ARCHS=$archs" \
     "CODE_SIGNING_ALLOWED=$sign" "CONFIGURATION_BUILD_DIR=$out/$platform" "$@" build
-echo "$out/$platform/Cmvs.app"
+echo "$out/$platform/CMVS.app"

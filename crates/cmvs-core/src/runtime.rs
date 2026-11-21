@@ -102,6 +102,7 @@ use std::{
 };
 
 mod color_picker;
+pub mod controls;
 mod dialog;
 mod frame;
 mod message_dialog;
