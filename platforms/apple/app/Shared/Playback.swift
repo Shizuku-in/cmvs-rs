@@ -16,10 +16,17 @@ import SwiftUI
     private var previous: CFTimeInterval?
     private var frames = 0
     private var active = true
-    private var interrupted = false
+    private(set) var interrupted = false
+    private var interruptionOngoing = false
+    private var routePaused = false
+    var audioError: String?
     private var focused = true
     private var closed = false
     private(set) var ready = false
+    var canCapture: Bool { ready && frames > 0 }
+    var captureError: String?
+    var clearKeys: (() -> Void)?
+    var warp: ((CGPoint) -> Void)?
     var title: String
     var error: String?
     var dialog: [String: Any]?
@@ -125,7 +132,10 @@ import SwiftUI
     private func syncActivity() {
         let paused = !active || !focused || interrupted || dialog != nil || error != nil
         previous = nil
-        if paused { fast = false }
+        if paused {
+            fast = false
+            clearKeys?()
+        }
         clock?.isPaused = paused
         if ready { invoke { cmvs_apple_pause($0, paused) } }
     }
@@ -133,9 +143,14 @@ import SwiftUI
         @objc private func audioInterrupted(_ note: Notification) {
             guard let kind = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt else { return }
             Task { @MainActor in
-                interrupted = kind == AVAudioSession.InterruptionType.began.rawValue
-                if !interrupted { do { try AVAudioSession.sharedInstance().setActive(true) } catch { fail(error) } }
+                guard !closed else { return }
+                interruptionOngoing = kind == AVAudioSession.InterruptionType.began.rawValue
+                interrupted = true
                 syncActivity()
+                let flags = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+                if !interruptionOngoing && !routePaused && AVAudioSession.InterruptionOptions(rawValue: flags).contains(.shouldResume) {
+                    resumeAudio()
+                } else if !interruptionOngoing { controls = true }
             }
         }
         @objc private func routeChanged(_ note: Notification) {
@@ -143,19 +158,35 @@ import SwiftUI
                 reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue
             else { return }
             Task { @MainActor in
+                guard !closed else { return }
+                routePaused = true
                 interrupted = true
                 controls = true
                 syncActivity()
             }
         }
         func resumeAudio() {
-            interrupted = false
-            syncActivity()
+            guard interrupted, !interruptionOngoing, !closed else { return }
+            do {
+                try AVAudioSession.sharedInstance().setActive(true)
+                try engine.queue.sync {
+                    if let api = engine.api { try api.check(cmvs_apple_restart_audio(api.handle)) }
+                }
+                routePaused = false
+                interrupted = false
+                audioError = nil
+                syncActivity()
+            } catch {
+                controls = true
+                audioError = error.localizedDescription
+            }
         }
     #endif
     @objc func step(_ link: CADisplayLink) {
         guard ready, !closed else { return }
-        let delta = UInt32(min(250, max(0, (link.timestamp - (previous ?? link.timestamp - 0.016)) * 1000)))
+        let start = previous ?? link.timestamp - 0.016
+        previous = start
+        let delta = UInt32(min(250, max(0, (link.timestamp - start) * 1000)))
         do {
             let result = try engine.queue.sync { () -> (Int32, CGImage?, [[String: Any]]) in
                 guard let api = engine.api else { throw PlayerError("Game closed.") }
@@ -184,9 +215,16 @@ import SwiftUI
             }
             for e in result.2 {
                 switch e["kind"] as? String {
+                case "audioPaused":
+                    interrupted = true
+                    routePaused = true
+                    controls = true
+                    syncActivity()
                 case "title": title = e["text"] as? String ?? title
                 case "display": display(e)
                 case "visibility": cursorVisible?(e["visible"] as? Bool ?? true)
+                case "warp":
+                    if let xy = e["point"] as? [Double], xy.count == 2 { warp?(CGPoint(x: xy[0], y: xy[1])) }
                 case "cursor": cursor?(e["cursor"] as? [String: Any])
                 case "message", "font", "comment":
                     draft = e["text"] as? String ?? ""
@@ -226,11 +264,12 @@ import SwiftUI
         key(24, fast)
     }
     func capture() {
+        guard canCapture else { return }
         do {
             let dir = Library.base.appending(path: "Screenshots")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try engine.queue.sync { try engine.screenshot(to: dir.appending(path: "\(UUID()).png")) }
-        } catch { fail(error) }
+        } catch { captureError = error.localizedDescription }
     }
     var validDraft: Bool {
         guard let limit = dialog?["limit"] as? Int, let bytes = dialog?["bytes"] as? Int else { return true }

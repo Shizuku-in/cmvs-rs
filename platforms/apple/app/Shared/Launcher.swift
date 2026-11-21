@@ -23,7 +23,7 @@ import UniformTypeIdentifiers
                 }
                 CommandMenu("Game") {
                     Button("Full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }.keyboardShortcut("f")
-                    Button("Screenshot") { player?.capture() }.keyboardShortcut("s").disabled(player?.ready != true)
+                    Button("Screenshot") { player?.capture() }.keyboardShortcut("s").disabled(player?.canCapture != true)
                 }
             }
             Window("Player", id: "player") {
@@ -309,7 +309,7 @@ private struct Launcher: View {
             do {
                 let game = try await Task.detached { try Library.add(url, copy: copy, options: options, progress: job) }
                     .value
-                if !job.isCancelled { library.data.games.append(game) }
+                library.data.games.append(game)
             } catch { if !job.isCancelled { library.error = error.localizedDescription } }
         }
     }

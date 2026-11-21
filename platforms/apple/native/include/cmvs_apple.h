@@ -29,6 +29,12 @@ int32_t cmvs_apple_key(CmvsApple *, uint32_t code, bool pressed);
 int32_t cmvs_apple_pointer(CmvsApple *, double x, double y);
 /* Physical surface pixels. Touch phases are begin/move/end/cancel (0..3). */
 int32_t cmvs_apple_touch(CmvsApple *, uint64_t id, uint32_t phase, double x, double y);
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
+int32_t cmvs_apple_restart_audio(CmvsApple *);
+#endif
 int32_t cmvs_apple_pause(CmvsApple *, bool paused);
 int32_t cmvs_apple_save_preferences(CmvsApple *);
 int32_t cmvs_apple_comment(CmvsApple *, uint32_t id, const char *text);

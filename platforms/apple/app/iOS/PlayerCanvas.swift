@@ -19,6 +19,7 @@ final class Canvas: UIView {
     init(_ player: Playback) {
         self.player = player
         super.init(frame: .zero)
+        player.clearKeys = { [weak self] in self?.accepted.removeAll() }
         isMultipleTouchEnabled = true
         backgroundColor = .black
         if player.game.options.gestures {
@@ -108,12 +109,20 @@ final class Canvas: UIView {
         contacts.subtract(touches)
         if contacts.isEmpty { blocked = false }
     }
+    private var accepted = [Int: UInt32]()
     private func keys(_ presses: Set<UIPress>, _ down: Bool) -> Set<UIPress> {
         var remaining = presses
         for p in presses {
-            guard let key = p.key, !key.modifierFlags.contains(.command), let code = Self.code(Int(key.keyCode.rawValue))
-            else { continue }
-            player.key(code, down)
+            guard let key = p.key else { continue }
+            let hid = Int(key.keyCode.rawValue)
+            if down {
+                guard !key.modifierFlags.contains(.command), let code = Self.code(hid) else { continue }
+                if !accepted.values.contains(code) { player.key(code, true) }
+                accepted[hid] = code
+            } else {
+                guard let code = accepted.removeValue(forKey: hid) else { continue }
+                if !accepted.values.contains(code) { player.key(code, false) }
+            }
             remaining.remove(p)
         }
         return remaining

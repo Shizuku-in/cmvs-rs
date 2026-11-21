@@ -76,13 +76,18 @@ scheme=CmvsIOS
 archs=arm64
 sign=YES
 case "$platform" in
-    macos) sdk=macosx; scheme=CmvsMac; archs='arm64 x86_64' ;;
-    ios) sdk=iphoneos; sign=NO ;;
-    ios-simulator) sdk=iphonesimulator ;;
+    macos) sdk=macosx; scheme=CmvsMac; archs='arm64 x86_64'; set -- aarch64-apple-darwin x86_64-apple-darwin ;;
+    ios) sdk=iphoneos; sign=NO; set -- aarch64-apple-ios ;;
+    ios-simulator) sdk=iphonesimulator; set -- aarch64-apple-ios-sim ;;
 esac
 
+sh notices.sh "$out/DEPENDENCY-LICENSES.txt" "$@"
+set --
+if [ -n "${CMVS_VERSION:-}" ]; then
+    set -- "MARKETING_VERSION=$CMVS_VERSION" "CURRENT_PROJECT_VERSION=${CMVS_BUILD_NUMBER:-1}"
+fi
 xcodegen generate
 xcodebuild -project Cmvs.xcodeproj -scheme "$scheme" -configuration "$configuration" \
     -sdk "$sdk" -derivedDataPath "$out/DerivedData" ONLY_ACTIVE_ARCH=NO "ARCHS=$archs" \
-    "CODE_SIGNING_ALLOWED=$sign" "CONFIGURATION_BUILD_DIR=$out/$platform" build
+    "CODE_SIGNING_ALLOWED=$sign" "CONFIGURATION_BUILD_DIR=$out/$platform" "$@" build
 echo "$out/$platform/Cmvs.app"

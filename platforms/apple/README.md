@@ -1,6 +1,6 @@
 # 构建 Apple 播放器
 
-在 macOS 上安装 Xcode、XcodeGen 和 Rust stable。以下命令均在仓库根目录运行。添加游戏、选择字体与恢复存档的步骤见[启动器使用指南](app/README.md)。
+在 macOS 上安装 Xcode、XcodeGen、jq 和 Rust stable。以下命令均在仓库根目录运行。添加游戏、选择字体与恢复存档的步骤见[启动器使用指南](app/README.md)。
 
 ## 构建应用
 

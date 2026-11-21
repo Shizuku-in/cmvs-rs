@@ -18,6 +18,8 @@ targetTemplates:
     sources:
       - path: ../../THIRD_PARTY_NOTICES.txt
         buildPhase: resources
+      - path: ../../target/apple/DEPENDENCY-LICENSES.txt
+        buildPhase: resources
       - path: ../../LICENSE-MIT
         buildPhase: resources
       - path: ../../LICENSE-APACHE

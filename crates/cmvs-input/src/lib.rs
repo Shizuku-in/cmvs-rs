@@ -76,19 +76,30 @@ impl TouchInput {
     /// Cancels all contacts and queued presses without producing a click edge.
     /// Focus is unchanged; subsequent new contacts may begin a gesture.
     pub fn cancel(&mut self, input: &mut ActionInput) {
+        self.reset_contacts();
+        self.history.clear(input);
+    }
+
+    pub fn reset_contacts(&mut self) {
         self.contacts.clear();
         self.primary = None;
         self.pointer = None;
         self.pulse = false;
-        self.history.clear(input);
     }
 
     /// Use a viewport matching the current renderer for both events and sampling.
     /// A native cancellation of the primary contact cancels its pending click;
     /// other contacts remain blocked until their own end/cancellation arrives.
     pub fn event(&mut self, event: TouchEvent, viewport: Viewport, input: &mut ActionInput) {
+        if self.pointer_event(event, viewport) {
+            self.history.clear(input);
+        }
+    }
+
+    /// Update contacts for hosts with a shared input history. Returns true on primary cancellation.
+    pub fn pointer_event(&mut self, event: TouchEvent, viewport: Viewport) -> bool {
         if !self.focused {
-            return;
+            return false;
         }
         match event.phase {
             TouchPhase::Started => {
@@ -120,10 +131,11 @@ impl TouchInput {
                     self.primary = None;
                     self.pointer = None;
                     self.pulse = false;
-                    self.history.clear(input);
+                    return true;
                 }
             }
         }
+        false
     }
 
     /// Exactly once at the host's input boundary, never per VM budget slice.

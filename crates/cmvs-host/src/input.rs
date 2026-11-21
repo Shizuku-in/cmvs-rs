@@ -54,6 +54,12 @@ impl InputState {
         Ok(())
     }
 
+    pub fn cancel_primary_button(&mut self) {
+        self.held[1] = false;
+        self.pulses[1] = false;
+        self.codes.forget_primary_button();
+    }
+
     /// Clears all currently held codes while keeping any already-latched pulses intact.
     pub fn clear_held(&mut self) {
         self.held.fill(false);

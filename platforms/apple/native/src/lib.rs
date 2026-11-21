@@ -3,10 +3,14 @@ mod backup;
 #[allow(unsafe_code)]
 mod ffi;
 mod inspect;
+#[cfg(target_os = "ios")]
+mod ios_audio;
 mod renderer;
 
 use backend::Backend;
-use cmvs_audio::{HostAudioControl, NativeAudio};
+use cmvs_audio::HostAudioControl;
+#[cfg(not(target_os = "ios"))]
+use cmvs_audio::NativeAudio;
 use cmvs_core::{
     format::system_save::ProfileSystemSave,
     runtime::{FrameBudget, FrameOutcome, RuntimeEvent, SaveStorage, SnapshotPolicy},
@@ -41,11 +45,14 @@ struct Player {
     session: HostSession,
     backend: Backend,
     audio: Option<HostAudioControl>,
+    #[cfg(target_os = "ios")]
+    output_audio: Option<ios_audio::Output>,
     metal: Option<Metal>,
     use_metal: bool,
     output: [u32; 2],
     touch: TouchInput,
     touching: bool,
+    fresh_touch: bool,
     paused: bool,
     cursor_clock: std::time::Instant,
     cursor: cmvs_core::format::cursor::CursorVisibility,
@@ -77,7 +84,16 @@ impl Player {
                 ..Default::default()
             },
         )?;
+        #[cfg(target_os = "ios")]
+        let mut output_audio = None;
         let audio = if c.native_audio {
+            #[cfg(target_os = "ios")]
+            let audio = {
+                let (audio, output) = ios_audio::Output::new(&c.root)?;
+                output_audio = Some(output);
+                audio
+            };
+            #[cfg(not(target_os = "ios"))]
             let audio = NativeAudio::new(&c.root)?;
             let ctl = audio.host_control();
             session.runtime.set_audio_backend(Box::new(audio))?;
@@ -107,10 +123,13 @@ impl Player {
             output: backend.size,
             backend,
             audio,
+            #[cfg(target_os = "ios")]
+            output_audio,
             use_metal: c.metal,
             metal: None,
             touch,
             touching: false,
+            fresh_touch: false,
             paused: false,
             cursor_clock: std::time::Instant::now(),
             cursor: Default::default(),
@@ -138,15 +157,27 @@ impl Player {
             return Ok(3);
         }
         let viewport = self.viewport().ok_or("invalid viewport")?;
+        #[cfg(target_os = "ios")]
+        if let Some(audio) = &self.output_audio
+            && audio.needs_restart()?
+        {
+            self.pause(true);
+            self.backend
+                .events
+                .push_back(serde_json::json!({"kind":"audioPaused"}));
+            return Ok(3);
+        }
         let s = &mut self.session;
         s.runtime.poll_audio_output()?;
-        s.driver.latch_delta(delta.min(250));
         let auto_clear = s.runtime.settings().cursor_auto_clear();
         s.driver.sample_input(s.runtime.input_mut(), |input| {
             if self.touching {
                 let (point, pressed) = self.touch.sample_pointer(viewport);
                 let [x, y] = point.unwrap_or([-1, -1]);
-                s.input.set_pointer(x, y);
+                if self.fresh_touch {
+                    s.input.set_pointer(x, y);
+                    self.fresh_touch = false;
+                }
                 s.input.set_held(1, pressed).expect("valid code");
             }
             s.input.sample(&s.bindings, input);
@@ -170,9 +201,18 @@ impl Player {
             &mut FrameBudget::time(Duration::from_millis(8)),
             |rt| rt.tick(&mut self.backend),
         )?;
+        if let Some([x, y]) = s.runtime.input_mut().take_warp() {
+            self.fresh_touch = false;
+            s.input.set_pointer(x, y);
+            if cfg!(target_os = "macos") {
+                self.backend.events.push_back(
+                    serde_json::json!({"kind":"warp","point":viewport.to_window([x,y])}),
+                );
+            }
+        }
         match outcome {
             FrameOutcome::Yield => {
-                s.driver.finish_frame(&mut s.runtime, 0)?;
+                s.driver.finish_frame(&mut s.runtime, delta.min(250))?;
                 let linear = self.backend.display.render_mode == 1;
                 self.backend.frame = Some(if self.use_metal {
                     let frame = self.metal.as_mut().ok_or("Metal layer is detached")?.draw(

@@ -120,6 +120,7 @@ impl PlatformBackend for Backend {
                 );
                 return Ok(());
             }
+            PlatformRequest::Cursor { .. } if !cfg!(target_os = "macos") => return Ok(()),
             PlatformRequest::Cursor { bitmap, .. } => {
                 let cursor=bitmap.as_ref().map(|b| -> Result<_>{Ok(json!({"width":b.width(),"height":b.height(),"hotspot":b.hotspot(),"pixels":b.rgba()?}))}).transpose()?;
                 self.events

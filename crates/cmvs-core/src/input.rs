@@ -214,6 +214,10 @@ impl CodeInput {
         input.press_function_keys(fn_pressed);
         self.previous = *now;
     }
+    pub fn forget_primary_button(&mut self) {
+        self.previous[1] = false;
+    }
+
     /// Focus loss cancels state without turning it into a click on release.
     pub fn clear(&mut self, input: &mut ActionInput) {
         self.previous.fill(false);

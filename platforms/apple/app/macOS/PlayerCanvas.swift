@@ -46,6 +46,13 @@ final class Canvas: NSView {
         player.fullscreen = { [weak window] value in
             if let window, value != window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
         }
+        player.warp = { [weak self] pixels in
+            guard let self, let window = self.window, window.isKeyWindow, let main = NSScreen.screens.first else { return }
+            let scale = metal.contentsScale
+            let point = convert(CGPoint(x: pixels.x / scale, y: pixels.y / scale), to: nil)
+            let screen = window.convertPoint(toScreen: point)
+            CGWarpMouseCursorPosition(CGPoint(x: screen.x, y: main.frame.maxY - screen.y))
+        }
         player.cursorVisible = { [weak self] value in
             guard let self else { return }
             shown = value

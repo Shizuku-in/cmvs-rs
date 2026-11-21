@@ -220,8 +220,8 @@ extern "C" fn cmvs_apple_pointer(h: *mut Handle, x: f64, y: f64) -> i32 {
     call(h, |h| {
         let p = h.player()?;
         if p.touching {
-            p.touch.cancel(p.session.runtime.input_mut());
-            p.session.input.set_held(1, false)?;
+            p.touch.reset_contacts();
+            p.session.input.cancel_primary_button();
             p.touching = false;
         }
         let [sx, sy] = p
@@ -244,16 +244,28 @@ extern "C" fn cmvs_apple_touch(h: *mut Handle, id: u64, phase: u32, x: f64, y: f
         };
         let p = h.player()?;
         p.touching = true;
-        if let Some(v) = p.viewport() {
-            p.touch.event(
+        p.fresh_touch = true;
+        if let Some(v) = p.viewport()
+            && p.touch.pointer_event(
                 TouchEvent {
                     id,
                     phase,
                     position: [x, y],
                 },
                 v,
-                p.session.runtime.input_mut(),
-            );
+            )
+        {
+            p.session.input.cancel_primary_button();
+        }
+        Ok(0)
+    })
+}
+#[unsafe(no_mangle)]
+#[cfg(target_os = "ios")]
+extern "C" fn cmvs_apple_restart_audio(h: *mut Handle) -> i32 {
+    call(h, |h| {
+        if let Some(output) = &mut h.player()?.output_audio {
+            output.restart()?;
         }
         Ok(0)
     })

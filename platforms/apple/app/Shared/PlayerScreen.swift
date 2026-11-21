@@ -32,9 +32,10 @@ struct PlayerScreen: View {
                             })
                     Button("Confirm") { player.pulse(22) }
                     Button("Hide text") { player.pulse(26) }
-                    Button("Screenshot") { player.capture() }.disabled(!player.ready)
+                    Button("Screenshot") { player.capture() }.disabled(!player.canCapture)
                     #if os(iOS)
-                        Button("Resume audio") { player.resumeAudio() }
+                        if player.interrupted { Button("Resume audio") { player.resumeAudio() } }
+                        if let message = player.audioError { Text(message) }
                     #endif
                     Button("Return to library") { player.finish() }
                 }
@@ -65,6 +66,9 @@ struct PlayerScreen: View {
                 }
             }.padding().interactiveDismissDisabled()
         }
+        .alert("Screenshot failed", isPresented: Binding(
+            get: { player.captureError != nil }, set: { if !$0 { player.captureError = nil } })
+        ) { Button("OK") { player.captureError = nil } } message: { Text(player.captureError ?? "") }
         .overlay {
             if let error = player.error {
                 VStack(alignment: .leading, spacing: 16) {

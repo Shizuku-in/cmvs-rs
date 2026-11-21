@@ -211,6 +211,7 @@ termcolor 1.4.1: Unlicense OR MIT (used under MIT)
 https://github.com/BurntSushi/termcolor
 Transitive shader diagnostic dependency enabled by wgpu/webgpu.
 
+Apple bundles include upstream package notices in DEPENDENCY-LICENSES.txt.
 Apple launcher dependencies (no vendored source):
 zip 7.2.0 - MIT
 https://github.com/zip-rs/zip2

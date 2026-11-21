@@ -118,8 +118,16 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          export CMVS_VERSION="${TAG#v}" CMVS_BUILD_NUMBER="$GITHUB_RUN_NUMBER"
           sh platforms/apple/build.sh macos
           sh platforms/apple/build.sh ios --reuse-framework
+          for root in target/apple/macos/Cmvs.app/Contents target/apple/ios/Cmvs.app; do
+            test "$(plutil -extract CFBundleShortVersionString raw "$root/Info.plist")" = "$CMVS_VERSION"
+            test "$(plutil -extract CFBundleVersion raw "$root/Info.plist")" = "$CMVS_BUILD_NUMBER"
+            notices="$root/DEPENDENCY-LICENSES.txt"
+            if [ -d "$root/Resources" ]; then notices="$root/Resources/DEPENDENCY-LICENSES.txt"; fi
+            grep -Fq 'Copyright (c) 2014 Mathijs van de Nes' "$notices"
+          done
           mkdir -p dist target/apple/Payload
           ditto -c -k --keepParent target/apple/macos/Cmvs.app "dist/cmvs-macos-$TAG.zip"
           ditto target/apple/ios/Cmvs.app target/apple/Payload/Cmvs.app

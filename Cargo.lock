@@ -350,6 +350,7 @@ dependencies = [
  "cmvs-host",
  "cmvs-input",
  "cmvs-wgpu",
+ "cpal",
  "serde",
  "serde_json",
  "tempfile",
