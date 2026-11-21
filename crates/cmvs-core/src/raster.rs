@@ -238,16 +238,9 @@ impl RgbaImage {
             }
             return Ok(());
         }
-        match filter {
-            ScaleFilter::Keys => {
-                filter::draw::<4>(self, target, width as usize, view, filter::keys);
-                return Ok(());
-            }
-            ScaleFilter::Lanczos4 => {
-                filter::draw::<8>(self, target, width as usize, view, filter::lanczos4);
-                return Ok(());
-            }
-            _ => {}
+        if !matches!(filter, ScaleFilter::Nearest | ScaleFilter::Bilinear) {
+            filter::draw(self, target, width as usize, view, filter);
+            return Ok(());
         }
         if filter == ScaleFilter::Bilinear {
             // Per-axis source pair and weight for each target column/row in view.

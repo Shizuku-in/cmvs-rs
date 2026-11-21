@@ -34,6 +34,80 @@ fn high_quality_filters_preserve_signed_lobes_and_constant_channels() {
 }
 
 #[test]
+fn offline_filters_resample_an_impulse_and_lanczos3_can_clip_its_lobes() {
+    let image = RgbaImage::new(
+        7,
+        1,
+        [64, 64, 64, 192, 64, 64, 64]
+            .into_iter()
+            .flat_map(|r| [r, 128, 32, 255])
+            .collect(),
+    )
+    .unwrap();
+    for (filter, red) in [
+        (
+            ScaleFilter::Nearest,
+            [
+                64, 64, 64, 64, 64, 64, 64, 64, 64, 192, 192, 192, 64, 64, 64, 64, 64, 64, 64, 64,
+                64,
+            ],
+        ),
+        (
+            ScaleFilter::Bilinear,
+            [
+                64, 64, 64, 64, 64, 64, 64, 64, 107, 149, 192, 149, 107, 64, 64, 64, 64, 64, 64,
+                64, 64,
+            ],
+        ),
+        (
+            ScaleFilter::Mitchell,
+            [
+                64, 64, 64, 64, 64, 61, 60, 71, 108, 155, 178, 155, 108, 71, 60, 61, 64, 64, 64,
+                64, 64,
+            ],
+        ),
+        (
+            ScaleFilter::Lanczos3 {
+                anti_ringing: false,
+            },
+            [
+                64, 64, 66, 68, 64, 52, 45, 64, 113, 168, 192, 168, 113, 64, 45, 52, 64, 68, 66,
+                64, 64,
+            ],
+        ),
+        (
+            ScaleFilter::Lanczos3 { anti_ringing: true },
+            [
+                64, 64, 64, 64, 64, 64, 64, 64, 113, 168, 192, 168, 113, 64, 64, 64, 64, 64, 64,
+                64, 64,
+            ],
+        ),
+    ] {
+        let resized = image.resize([21, 1], filter).unwrap();
+        assert_eq!(
+            resized.pixels(),
+            red.map(|r| [r, 128, 32, 255]).as_flattened()
+        );
+    }
+}
+
+#[test]
+fn resize_keeps_straight_alpha_without_leaking_transparent_color() {
+    let image = RgbaImage::new(2, 1, vec![255, 0, 0, 0, 0, 0, 200, 128]).unwrap();
+    for filter in [
+        ScaleFilter::Mitchell,
+        ScaleFilter::Lanczos3 { anti_ringing: true },
+    ] {
+        let resized = image.resize([6, 3], filter).unwrap();
+        let pixels = resized.pixels().as_chunks::<4>().0;
+        assert!(pixels.iter().any(|p| (1..128).contains(&p[3])));
+        for &[r, g, b, a] in pixels {
+            assert_eq!([r, g, b], [0, 0, if a > 0 { 200 } else { 0 }]);
+        }
+    }
+}
+
+#[test]
 fn scaling_disable_centers_native_pixels_and_input_without_losing_selected_mode() {
     use cmvs_core::render::viewport::presentation_mode;
     let source = [4, 2];

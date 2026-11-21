@@ -1,6 +1,6 @@
 struct Params {
     rect: vec4<f32>,
-    source: vec4<f32>, // width, height, filter, checkerboard
+    source: vec4<f32>, // width, height, render mode, checkerboard
     intermediate: vec4<f32>, // visible origin, vertical-first, unused
 }
 @group(0) @binding(0) var<uniform> p:Params;

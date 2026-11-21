@@ -49,8 +49,8 @@ impl Metal {
             GpuTarget::Movie {
                 image,
                 size,
-                filter,
-            } => self.renderer.render_image(image, size, filter),
+                render_mode,
+            } => self.renderer.render_image(image, size, render_mode),
             GpuTarget::Scene(frame) => self.renderer.render(&frame),
         })?;
         if self.presenter.lost {

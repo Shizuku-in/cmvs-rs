@@ -20,7 +20,7 @@ pub(super) struct Scaling {
 
 struct ScaleOptions {
     view: Viewport,
-    filter: ScaleFilter,
+    render_mode: RenderMode,
     preview: bool,
 }
 
@@ -97,7 +97,7 @@ impl Scaling {
     ) {
         let ScaleOptions {
             view,
-            filter,
+            render_mode,
             preview,
         } = options;
         let [width, height] = source.size();
@@ -108,7 +108,7 @@ impl Scaling {
             view.height as f32,
             width as f32,
             height as f32,
-            filter as u32 as f32,
+            render_mode as u32 as f32,
             u32::from(preview) as f32,
             0.0,
             0.0,
@@ -117,8 +117,10 @@ impl Scaling {
         ];
         let mut encoder = device.create_command_encoder(&Default::default());
         let mut intermediate = None;
-        if matches!(filter, ScaleFilter::Keys | ScaleFilter::Lanczos4)
-            && [width, height] != [view.width, view.height]
+        if matches!(
+            render_mode,
+            RenderMode::HighQuality | RenderMode::HighQuality2
+        ) && [width, height] != [view.width, view.height]
         {
             let [xs, ys] = view.visible_ranges();
             let visible_width = (xs.end - xs.start) as u32;
@@ -234,8 +236,8 @@ impl Presenter {
         renderer: &Renderer,
         frame: &GpuFrame,
         size: [u32; 2],
-        mode: u32,
-        filter: impl Into<ScaleFilter>,
+        aspect_mode: u32,
+        render_mode: impl Into<RenderMode>,
         preview: bool,
     ) -> Result<bool> {
         renderer.check()?;
@@ -276,7 +278,7 @@ impl Presenter {
                 return Err("GPU surface validation failed".into());
             }
         };
-        let view = Viewport::new(frame.size, size, mode)?;
+        let view = Viewport::new(frame.size, size, aspect_mode)?;
         let target = output.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.format),
             ..Default::default()
@@ -288,7 +290,7 @@ impl Presenter {
             &target,
             ScaleOptions {
                 view,
-                filter: filter.into(),
+                render_mode: render_mode.into(),
                 preview,
             },
         );
@@ -379,7 +381,7 @@ pub(crate) fn scale_image(
     renderer: &mut Renderer,
     image: &RgbaImage,
     size: [u32; 2],
-    filter: ScaleFilter,
+    render_mode: RenderMode,
 ) -> Result<GpuFrame> {
     renderer.check()?;
     let view = Viewport::new([image.width(), image.height()], size, 1)?;
@@ -402,7 +404,7 @@ pub(crate) fn scale_image(
         &target.view,
         ScaleOptions {
             view,
-            filter,
+            render_mode,
             preview: false,
         },
     );
@@ -445,7 +447,7 @@ mod tests {
             ([14, 10], 0),
         ] {
             let view = Viewport::new(source.size, size, mode).unwrap();
-            for filter in [ScaleFilter::Keys, ScaleFilter::Lanczos4] {
+            for render_mode in [RenderMode::HighQuality, RenderMode::HighQuality2] {
                 let target = gpu.canvases.acquire(&gpu.device, size);
                 scaling.draw(
                     &gpu.device,
@@ -454,7 +456,7 @@ mod tests {
                     &target.view,
                     ScaleOptions {
                         view,
-                        filter,
+                        render_mode,
                         preview: false,
                     },
                 );
@@ -466,7 +468,7 @@ mod tests {
                         size,
                     },
                     mode,
-                    filter,
+                    render_mode.filter(),
                 ));
             }
         }

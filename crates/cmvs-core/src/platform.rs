@@ -7,7 +7,7 @@
 use crate::filesystem::HostFs;
 use crate::{
     FormatError, MAX_PAYLOAD, TextEncoding, bytecode::DecodeError, cursor::CursorBitmap,
-    dispatch::Call, evaluate::error,
+    dispatch::Call, evaluate::error, raster::ScaleFilter,
 };
 use std::{
     error::Error,
@@ -61,6 +61,48 @@ impl PlatformAssets for DirectoryAssets {
             return Err("platform asset exceeds research limit".into());
         }
         Ok(bytes)
+    }
+}
+
+/// Numbered CMVS display modes exposed to the game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum RenderMode {
+    Point = 0,
+    Linear = 1,
+    HighQuality = 2,
+    HighQuality2 = 3,
+}
+
+impl RenderMode {
+    /// The scaling algorithm used to present this mode.
+    pub fn filter(self) -> ScaleFilter {
+        match self {
+            Self::Point => ScaleFilter::Nearest,
+            Self::Linear => ScaleFilter::Bilinear,
+            Self::HighQuality => ScaleFilter::Keys,
+            Self::HighQuality2 => ScaleFilter::Lanczos4,
+        }
+    }
+}
+
+impl TryFrom<u32> for RenderMode {
+    type Error = FormatError;
+
+    fn try_from(mode: u32) -> Result<Self, Self::Error> {
+        match mode {
+            0 => Ok(Self::Point),
+            1 => Ok(Self::Linear),
+            2 => Ok(Self::HighQuality),
+            3 => Ok(Self::HighQuality2),
+            _ => Err(FormatError("invalid render mode")),
+        }
+    }
+}
+
+impl From<bool> for RenderMode {
+    fn from(linear: bool) -> Self {
+        if linear { Self::Linear } else { Self::Point }
     }
 }
 

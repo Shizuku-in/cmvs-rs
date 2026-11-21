@@ -10,7 +10,7 @@ pub use app::run_cli;
 pub use cmvs_core::render::raster::movie_canvas;
 use cmvs_core::{
     FormatError, format::cursor::CursorBitmap, host::platform::MAX_PLATFORM_ASSET,
-    host::platform::PlatformBackend, host::platform::PlatformRequest, render::raster::ScaleFilter,
+    host::platform::PlatformBackend, host::platform::PlatformRequest, host::platform::RenderMode,
 };
 pub use cmvs_video as video;
 use std::{
@@ -144,7 +144,7 @@ pub struct NativeBackend<'a> {
     pub encoding: TextEncoding,
     pub aspect_mode: &'a std::cell::Cell<u32>,
     pub aspect_scaling: &'a std::cell::Cell<bool>,
-    pub render_mode: &'a std::cell::Cell<u32>,
+    pub render_mode: &'a std::cell::Cell<RenderMode>,
     /// Physical client size to restore when leaving fullscreen.
     pub windowed_size: &'a std::cell::Cell<[u32; 2]>,
     /// Fonts that glyphs will be drawn with; a chosen face must resolve there.
@@ -217,7 +217,7 @@ impl PlatformBackend for NativeBackend<'_> {
         Ok(self.window.is_resizable())
     }
     fn render_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
-        Ok(self.render_mode.get())
+        Ok(self.render_mode.get() as u32)
     }
     fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
         Ok(0)
@@ -301,8 +301,7 @@ impl PlatformBackend for NativeBackend<'_> {
                 println!("# native aspect scaling={enabled}");
             }
             PlatformRequest::RenderMode(mode) => {
-                ScaleFilter::try_from(*mode)?;
-                self.render_mode.set(*mode);
+                self.render_mode.set(RenderMode::try_from(*mode)?);
                 self.window.request_redraw();
                 println!("# native render mode={mode}");
             }

@@ -1,14 +1,13 @@
 use crate::encoding::EncodingChoice;
 use crate::game_input::{GameInput, event_key};
 use crate::{DesktopInput, InputEvent, NativeBackend, TextEncoding};
-use cmvs_core::render::raster::{RgbaImage, ScaleFilter};
 use cmvs_core::{
     format::cpz::ArchiveIndex, format::cursor::CursorBitmap, format::pb3, host::input::KeyBindings,
     host::platform::DirectoryAssets, host::platform::PlatformAssets,
-    host::platform::PlatformBackend, host::platform::PlatformRequest, profile::Registry,
-    runtime::CommentEdit, runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome,
-    runtime::Runtime, runtime::RuntimeEvent, runtime::SaveStorage, runtime::SnapshotPolicy,
-    runtime::load_start_with_fs,
+    host::platform::PlatformBackend, host::platform::PlatformRequest, host::platform::RenderMode,
+    profile::Registry, render::raster::RgbaImage, runtime::CommentEdit, runtime::FrameBudget,
+    runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent,
+    runtime::SaveStorage, runtime::SnapshotPolicy, runtime::load_start_with_fs,
 };
 use cmvs_host::{
     GameBootstrap, KeyBindingPolicy, SessionConfig, compose_cpu_frame, default_host_fs,
@@ -141,7 +140,7 @@ struct App {
     font: Option<crate::font::FontRenderer>,
     aspect_mode: std::cell::Cell<u32>,
     aspect_scaling: std::cell::Cell<bool>,
-    render_mode: std::cell::Cell<u32>,
+    render_mode: std::cell::Cell<RenderMode>,
     fullscreen_monitor: std::cell::RefCell<crate::FullscreenMonitor>,
     windowed_size: std::cell::Cell<[u32; 2]>,
 }
@@ -246,7 +245,7 @@ impl App {
         compose_cpu_frame(
             &self.startup,
             self.font.as_mut(),
-            ScaleFilter::try_from(self.render_mode.get())?,
+            self.render_mode.get().filter(),
         )
     }
     #[cfg(feature = "wgpu-renderer")]
@@ -258,13 +257,13 @@ impl App {
         cmvs_host::with_gpu_target(
             &self.startup,
             self.font.as_mut(),
-            ScaleFilter::try_from(self.render_mode.get())?,
+            self.render_mode.get(),
             |target| match target {
                 cmvs_host::GpuTarget::Movie {
                     image,
                     size,
-                    filter,
-                } => renderer.render_image(image, size, filter),
+                    render_mode,
+                } => renderer.render_image(image, size, render_mode),
                 cmvs_host::GpuTarget::Scene(frame) => renderer.render(&frame),
             },
         )
@@ -288,8 +287,8 @@ impl App {
                 &gpu.renderer,
             )?;
         }
-        let (mode, filter) = if self.preview_image.is_some() {
-            (1, ScaleFilter::Nearest)
+        let (aspect_mode, render_mode) = if self.preview_image.is_some() {
+            (1, RenderMode::Point)
         } else {
             (
                 cmvs_core::render::viewport::presentation_mode_with_full_move(
@@ -298,15 +297,15 @@ impl App {
                     self.aspect_mode.get(),
                     self.startup.platform().window_full_move(),
                 ),
-                ScaleFilter::try_from(self.render_mode.get())?,
+                self.render_mode.get(),
             )
         };
         if gpu.presenter.present(
             &gpu.renderer,
             &frame,
             [size.width, size.height],
-            mode,
-            filter,
+            aspect_mode,
+            render_mode,
             self.preview_image.is_some(),
         )? && self.preview_image.is_none()
         {
@@ -367,7 +366,7 @@ impl App {
                 size.width,
                 size.height,
                 mode,
-                ScaleFilter::try_from(self.render_mode.get())?,
+                self.render_mode.get().filter(),
             )?;
         }
         buffer.present().map_err(|e| e.to_string())?;
@@ -486,7 +485,7 @@ impl ApplicationHandler for App {
             };
             let mode =
                 cmvs_core::host::platform::supported_render_mode(&backend, backend.render_mode()?)?;
-            self.render_mode.set(mode);
+            self.render_mode.set(RenderMode::try_from(mode)?);
             if self.native_input && self.preview_image.is_none() {
                 self.startup.set_focused(false);
             }
@@ -1228,7 +1227,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         font,
         aspect_mode: std::cell::Cell::new(display_preferences.aspect_mode),
         aspect_scaling: std::cell::Cell::new(display_preferences.aspect_scaling),
-        render_mode: std::cell::Cell::new(display_preferences.render_mode),
+        render_mode: std::cell::Cell::new(RenderMode::try_from(display_preferences.render_mode)?),
         fullscreen_monitor: std::cell::RefCell::new(crate::FullscreenMonitor::new(
             fullscreen_monitor_mode,
         )),
@@ -1261,7 +1260,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .is_some_and(|w| w.fullscreen().is_some()),
             aspect_mode: app.aspect_mode.get(),
             aspect_scaling: app.aspect_scaling.get(),
-            render_mode: app.render_mode.get(),
+            render_mode: app.render_mode.get() as u32,
         })?
     {
         println!("# user settings saved");

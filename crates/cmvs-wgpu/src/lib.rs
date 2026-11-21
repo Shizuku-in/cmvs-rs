@@ -1,6 +1,7 @@
 //! GPU execution of validated CMVS draw commands, with lazy logical-frame readback.
 use cmvs_core::{
-    render::raster::{CacheKey, RgbaImage, ScaleFilter},
+    host::platform::RenderMode,
+    render::raster::{CacheKey, RgbaImage},
     render::scene_render::Layer,
     render::scene_render::RenderFrame,
     render::scene_render::shader::ShaderBlend,
@@ -481,10 +482,10 @@ impl Renderer {
         &mut self,
         image: &RgbaImage,
         size: [u32; 2],
-        filter: impl Into<ScaleFilter>,
+        render_mode: impl Into<RenderMode>,
     ) -> Result<GpuFrame> {
         self.frame_start = self.clock;
-        present::scale_image(self, image, size, filter.into())
+        present::scale_image(self, image, size, render_mode.into())
     }
     fn compose(
         &mut self,

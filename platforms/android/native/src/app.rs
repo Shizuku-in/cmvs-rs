@@ -129,8 +129,8 @@ impl Player {
                 GpuTarget::Movie {
                     image,
                     size,
-                    filter,
-                } => graphics.renderer.render_image(image, size, filter),
+                    render_mode,
+                } => graphics.renderer.render_image(image, size, render_mode),
                 GpuTarget::Scene(frame) => graphics.renderer.render(&frame),
             },
         )?;

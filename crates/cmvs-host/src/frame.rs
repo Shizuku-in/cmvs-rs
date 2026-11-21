@@ -1,6 +1,7 @@
 //! Dual CPU [`RgbaImage`] and GPU [`RenderFrame`] frame composition helpers.
 use cmvs_core::{
     FormatError,
+    host::platform::RenderMode,
     render::{
         raster::{RgbaImage, ScaleFilter, movie_canvas},
         scene_render::RenderFrame,
@@ -13,11 +14,11 @@ use std::error::Error;
 /// Ready-to-render GPU frame target: either an active full-screen movie frame or a
 /// prepared layered [`RenderFrame`] (including rasterized glyphs and message windows).
 pub enum GpuTarget<'a> {
-    /// Active full-screen movie image with logical canvas `size` and stretch filter mode.
+    /// Active full-screen movie image and its logical-canvas presentation mode.
     Movie {
         image: &'a RgbaImage,
         size: [u32; 2],
-        filter: ScaleFilter,
+        render_mode: RenderMode,
     },
     /// Prepared layered scene queue ready for `cmvs-wgpu` or `cmvs-console::gpu::Compositor`.
     Scene(RenderFrame<'a>),
@@ -29,7 +30,7 @@ pub enum GpuFrameSource<'a> {
     Movie {
         image: &'a RgbaImage,
         size: [u32; 2],
-        filter: ScaleFilter,
+        render_mode: RenderMode,
     },
     /// Scene + camera + message windows + rasterized glyphs.
     WithFont(SceneComposition<'a>),
@@ -44,11 +45,11 @@ impl GpuFrameSource<'_> {
             Self::Movie {
                 image,
                 size,
-                filter,
+                render_mode,
             } => Ok(GpuTarget::Movie {
                 image,
                 size: *size,
-                filter: *filter,
+                render_mode: *render_mode,
             }),
             Self::WithFont(composition) => Ok(GpuTarget::Scene(composition.prepare()?)),
             Self::WithoutFont(runtime) => Ok(GpuTarget::Scene(runtime.prepare_scene_frame()?)),
@@ -91,13 +92,13 @@ pub fn compose_cpu_frame_with_capture(
 pub fn compose_gpu_frame<'a>(
     runtime: &'a Runtime,
     font: Option<&mut FontRenderer>,
-    filter: impl Into<ScaleFilter>,
+    render_mode: impl Into<RenderMode>,
 ) -> Result<GpuFrameSource<'a>, FormatError> {
     if let Some(image) = runtime.movie_frame() {
         return Ok(GpuFrameSource::Movie {
             image,
             size: runtime.screen_size(),
-            filter: filter.into(),
+            render_mode: render_mode.into(),
         });
     }
     if let Some(font) = font {
@@ -114,13 +115,13 @@ pub fn compose_gpu_frame<'a>(
 pub fn with_gpu_target<T, E>(
     runtime: &Runtime,
     font: Option<&mut FontRenderer>,
-    filter: impl Into<ScaleFilter>,
+    render_mode: impl Into<RenderMode>,
     f: impl FnOnce(GpuTarget<'_>) -> Result<T, E>,
 ) -> Result<T, E>
 where
     E: From<FormatError>,
 {
-    let source = compose_gpu_frame(runtime, font, filter)?;
+    let source = compose_gpu_frame(runtime, font, render_mode)?;
     let target = source.prepare()?;
     f(target)
 }
