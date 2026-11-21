@@ -87,6 +87,7 @@ if [ -n "${CMVS_VERSION:-}" ]; then
     set -- "MARKETING_VERSION=$CMVS_VERSION" "CURRENT_PROJECT_VERSION=${CMVS_BUILD_NUMBER:-1}"
 fi
 xcodegen generate
+rm -rf "$out/$platform/CMVS.app"
 xcodebuild -project Cmvs.xcodeproj -scheme "$scheme" -configuration "$configuration" \
     -sdk "$sdk" -derivedDataPath "$out/DerivedData" ONLY_ACTIVE_ARCH=NO "ARCHS=$archs" \
     "CODE_SIGNING_ALLOWED=$sign" "CONFIGURATION_BUILD_DIR=$out/$platform" "$@" build
