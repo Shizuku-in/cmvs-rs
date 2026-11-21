@@ -14,6 +14,15 @@ pub(super) struct Texture {
 }
 impl Texture {
     pub fn new(device: &wgpu::Device, size: [u32; 2], usage: wgpu::TextureUsages) -> Shared<Self> {
+        Self::with_format(device, size, usage, wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    pub fn with_format(
+        device: &wgpu::Device,
+        size: [u32; 2],
+        usage: wgpu::TextureUsages,
+        format: wgpu::TextureFormat,
+    ) -> Shared<Self> {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("CMVS texture"),
             size: wgpu::Extent3d {
@@ -24,14 +33,14 @@ impl Texture {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format,
             usage,
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
         Shared::new(Self { texture, view })
     }
-    fn size(&self) -> [u32; 2] {
+    pub fn size(&self) -> [u32; 2] {
         [self.texture.width(), self.texture.height()]
     }
     fn bytes(&self) -> u64 {

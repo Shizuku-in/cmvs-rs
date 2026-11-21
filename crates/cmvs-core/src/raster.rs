@@ -3,6 +3,9 @@
 use crate::{FormatError, MAX_PAYLOAD};
 use std::sync::{Arc, OnceLock};
 
+mod filter;
+pub use filter::ScaleFilter;
+
 struct ImageData {
     pixels: Vec<u8>,
     content_digest: OnceLock<u128>,
@@ -195,17 +198,27 @@ impl RgbaImage {
         mode: u32,
         linear: bool,
     ) -> Result<(), FormatError> {
+        self.draw_filtered(target, width, height, mode, linear.into())
+    }
+
+    /// Draw into the visible part of the viewport, compositing over the current target pixels.
+    pub fn draw_filtered(
+        &self,
+        target: &mut [u32],
+        width: u32,
+        height: u32,
+        mode: u32,
+        filter: ScaleFilter,
+    ) -> Result<(), FormatError> {
         let view =
             crate::viewport::Viewport::new([self.width, self.height], [width, height], mode)?;
         if target.len() as u64 != u64::from(width) * u64::from(height) {
             return Err(FormatError("invalid preview surface dimensions"));
         }
-        let xs = view.left.max(0)..(view.left + i64::from(view.width)).min(i64::from(width));
-        let ys = view.top.max(0)..(view.top + i64::from(view.height)).min(i64::from(height));
+        let [xs, ys] = view.visible_ranges();
         let opaque = self.is_opaque();
         if view.width == self.width && view.height == self.height {
-            // Both filters sample exact texels at native size, including centered
-            // views and cropped cover modes. Avoid coordinate division and four taps.
+            // All filters sample exact texels at native size, even in centered views.
             let columns = (xs.end - xs.start) as usize;
             let source_x = (xs.start - view.left) as usize;
             for y in ys {
@@ -225,7 +238,18 @@ impl RgbaImage {
             }
             return Ok(());
         }
-        if linear {
+        match filter {
+            ScaleFilter::Keys => {
+                filter::draw::<4>(self, target, width as usize, view, filter::keys);
+                return Ok(());
+            }
+            ScaleFilter::Lanczos4 => {
+                filter::draw::<8>(self, target, width as usize, view, filter::lanczos4);
+                return Ok(());
+            }
+            _ => {}
+        }
+        if filter == ScaleFilter::Bilinear {
             // Per-axis source pair and weight for each target column/row in view.
             let taps = |range: std::ops::Range<i64>, origin: i64, span: u32, source: u32| {
                 range
@@ -488,7 +512,7 @@ pub fn content_hash(bytes: &[u8]) -> u128 {
 pub fn movie_canvas(
     image: &RgbaImage,
     [width, height]: [u32; 2],
-    linear: bool,
+    filter: impl Into<ScaleFilter>,
 ) -> Result<RgbaImage, FormatError> {
     if [image.width(), image.height()] == [width, height] {
         return Ok(image.clone());
@@ -498,7 +522,7 @@ pub fn movie_canvas(
         return Err(FormatError("invalid movie canvas dimensions"));
     }
     let mut target = vec![0; size as usize];
-    image.draw_scaled(&mut target, width, height, 1, linear)?;
+    image.draw_filtered(&mut target, width, height, 1, filter.into())?;
     let pixels = target
         .into_iter()
         .flat_map(|word| {

@@ -1,13 +1,14 @@
 use crate::encoding::EncodingChoice;
 use crate::game_input::{GameInput, event_key};
 use crate::{DesktopInput, InputEvent, NativeBackend, TextEncoding};
+use cmvs_core::render::raster::{RgbaImage, ScaleFilter};
 use cmvs_core::{
     format::cpz::ArchiveIndex, format::cursor::CursorBitmap, format::pb3, host::input::KeyBindings,
     host::platform::DirectoryAssets, host::platform::PlatformAssets,
     host::platform::PlatformBackend, host::platform::PlatformRequest, profile::Registry,
-    render::raster::RgbaImage, runtime::CommentEdit, runtime::FrameBudget, runtime::FrameDriver,
-    runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent, runtime::SaveStorage,
-    runtime::SnapshotPolicy, runtime::load_start_with_fs,
+    runtime::CommentEdit, runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome,
+    runtime::Runtime, runtime::RuntimeEvent, runtime::SaveStorage, runtime::SnapshotPolicy,
+    runtime::load_start_with_fs,
 };
 use cmvs_host::{
     GameBootstrap, KeyBindingPolicy, SessionConfig, compose_cpu_frame, default_host_fs,
@@ -245,7 +246,7 @@ impl App {
         compose_cpu_frame(
             &self.startup,
             self.font.as_mut(),
-            self.render_mode.get() == 1,
+            ScaleFilter::try_from(self.render_mode.get())?,
         )
     }
     #[cfg(feature = "wgpu-renderer")]
@@ -257,13 +258,13 @@ impl App {
         cmvs_host::with_gpu_target(
             &self.startup,
             self.font.as_mut(),
-            self.render_mode.get() == 1,
+            ScaleFilter::try_from(self.render_mode.get())?,
             |target| match target {
                 cmvs_host::GpuTarget::Movie {
                     image,
                     size,
-                    linear,
-                } => renderer.render_image(image, size, linear),
+                    filter,
+                } => renderer.render_image(image, size, filter),
                 cmvs_host::GpuTarget::Scene(frame) => renderer.render(&frame),
             },
         )
@@ -287,14 +288,17 @@ impl App {
                 &gpu.renderer,
             )?;
         }
-        let mode = if self.preview_image.is_some() {
-            1
+        let (mode, filter) = if self.preview_image.is_some() {
+            (1, ScaleFilter::Nearest)
         } else {
-            cmvs_core::render::viewport::presentation_mode_with_full_move(
-                window.fullscreen().is_some(),
-                self.aspect_scaling.get(),
-                self.aspect_mode.get(),
-                self.startup.platform().window_full_move(),
+            (
+                cmvs_core::render::viewport::presentation_mode_with_full_move(
+                    window.fullscreen().is_some(),
+                    self.aspect_scaling.get(),
+                    self.aspect_mode.get(),
+                    self.startup.platform().window_full_move(),
+                ),
+                ScaleFilter::try_from(self.render_mode.get())?,
             )
         };
         if gpu.presenter.present(
@@ -302,7 +306,7 @@ impl App {
             &frame,
             [size.width, size.height],
             mode,
-            self.preview_image.is_none() && self.render_mode.get() == 1,
+            filter,
             self.preview_image.is_some(),
         )? && self.preview_image.is_none()
         {
@@ -358,12 +362,12 @@ impl App {
                 self.aspect_mode.get(),
                 self.startup.platform().window_full_move(),
             );
-            image.draw_scaled(
+            image.draw_filtered(
                 &mut buffer,
                 size.width,
                 size.height,
                 mode,
-                self.render_mode.get() == 1,
+                ScaleFilter::try_from(self.render_mode.get())?,
             )?;
         }
         buffer.present().map_err(|e| e.to_string())?;

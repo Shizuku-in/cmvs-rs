@@ -74,7 +74,7 @@ pub enum PlatformRequest {
     /// Active display's scaling enable (+172). In fullscreen, refresh presentation
     /// resources before acknowledging; keep the saved windowed client size intact.
     AspectScaling(bool),
-    /// Device +112 presentation filter: 0 point, 1 linear. Shader modes 2/3 are not modeled.
+    /// Device +112 presentation filter: point, linear, Keys, or Lanczos4 (0 through 3).
     RenderMode(u32),
     /// Windowed client size. In fullscreen, record it for the next windowed mode.
     WindowSize([u32; 2]),
@@ -229,6 +229,10 @@ pub trait PlatformBackend {
     fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement pixel shader capability queries".into())
     }
+    /// Whether the host implements both high-quality presentation filters.
+    fn high_quality_scaling_supported(&self) -> bool {
+        false
+    }
     fn render_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement render mode queries".into())
     }
@@ -301,14 +305,15 @@ pub trait PlatformBackend {
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 /// 0x14001cfd0: a request the device cannot honor leaves render mode 0 (point).
-/// Modes 2/3 also need device +124, whose source is not modeled, so a capable
-/// backend reports an error instead of guessing.
+/// For a legacy backend reporting only a D3D shader version, modes 2/3 also
+/// require the unmodeled device flag at +124.
 pub fn supported_render_mode(
     backend: &(impl PlatformBackend + ?Sized),
     requested: u32,
 ) -> Result<u32, Box<dyn Error + Send + Sync>> {
     Ok(match requested {
         1 if backend.linear_stretch_supported()? => 1,
+        2 | 3 if backend.high_quality_scaling_supported() => requested,
         2 | 3 if u32::from(backend.pixel_shader_major()?) >= requested => {
             return Err("shader presentation filters need unmodeled device flag +124".into());
         }
@@ -326,6 +331,7 @@ pub struct RecordingBackend {
     aspect_scaling: Option<bool>,
     device_frame: Option<crate::raster::RgbaImage>,
     render_mode: u32,
+    high_quality_scaling: bool,
     window_size: Option<[u32; 2]>,
     font_answers: std::collections::VecDeque<Option<Vec<u8>>>,
     font_dialogs: Vec<Vec<u8>>,
@@ -338,6 +344,11 @@ pub struct RecordingBackend {
 impl RecordingBackend {
     pub fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
         self.screen_size = size;
+    }
+    /// Simulate a caller that can present the high-quality draw modes.
+    pub fn with_high_quality_scaling(mut self) -> Self {
+        self.high_quality_scaling = true;
+        self
     }
     /// Explicit software device draw boundary. Frame producers must publish the
     /// complete engine canvas after drawing; VM commands do not update it.
@@ -472,6 +483,9 @@ impl PlatformBackend for RecordingBackend {
     fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
         Ok(0)
     }
+    fn high_quality_scaling_supported(&self) -> bool {
+        self.high_quality_scaling
+    }
     fn fullscreen(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.fullscreen)
     }
@@ -485,7 +499,12 @@ impl PlatformBackend for RecordingBackend {
         if matches!(request, PlatformRequest::AspectMode(mode) if *mode > 3) {
             return Err("invalid aspect mode".into());
         }
-        if matches!(request, PlatformRequest::RenderMode(mode) if *mode > 1) {
+        let max_render_mode = if self.high_quality_scaling_supported() {
+            3
+        } else {
+            1
+        };
+        if matches!(request, PlatformRequest::RenderMode(mode) if *mode > max_render_mode) {
             return Err("unsupported render mode".into());
         }
         let size = match request {
@@ -912,9 +931,13 @@ impl PlatformHost {
             return Ok(PlatformEvent::Configured);
         }
         if command == 0x16b {
-            // 0x140075570: D3DCAPS9.PixelShaderVersion major byte.
-            let major = backend.pixel_shader_major()?;
-            let value = 3 | if major >= 2 { 4 } else { 0 } | if major >= 3 { 8 } else { 0 };
+            let value = if backend.high_quality_scaling_supported() {
+                15
+            } else {
+                // 0x140075570: legacy capability flags from D3DCAPS9.PixelShaderVersion.
+                let major = backend.pixel_shader_major()?;
+                3 | if major >= 2 { 4 } else { 0 } | if major >= 3 { 8 } else { 0 }
+            };
             call.complete(0x4000)?;
             call.vm
                 .state_mut()

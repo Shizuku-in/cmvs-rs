@@ -1,5 +1,6 @@
 //! Shared display rectangle for software presentation and pointer conversion.
 use crate::{FormatError, MAX_PAYLOAD};
+use std::ops::Range;
 
 /// Validated logical device size, independent of the physical window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +116,13 @@ impl Viewport {
             source,
             target,
         })
+    }
+    /// Columns and rows of the viewport that intersect the target surface.
+    pub fn visible_ranges(self) -> [Range<i64>; 2] {
+        [
+            self.left.max(0)..(self.left + i64::from(self.width)).min(i64::from(self.target[0])),
+            self.top.max(0)..(self.top + i64::from(self.height)).min(i64::from(self.target[1])),
+        ]
     }
     pub fn to_source(self, [x, y]: [f64; 2]) -> Option<[i32; 2]> {
         if !x.is_finite()

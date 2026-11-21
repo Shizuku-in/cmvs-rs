@@ -10,7 +10,7 @@ pub use app::run_cli;
 pub use cmvs_core::render::raster::movie_canvas;
 use cmvs_core::{
     FormatError, format::cursor::CursorBitmap, host::platform::MAX_PLATFORM_ASSET,
-    host::platform::PlatformBackend, host::platform::PlatformRequest,
+    host::platform::PlatformBackend, host::platform::PlatformRequest, render::raster::ScaleFilter,
 };
 pub use cmvs_video as video;
 use std::{
@@ -222,6 +222,9 @@ impl PlatformBackend for NativeBackend<'_> {
     fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
         Ok(0)
     }
+    fn high_quality_scaling_supported(&self) -> bool {
+        true
+    }
     fn fullscreen(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.window.fullscreen().is_some())
     }
@@ -298,9 +301,7 @@ impl PlatformBackend for NativeBackend<'_> {
                 println!("# native aspect scaling={enabled}");
             }
             PlatformRequest::RenderMode(mode) => {
-                if *mode > 1 {
-                    return Err("unsupported render mode".into());
-                }
+                ScaleFilter::try_from(*mode)?;
                 self.render_mode.set(*mode);
                 self.window.request_redraw();
                 println!("# native render mode={mode}");

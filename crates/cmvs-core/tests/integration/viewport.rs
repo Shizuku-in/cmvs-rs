@@ -1,4 +1,37 @@
-use cmvs_core::{render::raster::RgbaImage, render::viewport::Viewport};
+use cmvs_core::{
+    render::raster::{RgbaImage, ScaleFilter},
+    render::viewport::Viewport,
+};
+
+#[test]
+fn high_quality_filters_preserve_signed_lobes_and_constant_channels() {
+    let image = RgbaImage::new(
+        9,
+        1,
+        (0..9)
+            .flat_map(|x| [if x == 4 { 192 } else { 64 }, 128, 32, 255])
+            .collect(),
+    )
+    .unwrap();
+    for (filter, red) in [
+        (
+            ScaleFilter::Keys,
+            [
+                64, 64, 64, 64, 64, 58, 46, 102, 178, 178, 102, 46, 58, 64, 64, 64, 64, 64,
+            ],
+        ),
+        (
+            ScaleFilter::Lanczos4,
+            [
+                64, 63, 62, 68, 71, 52, 45, 100, 178, 178, 100, 45, 52, 71, 68, 62, 63, 64,
+            ],
+        ),
+    ] {
+        let mut target = [0; 18];
+        image.draw_filtered(&mut target, 18, 1, 3, filter).unwrap();
+        assert_eq!(target, red.map(|r| (r << 16) | 0x8020));
+    }
+}
 
 #[test]
 fn scaling_disable_centers_native_pixels_and_input_without_losing_selected_mode() {

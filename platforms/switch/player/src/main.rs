@@ -103,11 +103,7 @@ enum Ended {
 
 fn render_gpu(session: &mut HostSession, gpu: &mut gpu::GpuRenderer, linear: bool) -> Result<()> {
     session.with_gpu_target(linear, |target| match target {
-        GpuTarget::Movie {
-            image,
-            size,
-            linear,
-        } => gpu.render_image(image, size, linear),
+        GpuTarget::Movie { image, size, .. } => gpu.render_image(image, size, linear),
         GpuTarget::Scene(frame) => gpu.render(&frame),
     })
 }

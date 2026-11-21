@@ -437,35 +437,57 @@ fn aspect_mode_normalizes_invalid_words_preserves_results_and_skips_equal_reques
 #[test]
 fn render_mode_clamps_words_falls_back_without_linear_support_and_skips_equal_requests() {
     let mut code = vec![];
+    bytecode::command(&mut code, 0x216b, &[]);
     for raw in [1, 1, 0, 3, 2, u32::MAX, 4, 1] {
         bytecode::command(&mut code, 0x216d, &[raw]);
         bytecode::command(&mut code, 0x216c, &[]);
     }
     let script = bytecode::script(&code);
-    let mut vm = Machine::new(&script).unwrap();
     let mut host = PlatformHost::default();
-    let mut backend = RecordingBackend::default();
     let mut assets = Assets::default();
-    // Shader modes 2/3 need PS2/PS3; the recording backend reports major 0.
-    for value in [1, 1, 0, 0, 0, 0, 0, 1] {
-        vm.state_mut().set_system_integer(0, 77).unwrap();
-        bytecode::pending(&mut vm);
-        assert_eq!(
-            host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
-                .unwrap(),
-            Some(cmvs_core::host::platform::PlatformEvent::Configured)
-        );
-        assert_eq!(vm.state().system_integer(0), Some(77));
-        assert_eq!(vm.stack().len_bytes(), 0);
+    for (mut backend, flags, modes, requests) in [
+        (
+            RecordingBackend::default(),
+            3,
+            [1, 1, 0, 0, 0, 0, 0, 1],
+            &[1, 0, 1][..],
+        ),
+        (
+            RecordingBackend::default().with_high_quality_scaling(),
+            15,
+            [1, 1, 0, 3, 2, 0, 0, 1],
+            &[1, 0, 3, 2, 0, 1][..],
+        ),
+    ] {
+        let mut vm = Machine::new(&script).unwrap();
         bytecode::pending(&mut vm);
         host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(value));
+        assert_eq!(vm.state().system_integer(0), Some(flags));
+        for mode in modes {
+            vm.state_mut().set_system_integer(0, 77).unwrap();
+            bytecode::pending(&mut vm);
+            assert_eq!(
+                host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
+                    .unwrap(),
+                Some(cmvs_core::host::platform::PlatformEvent::Configured)
+            );
+            assert_eq!(vm.state().system_integer(0), Some(77));
+            assert_eq!(vm.stack().len_bytes(), 0);
+            bytecode::pending(&mut vm);
+            host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
+                .unwrap();
+            assert_eq!(vm.state().system_integer(0), Some(mode));
+        }
+        assert_eq!(
+            backend.requests(),
+            requests
+                .iter()
+                .copied()
+                .map(PlatformRequest::RenderMode)
+                .collect::<Vec<_>>()
+        );
     }
-    assert_eq!(
-        backend.requests(),
-        &[1, 0, 1].map(PlatformRequest::RenderMode)
-    );
     assert_eq!(assets.calls, 0);
 
     struct PointOnly(u32);

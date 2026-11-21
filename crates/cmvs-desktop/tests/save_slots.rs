@@ -585,6 +585,83 @@ struct Ui<'b> {
     frozen: bool,
 }
 
+#[test]
+#[ignore = "requires the original Amatsutsumi game data and CMVS_FONT_PATH"]
+fn external_high_quality_draw_modes_can_be_selected_and_saved() {
+    use cmvs_core::host::{
+        platform::{PlatformBackend, PlatformRequest, supported_render_mode},
+        settings::DisplayPreferences,
+    };
+
+    let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
+    let font = cmvs_desktop::font::FontRenderer::read(
+        &PathBuf::from(std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH")),
+        0,
+    )
+    .unwrap();
+    let game = Registry::builtin().identify_game(&root, None).unwrap();
+    let script = load_start(&root, &game.files).unwrap();
+    let user = user_directory("draw-modes");
+    fs::write(
+        user.join("cmvs.cfg"),
+        b"[GRAPHIC_CONFIG]\nASPECT_RATIO_FILTER=2\n",
+    )
+    .unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    run.set_skip_auto_resume(true).unwrap();
+    run.set_record_text(true);
+    run.set_glyph_metrics(font.metrics());
+
+    let mut backend = RecordingBackend::default().with_high_quality_scaling();
+    let mode = supported_render_mode(&backend, run.display_preferences().render_mode).unwrap();
+    assert_eq!(mode, 2);
+    backend.apply(&PlatformRequest::RenderMode(mode)).unwrap();
+    let mut ui = Ui::new(&mut run, &root, backend, false);
+    for _ in 0..30_000 {
+        if ui.run.machine().current_name() == b"menu.ps3"
+            && ui
+                .run
+                .buttons()
+                .group(0)
+                .is_some_and(|group| group.buttons.len() >= 4)
+        {
+            break;
+        }
+        ui.frame([-1, -1], None);
+    }
+    for _ in 0..600 {
+        ui.frame([-1, -1], None);
+    }
+    ui.click(ui.button(0, 2), 120);
+    if ui
+        .run
+        .buttons()
+        .group(1)
+        .unwrap()
+        .buttons
+        .iter()
+        .any(|b| b.id == 1)
+    {
+        ui.click(ui.button(1, 1), 120);
+    }
+    for mode in [3, 2, 3] {
+        ui.click(ui.button(1, 22 + mode), 30);
+        assert_eq!(ui.backend.render_mode().unwrap(), mode);
+    }
+    ui.run
+        .save_preferences(DisplayPreferences {
+            render_mode: ui.backend.render_mode().unwrap(),
+            ..DisplayPreferences::default()
+        })
+        .unwrap();
+    drop(run);
+
+    let mut resumed = Runtime::new(&script, &root, &game, 0).unwrap();
+    resumed.set_user_data_directory(&user).unwrap();
+    assert_eq!(resumed.display_preferences().render_mode, 3);
+}
+
 /// Title and toolbar settings entries, three pages and right-click return.
 /// Recording-audio variant; the native variant shares the same assertions below.
 #[test]
@@ -625,19 +702,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     run.set_user_data_directory(&user).unwrap();
     run.set_record_text(true);
     run.set_glyph_metrics(font.metrics());
-    let mut ui = Ui {
-        native_audio,
-        run: &mut run,
-        backend: RecordingBackend::default(),
-        bindings: KeyBindings::parse(&fs::read_to_string(root.join("key.cfg")).unwrap()).unwrap(),
-        codes: CodeInput::default(),
-        commands: Vec::new(),
-        voices: Vec::new(),
-        voice_volumes: Vec::new(),
-        voice_rates: Vec::new(),
-        voice_fades: Vec::new(),
-        frozen: false,
-    };
+    let mut ui = Ui::new(&mut run, &root, RecordingBackend::default(), native_audio);
     // The desktop host applies the startup filter; the sample cmvs.cfg word 0 means linear.
     let startup_filter = cmvs_core::host::platform::supported_render_mode(
         &ui.backend,
@@ -1233,7 +1298,28 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     );
 }
 
-impl Ui<'_> {
+impl<'b> Ui<'b> {
+    fn new(
+        run: &'b mut Runtime,
+        root: &std::path::Path,
+        backend: RecordingBackend,
+        native_audio: bool,
+    ) -> Self {
+        Self {
+            native_audio,
+            run,
+            backend,
+            bindings: KeyBindings::parse(&fs::read_to_string(root.join("key.cfg")).unwrap())
+                .unwrap(),
+            codes: CodeInput::default(),
+            commands: Vec::new(),
+            voices: Vec::new(),
+            voice_volumes: Vec::new(),
+            voice_rates: Vec::new(),
+            voice_fades: Vec::new(),
+            frozen: false,
+        }
+    }
     fn frame(&mut self, pointer: [i32; 2], code: Option<usize>) {
         command_trace::begin();
         if self.frozen {

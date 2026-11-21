@@ -34,7 +34,7 @@ Wayland 导航使用内部指针坐标；失焦、短按锁存、光标自动隐
 
 ## 设置保存
 
-指定用户目录后，正常退出保存设置。系统档在完成首次读取或载入模板后才会写入，与配置分开提交。配置保留未知键，显示偏好使用 `[CMVS_RS_DESKTOP]`，比例滤镜沿用 `[GRAPHIC_CONFIG]` 的 `ASPECT_RATIO_FILTER`（0 线性、1 点采样）。无窗口宿主可调用 `Runtime::save_preferences` 或 `Player::save_preferences`。
+指定用户目录后，正常退出保存设置。系统档在完成首次读取或载入模板后才会写入，与配置分开提交。配置保留未知键，显示偏好使用 `[CMVS_RS_DESKTOP]`。CPU 和 wgpu 沿用 `[GRAPHIC_CONFIG]` 的 `ASPECT_RATIO_FILTER`（0 双线性、1 最近邻、2 Keys 双三次 `a = -1`、3 Lanczos4）。无窗口宿主可调用 `Runtime::save_preferences` 或 `Player::save_preferences`。
 
 ## 支持边界
 

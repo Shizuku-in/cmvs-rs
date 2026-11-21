@@ -59,8 +59,8 @@ impl BrowserGpu {
             GpuTarget::Movie {
                 image,
                 size,
-                linear,
-            } => self.renderer.render_image(image, size, linear),
+                filter,
+            } => self.renderer.render_image(image, size, filter),
             GpuTarget::Scene(scene) => self.renderer.render(&scene),
         })?;
         let mode = cmvs_core::render::viewport::presentation_mode(

@@ -1250,13 +1250,13 @@ mod tests {
         let movie_src = GpuFrameSource::Movie {
             image: &cpu,
             size: [64, 48],
-            linear: true,
+            filter: cmvs_core::render::raster::ScaleFilter::Keys,
         };
         assert!(matches!(
             movie_src.prepare().unwrap(),
             GpuTarget::Movie {
                 size: [64, 48],
-                linear: true,
+                filter: cmvs_core::render::raster::ScaleFilter::Keys,
                 ..
             }
         ));
