@@ -186,7 +186,6 @@ struct PlayerScreen: View {
             VStack(alignment: .leading, spacing: 4) {
                 action("Confirm", icon: "return") { player.pulse(22) }
                 action("Hide Text", icon: "text.bubble") { player.pulse(26) }
-                action("Game Menu", icon: "list.bullet") { player.pulse(3) }
                 action("Previous History Entry", icon: "chevron.up") { player.pulse(4) }
                 action("Next History Entry", icon: "chevron.down") { player.pulse(5) }
             }

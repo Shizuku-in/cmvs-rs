@@ -52,6 +52,7 @@ private actor BitmapTitleReader {
     @ObservationIgnored private var enabled = false
     @ObservationIgnored private var nextRead: CFTimeInterval = 0
     @ObservationIgnored private var nextRecognition: CFTimeInterval = 0
+    @ObservationIgnored private var recognizedRevision: UInt64?
     @ObservationIgnored private var recognition: Task<Void, Never>?
     private let reader = BitmapTitleReader()
 
@@ -59,6 +60,7 @@ private actor BitmapTitleReader {
         enabled = value
         nextRead = 0
         nextRecognition = 0
+        recognizedRevision = nil
         recognition?.cancel()
         recognition = nil
         page = nil
@@ -76,19 +78,27 @@ private actor BitmapTitleReader {
         if let updated {
             recognition?.cancel()
             recognition = nil
+            recognizedRevision = nil
             bitmapLabels = [:]
             page = updated
             nextRecognition = time + 0.3
         }
-        guard recognition == nil, time >= nextRecognition, let page,
-            page.content.choices.contains(where: { $0.label.isEmpty }) else { return }
-        nextRecognition = time + 2
+        guard recognition == nil,
+            let page,
+            recognizedRevision != page.revision,
+            time >= nextRecognition,
+            page.content.choices.contains(where: { $0.label.isEmpty })
+        else { return }
         // Capture this completed frame, before the next VM tick changes the labels.
-        guard let image = cpuFrame ?? engine.queue.sync(execute: { try? engine.image() }) else { return }
+        guard let image = cpuFrame ?? engine.queue.sync(execute: { try? engine.image() }) else {
+            nextRecognition = time + 2
+            return
+        }
         recognition = Task {
             let labels = await reader.labels(in: image, choices: page.content.choices)
             guard !Task.isCancelled, self.page?.revision == page.revision else { return }
             if labels != bitmapLabels { bitmapLabels = labels }
+            recognizedRevision = page.revision
             recognition = nil
         }
     }

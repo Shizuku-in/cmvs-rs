@@ -25,6 +25,7 @@ final class Canvas: NSView {
     init(_ player: Playback) {
         self.player = player
         super.init(frame: .zero)
+        player.clearKeys = { [weak self] in self?.accepted.removeAll() }
         wantsLayer = true
         layer = metal
         metal.backgroundColor = NSColor.black.cgColor

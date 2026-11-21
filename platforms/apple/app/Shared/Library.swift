@@ -47,7 +47,8 @@ struct Game: Identifiable, Codable, Equatable {
     var options: Options
     var lastPlayed: Date?
     var saveFolder: String?
-    var thumbnail: URL { Library.base.appending(path: "\(id).png") }
+    var thumbnail: URL { thumbnail(in: Library.base) }
+    func thumbnail(in base: URL) -> URL { base.appending(path: "\(id).png") }
     var filename: String {
         let cleaned = name.components(separatedBy: CharacterSet(charactersIn: "/:\\").union(.controlCharacters))
             .joined(separator: "-").trimmingCharacters(in: CharacterSet(charactersIn: ". "))
@@ -59,13 +60,13 @@ struct Game: Identifiable, Codable, Equatable {
         return stem.isEmpty ? "CMVS" : stem
     }
 
-    func resolve() throws -> URL {
+    func resolve(in base: URL = Library.base) throws -> URL {
         var stale = false
-        return try resolve(stale: &stale)
+        return try resolve(in: base, stale: &stale)
     }
 
-    func resolve(stale: inout Bool) throws -> URL {
-        guard let bookmark else { return Library.base.appending(path: "Games/\(id)") }
+    func resolve(in base: URL = Library.base, stale: inout Bool) throws -> URL {
+        guard let bookmark else { return base.appending(path: "Games/\(id)") }
         #if os(macOS)
             let options: URL.BookmarkResolutionOptions = [.withoutUI]
         #else
@@ -107,7 +108,8 @@ struct FontFace: Identifiable, Codable, Hashable {
     var bytes: Int
     var family: String?
     var id: String { "\(file)#\(index)" }
-    var url: URL { file.hasPrefix("/") ? URL(fileURLWithPath: file) : Library.base.appending(path: file) }
+    var url: URL { url(in: Library.base) }
+    func url(in base: URL) -> URL { file.hasPrefix("/") ? URL(fileURLWithPath: file) : base.appending(path: file) }
 
     func preview(size: CGFloat) -> CTFont? {
         guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
@@ -220,16 +222,39 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
         }
         for path in paths.sorted() {
             let source = documents.appending(path: path)
-            guard fm.fileExists(atPath: source.path) else { continue }
             let target = support.appending(path: path)
-            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fm.moveItem(at: source, to: target)
+            try moveCatalogItem(from: source, to: target)
         }
         for name in ["Games", "Fonts"] {
             // rmdir leaves directories containing user files intact.
             _ = rmdir(documents.appending(path: name).path)
         }
         try fm.moveItem(at: index, to: destination)
+    }
+
+    private static func moveCatalogItem(from source: URL, to target: URL) throws {
+        let fm = FileManager.default
+        var sourceIsDir: ObjCBool = false
+        guard fm.fileExists(atPath: source.path, isDirectory: &sourceIsDir) else { return }
+        var targetIsDir: ObjCBool = false
+        guard fm.fileExists(atPath: target.path, isDirectory: &targetIsDir) else {
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.moveItem(at: source, to: target)
+            return
+        }
+        if sourceIsDir.boolValue && targetIsDir.boolValue {
+            for child in try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) {
+                try moveCatalogItem(from: child, to: target.appending(path: child.lastPathComponent))
+            }
+            if try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil).isEmpty {
+                try fm.removeItem(at: source)
+            }
+        } else if !sourceIsDir.boolValue && !targetIsDir.boolValue {
+            _ = try fm.replaceItemAt(target, withItemAt: source)
+        } else {
+            try fm.removeItem(at: target)
+            try fm.moveItem(at: source, to: target)
+        }
     }
 
     func persist() {
@@ -258,18 +283,19 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
     }
 
     func remove(_ game: Game) throws {
-        try removeIfPresent(game.thumbnail)
-        if game.bookmark == nil { try removeIfPresent(try game.resolve()) }
+        try removeIfPresent(game.thumbnail(in: directory))
+        if game.bookmark == nil { try removeIfPresent(try game.resolve(in: directory)) }
         data.games.removeAll { $0.id == game.id }
         playbackRevision.removeValue(forKey: game.id)
     }
 
     func removeFont(_ face: FontFace) throws {
-        let directory = Self.base.appending(path: "Fonts", directoryHint: .isDirectory)
-        guard data.fonts.contains(face), face.file == "Fonts/" + face.url.lastPathComponent,
-            face.url.standardizedFileURL.deletingLastPathComponent().path == directory.standardizedFileURL.path
+        let fontsDirectory = directory.appending(path: "Fonts", directoryHint: .isDirectory)
+        let faceURL = face.url(in: directory)
+        guard data.fonts.contains(face), face.file == "Fonts/" + faceURL.lastPathComponent,
+            faceURL.standardizedFileURL.deletingLastPathComponent().path == fontsDirectory.standardizedFileURL.path
         else { return }
-        try removeIfPresent(face.url)
+        try removeIfPresent(faceURL)
         let ids = Set(data.fonts.filter { $0.file == face.file }.map(\.id))
         data.fonts.removeAll { $0.file == face.file }
         if ids.contains(data.defaults.font) { data.defaults.font = "" }

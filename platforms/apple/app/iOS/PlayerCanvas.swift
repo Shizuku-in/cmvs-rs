@@ -123,6 +123,7 @@ final class Canvas: UIView {
             pending = (touch, touch.location(in: self))
             pendingPress = Task { [weak self] in
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                guard !Task.isCancelled else { return }
                 self?.beginPending()
             }
         } else {

@@ -20,6 +20,7 @@ enum FastForwardKey: UInt32 {
     let engine = Engine()
     let accessibility = GameAccessibility()
     let cpu = CALayer()
+    private(set) var canvasFrame = CGRect.zero
     private var clock: CADisplayLink?
     private var previous: CFTimeInterval?
     private var frames = 0
@@ -122,21 +123,32 @@ enum FastForwardKey: UInt32 {
         let width = UInt32(size.width * scale)
         let height = UInt32(size.height * scale)
         if ready { invoke { cmvs_apple_resize($0, width, height) } }
+        guard logicalSize.count == 2, logicalSize[0] > 0, logicalSize[1] > 0 else { return }
         let w = CGFloat(logicalSize[0])
         let h = CGFloat(logicalSize[1])
         var factor = min(size.width / w, size.height / h)
         if mode == 2 { factor = max(size.width / w, size.height / h) }
         if mode == 0 { factor = min(1 / scale, factor) }
         let target = mode == 3 ? size : CGSize(width: w * factor, height: h * factor)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        cpu.frame = CGRect(
+        let frame = CGRect(
             x: (size.width - target.width) / 2, y: (size.height - target.height) / 2, width: target.width,
             height: target.height)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        cpu.frame = frame
         CATransaction.commit()
+        if canvasFrame != frame {
+            Task { @MainActor [weak self] in
+                guard let self, !self.closed, self.canvasFrame != self.cpu.frame else { return }
+                self.canvasFrame = self.cpu.frame
+            }
+        }
     }
     func canvasRect(_ rect: [Int]) -> CGRect {
+        // Read the @Observable trigger while keeping synchronous reads aligned with cpu.frame.
+        _ = canvasFrame
         let canvas = cpu.frame
+        guard rect.count == 4, logicalSize.count == 2, logicalSize[0] > 0, logicalSize[1] > 0 else { return .zero }
         let sx = canvas.width / CGFloat(logicalSize[0])
         let sy = canvas.height / CGFloat(logicalSize[1])
         return CGRect(x: canvas.minX + CGFloat(rect[0]) * sx, y: canvas.minY + CGFloat(rect[1]) * sy,

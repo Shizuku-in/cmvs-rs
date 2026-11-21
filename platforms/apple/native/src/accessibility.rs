@@ -28,6 +28,11 @@ struct TextBlock {
     rect: [i32; 4],
 }
 
+fn text_scale(scale_bits: u32) -> Option<f32> {
+    let scale = f32::from_bits(scale_bits);
+    (scale.is_finite() && scale > 0.0).then_some(scale)
+}
+
 #[derive(Default, PartialEq, Eq, Serialize)]
 pub(crate) struct Page {
     #[serde(skip)]
@@ -110,10 +115,9 @@ impl Page {
                 .filter(|t| t.visible && t.logical_size[0] > 0)
             {
                 let logical = size[0] as f32 / text.logical_size[0] as f32;
-                let scale = f32::from_bits(text.scale_bits);
-                if scale <= 0.0 {
+                let Some(scale) = text_scale(text.scale_bits) else {
                     continue;
-                }
+                };
                 page.add_glyphs(
                     slot,
                     encoding,
@@ -221,8 +225,44 @@ impl Page {
     }
 }
 
+type ChoiceKey = ([usize; 2], [i32; 4]);
+
+impl Page {
+    fn choice_keys(&self) -> Vec<ChoiceKey> {
+        self.choices.iter().map(|c| (c.id, c.rect)).collect()
+    }
+
+    fn same_target(&self, current: &Self, index: usize) -> bool {
+        self.script == current.script
+            && self
+                .choices
+                .get(index)
+                .zip(current.choices.get(index))
+                .is_some_and(|(a, b)| a.id == b.id && a.rect == b.rect)
+    }
+
+    fn same_choices(&self, current: &Self, expected: &[ChoiceKey]) -> bool {
+        self.script == current.script
+            && current.choices.len() == expected.len()
+            && current
+                .choices
+                .iter()
+                .zip(expected)
+                .all(|(c, &(id, rect))| c.id == id && c.rect == rect)
+    }
+
+    fn matches_stage(&self, current: &Self, index: usize, stage: &Click) -> bool {
+        match stage {
+            Click::Hover => self.same_choices(current, &self.choice_keys()),
+            Click::Press => self.same_target(current, index),
+            Click::Release(expected) => self.same_choices(current, expected),
+        }
+    }
+}
+
 // Validate the displayed choice again between hover, press, and release. A changed page
-// must never turn a VoiceOver activation into a click on the next screen.
+// must never turn a VoiceOver activation into a click on the next screen, while allowing
+// hover-induced description text updates on the same choice.
 #[derive(Default)]
 pub(crate) struct Reader {
     pub page: Page,
@@ -233,12 +273,17 @@ pub(crate) struct Reader {
 enum Click {
     Hover,
     Press,
-    Release,
+    Release(Vec<ChoiceKey>),
 }
 
 impl Reader {
     pub fn update(&mut self, page: Page) {
         if self.revision == 0 || page != self.page {
+            if let Some((_, index, ref stage)) = self.pending
+                && self.page.matches_stage(&page, index, stage)
+            {
+                return;
+            }
             self.page = page;
             self.revision += 1;
         }
@@ -262,7 +307,8 @@ impl Reader {
         let Some((revision, index, stage)) = self.pending.take() else {
             return false;
         };
-        if revision != self.revision || current() != self.page {
+        let current = current();
+        if revision != self.revision || !self.page.matches_stage(&current, index, &stage) {
             input.cancel_primary_button();
             return true;
         }
@@ -275,9 +321,9 @@ impl Reader {
             }
             Click::Press => {
                 input.pulse(1).expect("valid primary button");
-                self.pending = Some((revision, index, Click::Release));
+                self.pending = Some((revision, index, Click::Release(current.choice_keys())));
             }
-            Click::Release => {}
+            Click::Release(_) => {}
         }
         true
     }
@@ -347,5 +393,75 @@ mod tests {
         reader.update(Page::default());
         reader.choose(stale, 0);
         assert!(!reader.sample(options, &mut input));
+    }
+
+    #[test]
+    fn hover_text_change_preserves_activation_and_press_page_change_cancels_release() {
+        let mut reader = Reader::default();
+        let mut input = InputState::default();
+        let mut actions = ActionInput::default();
+        let keys = KeyBindings::parse("[KEY_FUNCTION_01]\nKEY_DATA_01=1\n").unwrap();
+
+        let hovered = || {
+            let mut page = options();
+            page.text[0].value = "Hover description".into();
+            page.choices[1].label = "B (hover)".into();
+            page
+        };
+
+        reader.update(options());
+        reader.choose(reader.revision, 1);
+
+        // Frame 1: Hover moves pointer without pressing.
+        assert!(reader.sample(options, &mut input));
+        input.sample(&keys, &mut actions);
+        assert_eq!((actions.pressed(0), actions.released(0)), (false, false));
+
+        // An interleaved accessibility poll after hover changes text/label must not break Press.
+        reader.update(hovered());
+        assert_eq!(reader.revision, 1);
+
+        // Frame 2: Press succeeds even though hover changed text and choice label.
+        assert!(reader.sample(hovered, &mut input));
+        input.sample(&keys, &mut actions);
+        assert_eq!((actions.pressed(0), actions.released(0)), (true, false));
+
+        // Frame 3: Release completes when choices/script remain intact.
+        reader.update(hovered());
+        assert!(reader.sample(hovered, &mut input));
+        input.sample(&keys, &mut actions);
+        assert_eq!((actions.pressed(0), actions.released(0)), (false, true));
+        assert!(!reader.sample(hovered, &mut input));
+
+        // Once pending is cleared, the next update publishes the hovered text revision.
+        reader.update(hovered());
+        assert_eq!(reader.revision, 2);
+
+        // If Press changes the available choices, Release is cancelled to protect the next screen.
+        reader.choose(reader.revision, 0);
+        assert!(reader.sample(hovered, &mut input));
+        input.sample(&keys, &mut actions);
+        assert!(reader.sample(hovered, &mut input));
+        input.sample(&keys, &mut actions);
+        assert_eq!((actions.pressed(0), actions.released(0)), (true, false));
+        assert!(reader.sample(Page::default, &mut input));
+        input.sample(&keys, &mut actions);
+        assert!(!actions.released(0));
+    }
+
+    #[test]
+    fn text_scale_rejects_non_finite_and_non_positive_values() {
+        assert_eq!(text_scale(1.5f32.to_bits()), Some(1.5));
+        for bits in [
+            0.0f32.to_bits(),
+            (-0.0f32).to_bits(),
+            (-1.0f32).to_bits(),
+            f32::NAN.to_bits(),
+            0x7fc0_1234,
+            f32::INFINITY.to_bits(),
+            f32::NEG_INFINITY.to_bits(),
+        ] {
+            assert_eq!(text_scale(bits), None);
+        }
     }
 }

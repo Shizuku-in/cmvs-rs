@@ -65,6 +65,47 @@ final class LibraryTests: XCTestCase {
         }
     }
 
+    func testCatalogMigrationHandlesExistingDestinationItems() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let documents = root.appending(path: "Documents")
+        let support = root.appending(path: "Support")
+        let info = GameInfo(profile: "", family: "CMVS", basis: "", encoding: "gbk", size: [], savedata: false)
+        let game = Game(id: UUID(), name: "Game", info: info, options: Options())
+        let font = FontFace(file: "Fonts/imported.ttc", index: 0, name: "Font", bytes: 1)
+        let catalog = Library.Catalog(games: [game], fonts: [font])
+        let pack = "Games/\(game.id)/data/pack"
+        let extra = "Games/\(game.id)/data/extra"
+        let cover = "\(game.id).png"
+        func write(_ path: String, under base: URL, _ byte: UInt8) throws {
+            let file = base.appending(path: path)
+            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([byte]).write(to: file)
+        }
+
+        // Simulate conflicting cover, font, and partial directory already in Support.
+        try write(cover, under: support, 9)
+        try write(cover, under: documents, 2)
+        try write(font.file, under: support, 9)
+        try write(font.file, under: documents, 3)
+        try write(extra, under: support, 4)
+        try write(pack, under: documents, 1)
+        let index = try JSONEncoder().encode(catalog)
+        try index.write(to: documents.appending(path: "library.json"))
+
+        try Library.migrateCatalog(from: documents, to: support)
+
+        XCTAssertEqual(try Data(contentsOf: support.appending(path: "library.json")), index)
+        XCTAssertEqual(try Data(contentsOf: support.appending(path: cover)), Data([2]))
+        XCTAssertEqual(try Data(contentsOf: support.appending(path: font.file)), Data([3]))
+        XCTAssertEqual(try Data(contentsOf: support.appending(path: pack)), Data([1]))
+        XCTAssertEqual(try Data(contentsOf: support.appending(path: extra)), Data([4]))
+        XCTAssertFalse(fm.fileExists(atPath: documents.appending(path: "library.json").path))
+        XCTAssertFalse(fm.fileExists(atPath: documents.appending(path: "Games").path))
+        XCTAssertFalse(fm.fileExists(atPath: documents.appending(path: "Fonts").path))
+    }
+
     func testLegacySavesImportedOnlyOnce() throws {
         let fm = FileManager.default
         let directory = fm.temporaryDirectory.appending(path: UUID().uuidString)
@@ -99,15 +140,16 @@ final class LibraryTests: XCTestCase {
     }
 
     func testRemovingGameDeletesOnlyOwnedFiles() throws {
-        let library = Library()
         let fm = FileManager.default
+        let directory = fm.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? fm.removeItem(at: directory) }
+        let library = Library(directory: directory)
         let info = GameInfo(profile: "", family: "CMVS", basis: "", encoding: "gbk", size: [800, 600], savedata: false)
         var game = Game(id: UUID(), name: "Example", info: info, options: Options())
-        let copy = try game.resolve()
+        let copy = try game.resolve(in: directory)
         try fm.createDirectory(at: copy, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: copy) }
-        try Data([1]).write(to: game.thumbnail)
-        defer { try? fm.removeItem(at: game.thumbnail) }
+        let cover = game.thumbnail(in: directory)
+        try Data([1]).write(to: cover)
         let source = fm.temporaryDirectory.appending(path: UUID().uuidString)
         try fm.createDirectory(at: source, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: source) }
@@ -116,7 +158,7 @@ final class LibraryTests: XCTestCase {
         library.data.games = [game]
         try library.remove(game)
         XCTAssertTrue(library.data.games.isEmpty)
-        XCTAssertFalse(fm.fileExists(atPath: game.thumbnail.path))
+        XCTAssertFalse(fm.fileExists(atPath: cover.path))
         XCTAssertTrue(fm.fileExists(atPath: source.path))
         XCTAssertTrue(fm.fileExists(atPath: copy.path))
 
@@ -127,13 +169,16 @@ final class LibraryTests: XCTestCase {
     }
 
     func testRemovingFontCollectionResetsFaceReferences() throws {
-        let library = Library()
+        let fm = FileManager.default
+        let directory = fm.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? fm.removeItem(at: directory) }
+        let library = Library(directory: directory)
         let face = FontFace(file: "Fonts/\(UUID()).ttc", index: 0, name: "Regular", bytes: 1)
         var bold = face
         bold.index = 1
-        try FileManager.default.createDirectory(at: face.url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data([1]).write(to: face.url)
-        defer { try? FileManager.default.removeItem(at: face.url) }
+        let fontURL = face.url(in: directory)
+        try fm.createDirectory(at: fontURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([1]).write(to: fontURL)
         let fallback = FontFace(file: "/system.ttf", index: 0, name: "Fallback", bytes: 1)
         library.systemFonts = [fallback]
         library.data.fonts = [face, bold]
@@ -144,7 +189,7 @@ final class LibraryTests: XCTestCase {
         library.data.games = [Game(id: UUID(), name: "Example", info: info, options: options)]
 
         try library.removeFont(bold)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: face.url.path))
+        XCTAssertFalse(fm.fileExists(atPath: fontURL.path))
         XCTAssertTrue(library.data.fonts.isEmpty)
         XCTAssertEqual(library.data.defaults.font, "")
         XCTAssertEqual(library.data.games[0].options.font, "")
