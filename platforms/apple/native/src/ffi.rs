@@ -108,7 +108,11 @@ extern "C" fn cmvs_apple_open(h: *mut Handle, config: *const c_char) -> i32 {
             return Err("game already open".into());
         }
         let p = Player::open(serde_json::from_str::<Config>(&string(config)?)?)?;
-        let info = json!({"size":p.backend.size,"encoding":text_codec::name(p.session.encoding),"mode":p.backend.mode(),"fullscreen":p.backend.display.fullscreen,"linear":p.backend.display.render_mode==1});
+        let scaled_cpu_canvas = !p.use_metal
+            && p.backend
+                .scale_filter
+                .is_some_and(|filter| filter.linear_sampler().is_none());
+        let info = json!({"size":p.backend.size,"encoding":text_codec::name(p.session.encoding),"mode":p.backend.mode(),"fullscreen":p.backend.display.fullscreen,"linear":p.backend.layer_linear(),"scaledCpuCanvas":scaled_cpu_canvas});
         h.player = Some(p);
         h.output(info)
     })
@@ -422,6 +426,34 @@ extern "C" fn cmvs_apple_read_frame(h: *mut Handle, pixels: *mut *const u8) -> i
         };
         // SAFETY: caller supplies writable pointer storage and copies pixels before mutation.
         unsafe { *pixels = image.pixels().as_ptr() };
+        Ok(0)
+    })
+}
+#[unsafe(no_mangle)]
+extern "C" fn cmvs_apple_read_presentation(
+    h: *mut Handle,
+    pixels: *mut *const u8,
+    size: *mut [u32; 2],
+) -> i32 {
+    call(h, |h| {
+        if pixels.is_null() || size.is_null() {
+            return Err("missing presentation destination".into());
+        }
+        let p = h.player.as_ref().ok_or("no open game")?;
+        let Some(Frame::Cpu(frame)) = &p.backend.frame else {
+            return Err("no completed software frame".into());
+        };
+        let filter = p
+            .backend
+            .scale_filter
+            .ok_or("no software scaling override")?;
+        let display = frame.presentation_canvas(p.backend.output, p.backend.mode(), filter)?;
+        let display = h.snapshot.insert(display);
+        // SAFETY: caller supplies writable pointer and size storage and copies pixels before mutation.
+        unsafe {
+            *pixels = display.pixels().as_ptr();
+            *size = [display.width(), display.height()];
+        }
         Ok(0)
     })
 }

@@ -532,6 +532,16 @@ private struct OptionsForm: View {
                 Text("Fill").tag(Optional(2))
                 Text("Stretch").tag(Optional(3))
             }
+            Picker("Scale Filter", selection: $options.scale_filter) {
+                Text("Automatic").tag(nil as String?)
+                Text("Nearest Neighbor").tag(Optional("nearest"))
+                Text("Bilinear").tag(Optional("bilinear"))
+                Text("Keys Bicubic").tag(Optional("keys"))
+                Text(verbatim: "Mitchell").tag(Optional("mitchell"))
+                Text(verbatim: "Lanczos3").tag(Optional("lanczos3"))
+                Text("Lanczos3 with Anti-Ringing").tag(Optional("lanczos3-anti-ringing"))
+                Text(verbatim: "Lanczos4").tag(Optional("lanczos4"))
+            }
             Toggle("Native Audio", isOn: $options.native_audio)
             #if os(macOS)
                 Toggle("Use Game Savedata Folder", isOn: $options.game_savedata)

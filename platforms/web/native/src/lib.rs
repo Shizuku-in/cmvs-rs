@@ -6,8 +6,8 @@ mod fs;
 mod gpu;
 use backend::BrowserBackend;
 use cmvs_core::{
-    host::filesystem::HostFs, profile::Registry, runtime::FrameBudget, runtime::FrameOutcome,
-    runtime::RuntimeEvent, runtime::SaveStorage,
+    MAX_PAYLOAD, host::filesystem::HostFs, profile::Registry, render::raster::ScaleFilter,
+    runtime::FrameBudget, runtime::FrameOutcome, runtime::RuntimeEvent, runtime::SaveStorage,
 };
 use cmvs_font::font::FontRenderer;
 use cmvs_host::{EncodingPolicy, GameBootstrap, HostSession, KeyBindingPolicy, SessionConfig};
@@ -24,6 +24,8 @@ fn js_error(error: impl std::fmt::Display) -> JsValue {
 pub struct WebRuntime {
     session: HostSession,
     backend: BrowserBackend,
+    scale_filter: Option<ScaleFilter>,
+    output: [u32; 2],
 }
 #[wasm_bindgen]
 pub struct WebCommentInput {
@@ -118,8 +120,16 @@ impl WebRuntime {
         face: u32,
         profile: &str,
         skip_auto_resume: bool,
+        scale_filter: Option<String>,
     ) -> Result<WebRuntime, JsValue> {
-        Self::create(font, face, profile, skip_auto_resume).map_err(js_error)
+        Self::create(
+            font,
+            face,
+            profile,
+            skip_auto_resume,
+            scale_filter.as_deref(),
+        )
+        .map_err(js_error)
     }
     pub fn render_mode(&self) -> u32 {
         self.backend.preferences().render_mode
@@ -150,6 +160,34 @@ impl WebRuntime {
     pub fn height(&self) -> u32 {
         self.backend.size[1]
     }
+    pub fn uses_custom_scale_filter(&self) -> bool {
+        self.scale_filter.is_some()
+    }
+    pub fn resize_output(&mut self, width: u32, height: u32) {
+        if self.scale_filter.is_none() || width == 0 || height == 0 {
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        let texture_limit = self
+            .backend
+            .gpu
+            .as_ref()
+            .map_or(u32::MAX, |gpu| gpu.texture_limit());
+        #[cfg(not(target_arch = "wasm32"))]
+        let texture_limit = u32::MAX;
+        // Keep the real surface within the same pixel budget as the logical canvas.
+        let max_pixels = (MAX_PAYLOAD / 4) as u32;
+        let pixels = f64::from(width) * f64::from(height);
+        let scale = (f64::from(max_pixels) / pixels)
+            .sqrt()
+            .min(f64::from(texture_limit.min(max_pixels)) / f64::from(width.max(height)))
+            .min(1.0);
+        self.output =
+            [width, height].map(|value| (f64::from(value) * scale).floor().max(1.0) as u32);
+    }
+    pub fn presentation_size(&self) -> Vec<u32> {
+        self.output.to_vec()
+    }
     /// 0: cooperative slice, 1: complete frame, 2: quit, 3: inactive.
     /// Input is latched once per engine frame, including across budget slices.
     pub fn tick(
@@ -174,6 +212,20 @@ impl WebRuntime {
             .as_ref()
             .map(|frame| frame.pixels().to_vec())
             .ok_or_else(|| js_error("no completed frame"))
+    }
+    pub fn presented_pixels(&self) -> Result<Vec<u8>, JsValue> {
+        let Some(filter) = self.scale_filter else {
+            return self.pixels();
+        };
+        let frame = self
+            .backend
+            .frame
+            .as_ref()
+            .ok_or_else(|| js_error("no completed frame"))?;
+        let image = frame
+            .presentation_canvas(self.output, 3, filter)
+            .map_err(js_error)?;
+        Ok(image.pixels().to_vec())
     }
     /// Explicit GPU readback for exports and verification; normal frames stay on the GPU.
     #[cfg(target_arch = "wasm32")]
@@ -232,7 +284,13 @@ impl WebRuntime {
                     {
                         let display = backend.preferences();
                         if let Some(gpu) = &mut backend.gpu {
-                            if gpu.draw(&session.runtime, &mut session.font, display)? {
+                            if gpu.draw(
+                                &session.runtime,
+                                &mut session.font,
+                                display,
+                                self.output,
+                                self.scale_filter,
+                            )? {
                                 backend.frame = None;
                             }
                             return Ok(1);
@@ -259,6 +317,7 @@ impl WebRuntime {
         face: u32,
         profile: &str,
         skip: bool,
+        scale_filter: Option<&str>,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let root = Path::new("/game");
         let fs: Arc<dyn HostFs> = Arc::new(WebFs);
@@ -291,7 +350,14 @@ impl WebRuntime {
             session.runtime.display_preferences(),
             session.runtime.machine().text_encoding(),
         )?;
-        Ok(Self { session, backend })
+        let scale_filter = session.runtime.scale_filter_override(scale_filter)?;
+        let output = backend.size;
+        Ok(Self {
+            session,
+            backend,
+            scale_filter,
+            output,
+        })
     }
 }
 

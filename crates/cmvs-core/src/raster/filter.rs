@@ -18,6 +18,17 @@ pub enum ScaleFilter {
     Lanczos4,
 }
 
+impl ScaleFilter {
+    /// The linear flag for texture samplers that support nearest and bilinear filtering.
+    pub fn linear_sampler(self) -> Option<bool> {
+        match self {
+            Self::Nearest => Some(false),
+            Self::Bilinear => Some(true),
+            _ => None,
+        }
+    }
+}
+
 impl From<bool> for ScaleFilter {
     fn from(linear: bool) -> Self {
         if linear {

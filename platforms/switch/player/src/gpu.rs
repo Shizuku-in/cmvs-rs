@@ -79,10 +79,16 @@ impl GpuRenderer {
         self.0.device().read(size, &mut pixels)?;
         Ok(RgbaImage::new(size[0], size[1], pixels)?)
     }
+
+    /// The displayed texture was already scaled by the host.
+    pub fn forget_presented(&mut self) {
+        self.0.forget_presented();
+    }
 }
 
 impl ConsoleGpu for GpuRenderer {
     fn read_presented(&mut self) -> Option<Result<RgbaImage>> {
+        self.0.presented()?;
         Some(self.read())
     }
 }

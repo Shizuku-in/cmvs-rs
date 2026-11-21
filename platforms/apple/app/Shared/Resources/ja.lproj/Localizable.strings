@@ -26,6 +26,11 @@
 "Automatic" = "自動";
 "Renderer" = "レンダラー";
 "Scaling" = "画面の拡大縮小";
+"Scale Filter" = "拡大縮小フィルター";
+"Nearest Neighbor" = "最近傍法";
+"Bilinear" = "バイリニア";
+"Keys Bicubic" = "Keys バイキュービック";
+"Lanczos3 with Anti-Ringing" = "Lanczos3（リンギング抑制）";
 "Game Preference" = "ゲームの設定";
 "Original Size" = "原寸";
 "Fit" = "画面に合わせる";
@@ -118,7 +123,7 @@
 "No readable font faces." = "このファイルに読み取れる書体がありません。";
 "Invalid engine response." = "エンジンの応答が無効です。";
 "Game closed." = "ゲームは終了しました。";
-"Invalid logical frame." = "ゲーム画面のデータが無効です。";
+"Invalid frame." = "ゲーム画面のデータが無効です。";
 "Cannot create screenshot." = "スクリーンショットファイルを作成できません。";
 "Cannot save screenshot." = "スクリーンショットを保存できません。";
 "Engine error: %@" = "エンジンエラー：%@";

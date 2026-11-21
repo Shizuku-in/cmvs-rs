@@ -177,6 +177,33 @@ impl RgbaImage {
         }
         Ok(())
     }
+    /// Present this logical frame on an opaque RGBA canvas with black margins.
+    pub fn presentation_canvas(
+        &self,
+        [width, height]: [u32; 2],
+        aspect_mode: u32,
+        filter: ScaleFilter,
+    ) -> Result<Self, FormatError> {
+        let viewport = crate::viewport::Viewport::new(
+            [self.width, self.height],
+            [width, height],
+            aspect_mode,
+        )?;
+        if [self.width, self.height] == [width, height] && self.is_opaque() {
+            return Ok(self.clone());
+        }
+        let mut target = vec![0; width as usize * height as usize];
+        self.draw_view(&mut target, width, viewport, filter);
+        let pixels = target
+            .into_iter()
+            .flat_map(|word: u32| {
+                let [b, g, r, _] = word.to_le_bytes();
+                [r, g, b, 255]
+            })
+            .collect();
+        Self::new(width, height, pixels)
+    }
+
     /// Software fullscreen presentation using the same mapping as pointer input.
     pub fn draw_aspect(
         &self,
@@ -215,6 +242,17 @@ impl RgbaImage {
         if target.len() as u64 != u64::from(width) * u64::from(height) {
             return Err(FormatError("invalid preview surface dimensions"));
         }
+        self.draw_view(target, width, view, filter);
+        Ok(())
+    }
+
+    fn draw_view(
+        &self,
+        target: &mut [u32],
+        width: u32,
+        view: crate::viewport::Viewport,
+        filter: ScaleFilter,
+    ) {
         let [xs, ys] = view.visible_ranges();
         let opaque = self.is_opaque();
         if view.width == self.width && view.height == self.height {
@@ -236,11 +274,11 @@ impl RgbaImage {
                     }
                 }
             }
-            return Ok(());
+            return;
         }
         if !matches!(filter, ScaleFilter::Nearest | ScaleFilter::Bilinear) {
             filter::draw(self, target, width as usize, view, filter);
-            return Ok(());
+            return;
         }
         if filter == ScaleFilter::Bilinear {
             // Per-axis source pair and weight for each target column/row in view.
@@ -298,7 +336,7 @@ impl RgbaImage {
                         *target = channel(0) << 16 | channel(1) << 8 | channel(2);
                     }
                 }
-                return Ok(());
+                return;
             }
             for (y, &(y0, y1, fy)) in ys.zip(&rows) {
                 for (x, &(x0, x1, fx)) in xs.clone().zip(&columns) {
@@ -328,7 +366,7 @@ impl RgbaImage {
                     *dst = channel(0, 16) | channel(1, 8) | channel(2, 0);
                 }
             }
-            return Ok(());
+            return;
         }
         if opaque {
             let columns: Vec<_> = xs
@@ -351,7 +389,7 @@ impl RgbaImage {
                     *target = rgb(source[source_x]);
                 }
             }
-            return Ok(());
+            return;
         }
         for y in ys {
             for x in xs.clone() {
@@ -369,7 +407,6 @@ impl RgbaImage {
                 *dst = channel(0, 16) | channel(1, 8) | channel(2, 0);
             }
         }
-        Ok(())
     }
     /// RGBA8 PNG with filter 0 rows and stored (uncompressed) deflate blocks, so no
     /// compression library is needed. Intended for exporting rendered research frames.
@@ -504,26 +541,13 @@ pub fn content_hash(bytes: &[u8]) -> u128 {
 /// Rejects zero dimensions and canvases exceeding [`MAX_PAYLOAD`] before allocation.
 pub fn movie_canvas(
     image: &RgbaImage,
-    [width, height]: [u32; 2],
+    size: [u32; 2],
     filter: impl Into<ScaleFilter>,
 ) -> Result<RgbaImage, FormatError> {
-    if [image.width(), image.height()] == [width, height] {
+    if [image.width(), image.height()] == size {
         return Ok(image.clone());
     }
-    let size = u64::from(width) * u64::from(height);
-    if width == 0 || height == 0 || size > MAX_PAYLOAD as u64 / 4 {
-        return Err(FormatError("invalid movie canvas dimensions"));
-    }
-    let mut target = vec![0; size as usize];
-    image.draw_filtered(&mut target, width, height, 1, filter.into())?;
-    let pixels = target
-        .into_iter()
-        .flat_map(|word| {
-            let [b, g, r, _] = word.to_le_bytes();
-            [r, g, b, 255]
-        })
-        .collect();
-    RgbaImage::new(width, height, pixels)
+    image.presentation_canvas(size, 1, filter.into())
 }
 
 #[cfg(test)]

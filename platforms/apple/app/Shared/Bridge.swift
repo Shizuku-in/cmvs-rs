@@ -85,13 +85,20 @@ final class Engine {
             throw error
         }
     }
-    func image() throws -> CGImage {
+    func image(presentation: Bool = false) throws -> CGImage {
         guard let api else { throw PlayerError("Game closed.") }
         var pixels: UnsafePointer<UInt8>?
-        try api.check(cmvs_apple_read_frame(api.handle, &pixels))
-        let data = Data(bytes: pixels!, count: size[0] * size[1] * 4)
-        guard let image = rgbaImage(data, width: size[0], height: size[1]) else {
-            throw PlayerError("Invalid logical frame.")
+        var dimensions = size
+        if presentation {
+            var output = [UInt32](repeating: 0, count: 2)
+            try api.check(cmvs_apple_read_presentation(api.handle, &pixels, &output))
+            dimensions = output.map(Int.init)
+        } else {
+            try api.check(cmvs_apple_read_frame(api.handle, &pixels))
+        }
+        let data = Data(bytes: pixels!, count: dimensions[0] * dimensions[1] * 4)
+        guard let image = rgbaImage(data, width: dimensions[0], height: dimensions[1]) else {
+            throw PlayerError("Invalid frame.")
         }
         return image
     }

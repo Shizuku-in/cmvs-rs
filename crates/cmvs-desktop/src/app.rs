@@ -1,13 +1,14 @@
 use crate::encoding::EncodingChoice;
 use crate::game_input::{GameInput, event_key};
 use crate::{DesktopInput, InputEvent, NativeBackend, TextEncoding};
+use cmvs_core::render::raster::{RgbaImage, ScaleFilter};
 use cmvs_core::{
     format::cpz::ArchiveIndex, format::cursor::CursorBitmap, format::pb3, host::input::KeyBindings,
     host::platform::DirectoryAssets, host::platform::PlatformAssets,
     host::platform::PlatformBackend, host::platform::PlatformRequest, host::platform::RenderMode,
-    profile::Registry, render::raster::RgbaImage, runtime::CommentEdit, runtime::FrameBudget,
-    runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent,
-    runtime::SaveStorage, runtime::SnapshotPolicy, runtime::load_start_with_fs,
+    profile::Registry, runtime::CommentEdit, runtime::FrameBudget, runtime::FrameDriver,
+    runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent, runtime::SaveStorage,
+    runtime::SnapshotPolicy, runtime::load_start_with_fs,
 };
 use cmvs_host::{
     GameBootstrap, KeyBindingPolicy, SessionConfig, compose_cpu_frame, default_host_fs,
@@ -46,6 +47,8 @@ Text, audio and display:
   --audio <record|native>     record is the default; native needs the audio-output feature
   --input <native|record>     native is the default; record disables live input
   --renderer <cpu|wgpu>       cpu is the default; wgpu needs the wgpu-renderer feature
+  --scale-filter <name>       game, nearest, bilinear, keys, mitchell, lanczos3,
+                              lanczos3-anti-ringing, or lanczos4
   --save-frame <new.png>      export the last fully presented frame to a new file on exit
   --image-archive <cpz> --preview-image <name>
                               preview an ASCII-named PB3 image
@@ -141,6 +144,7 @@ struct App {
     aspect_mode: std::cell::Cell<u32>,
     aspect_scaling: std::cell::Cell<bool>,
     render_mode: std::cell::Cell<RenderMode>,
+    scale_filter: Option<ScaleFilter>,
     fullscreen_monitor: std::cell::RefCell<crate::FullscreenMonitor>,
     windowed_size: std::cell::Cell<[u32; 2]>,
 }
@@ -287,8 +291,8 @@ impl App {
                 &gpu.renderer,
             )?;
         }
-        let (aspect_mode, render_mode) = if self.preview_image.is_some() {
-            (1, RenderMode::Point)
+        let (aspect_mode, filter) = if self.preview_image.is_some() {
+            (1, ScaleFilter::Nearest)
         } else {
             (
                 cmvs_core::render::viewport::presentation_mode_with_full_move(
@@ -297,7 +301,8 @@ impl App {
                     self.aspect_mode.get(),
                     self.startup.platform().window_full_move(),
                 ),
-                self.render_mode.get(),
+                self.scale_filter
+                    .unwrap_or_else(|| self.render_mode.get().filter()),
             )
         };
         if gpu.presenter.present(
@@ -305,7 +310,7 @@ impl App {
             &frame,
             [size.width, size.height],
             aspect_mode,
-            render_mode,
+            filter,
             self.preview_image.is_some(),
         )? && self.preview_image.is_none()
         {
@@ -366,7 +371,8 @@ impl App {
                 size.width,
                 size.height,
                 mode,
-                self.render_mode.get().filter(),
+                self.scale_filter
+                    .unwrap_or_else(|| self.render_mode.get().filter()),
             )?;
         }
         buffer.present().map_err(|e| e.to_string())?;
@@ -911,6 +917,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut rand_seed: Option<u32> = None;
     let mut save_frame = None;
     let mut use_gpu = false;
+    let mut scale_filter = None;
     let mut native_audio = false;
     let mut native_input = true;
     let mut record_text = false;
@@ -963,6 +970,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             "--font-face",
             "--input",
             "--renderer",
+            "--scale-filter",
             "--audio",
         ]
         .iter()
@@ -1021,6 +1029,8 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             if use_gpu && !cfg!(feature = "wgpu-renderer") {
                 return Err("--renderer wgpu requires the wgpu-renderer build feature".into());
             }
+        } else if flag == "--scale-filter" {
+            scale_filter = Some(value.into_string().map_err(|_| "invalid scale filter")?);
         } else if flag == "--audio" {
             native_audio = match value.to_str() {
                 Some("native") => true,
@@ -1184,6 +1194,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         );
     }
     let display_preferences = startup.display_preferences();
+    let scale_filter = startup.scale_filter_override(scale_filter.as_deref())?;
     let fullscreen_monitor_mode = startup.platform().fullscreen_monitor_mode();
     let canvas = startup.screen_size();
     let mut game_input = GameInput::default();
@@ -1228,6 +1239,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         aspect_mode: std::cell::Cell::new(display_preferences.aspect_mode),
         aspect_scaling: std::cell::Cell::new(display_preferences.aspect_scaling),
         render_mode: std::cell::Cell::new(RenderMode::try_from(display_preferences.render_mode)?),
+        scale_filter,
         fullscreen_monitor: std::cell::RefCell::new(crate::FullscreenMonitor::new(
             fullscreen_monitor_mode,
         )),

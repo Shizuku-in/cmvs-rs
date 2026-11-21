@@ -1,8 +1,10 @@
 use super::{Runtime, SystemOutput};
 use crate::{
+    FormatError,
     audio::AudioHost,
     message_flags::MessageFlags,
-    save_menu::profile_int,
+    raster::ScaleFilter,
+    save_menu::{profile_int, profile_string},
     settings::{Configuration, DisplayPreferences, SettingsHost},
 };
 use std::error::Error;
@@ -35,6 +37,42 @@ impl Runtime {
     }
     pub fn display_preferences(&self) -> DisplayPreferences {
         DisplayPreferences::from_ini(self.configuration.bytes())
+    }
+
+    /// Resolve the host's final presentation filter, with a launch choice taking priority.
+    pub fn scale_filter_override(
+        &self,
+        launch: Option<&str>,
+    ) -> Result<Option<ScaleFilter>, FormatError> {
+        let configured;
+        let name = match launch {
+            Some(name) => name.as_bytes(),
+            None => {
+                configured = profile_string(
+                    self.configuration.bytes(),
+                    "CMVS_RS_DISPLAY",
+                    "SCALE_FILTER",
+                    b"game",
+                    64,
+                );
+                &configured
+            }
+        };
+        match name {
+            b"game" => Ok(None),
+            b"nearest" => Ok(Some(ScaleFilter::Nearest)),
+            b"bilinear" => Ok(Some(ScaleFilter::Bilinear)),
+            b"keys" => Ok(Some(ScaleFilter::Keys)),
+            b"mitchell" => Ok(Some(ScaleFilter::Mitchell)),
+            b"lanczos3" => Ok(Some(ScaleFilter::Lanczos3 {
+                anti_ringing: false,
+            })),
+            b"lanczos3-anti-ringing" => Ok(Some(ScaleFilter::Lanczos3 { anti_ringing: true })),
+            b"lanczos4" => Ok(Some(ScaleFilter::Lanczos4)),
+            _ => Err(FormatError(
+                "SCALE_FILTER must be game, nearest, bilinear, keys, mitchell, lanczos3, lanczos3-anti-ringing, or lanczos4",
+            )),
+        }
     }
 
     /// Explicit graceful-exit save to the locked user directory. Each file replacement

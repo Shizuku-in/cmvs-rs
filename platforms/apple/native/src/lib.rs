@@ -37,6 +37,7 @@ struct Config {
     native_audio: bool,
     metal: bool,
     aspect: Option<u32>,
+    scale_filter: Option<String>,
     skip_auto_resume: bool,
     continue_without_snapshot: bool,
     block_presumed: bool,
@@ -94,6 +95,9 @@ impl Player {
                 ..Default::default()
             },
         )?;
+        let scale_filter = session
+            .runtime
+            .scale_filter_override(c.scale_filter.as_deref())?;
         #[cfg(target_os = "ios")]
         let mut output_audio = None;
         let audio = if c.native_audio {
@@ -115,6 +119,7 @@ impl Player {
         let mut backend = Backend {
             display: session.runtime.display_preferences(),
             aspect_override: c.aspect.filter(|m| *m <= 3),
+            scale_filter,
             size,
             output: size,
             windowed: size,
@@ -260,6 +265,7 @@ impl Player {
                         self.backend.output,
                         self.backend.mode(),
                         linear,
+                        self.backend.scale_filter.unwrap_or_else(|| linear.into()),
                     )?;
                     if s.runtime.capture_due() {
                         s.runtime.supply_capture(frame.read()?)?;

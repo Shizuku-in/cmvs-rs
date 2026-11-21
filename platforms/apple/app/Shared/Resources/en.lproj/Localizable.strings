@@ -26,6 +26,11 @@
 "Automatic" = "Automatic";
 "Renderer" = "Renderer";
 "Scaling" = "Scaling";
+"Scale Filter" = "Scale Filter";
+"Nearest Neighbor" = "Nearest Neighbor";
+"Bilinear" = "Bilinear";
+"Keys Bicubic" = "Keys Bicubic";
+"Lanczos3 with Anti-Ringing" = "Lanczos3 with Anti-Ringing";
 "Game Preference" = "Game Preference";
 "Original Size" = "Original Size";
 "Fit" = "Fit";
@@ -118,7 +123,7 @@
 "No readable font faces." = "No readable font faces.";
 "Invalid engine response." = "Invalid engine response.";
 "Game closed." = "Game closed.";
-"Invalid logical frame." = "Invalid logical frame.";
+"Invalid frame." = "Invalid frame.";
 "Cannot create screenshot." = "Cannot create screenshot.";
 "Cannot save screenshot." = "Cannot save screenshot.";
 "Engine error: %@" = "Engine error: %@";

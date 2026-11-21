@@ -41,6 +41,7 @@ const SYSTEM_FONT: &str = "sa0:data/font/pvf/jpn0.pvf";
 /// The system's simplified Chinese gothic face (TrueType), for GBK and UTF-8 games.
 const CHINESE_FONT: &str = "sa0:data/font/pvf/cn0.pvf";
 pub(crate) const SCREEN: [u32; 2] = [960, 544];
+const SCREEN_RECT: [f32; 4] = [0.0, 0.0, SCREEN[0] as f32, SCREEN[1] as f32];
 /// VM budget per loop iteration before polling input and the system again.
 const BUDGET: Duration = Duration::from_millis(8);
 const IDLE: Duration = Duration::from_millis(16);
@@ -176,6 +177,7 @@ fn run(
             ..SessionConfig::default()
         },
     )?;
+    let scale_filter = session.runtime.scale_filter_override(None)?;
     let (audio, audio_thread) = audio::start(root)?;
     let audio_control = audio.host_control();
     session.runtime.set_audio_backend(Box::new(audio))?;
@@ -265,14 +267,18 @@ fn run(
                     .finish_frame(&mut session.runtime, millis(now.duration_since(last_frame)))?;
                 last_frame = now;
                 let linear = backend.display.render_mode == 1;
+                let scale_override = scale_filter.filter(|_| [view.width, view.height] != size);
+                let filter = scale_override.unwrap_or_else(|| linear.into());
                 let cursor = controls.cursor_visible().then(|| {
                     let at = view.to_target(controls.pointer());
                     [at[0] as f32, at[1] as f32]
                 });
-                match &mut backend.gpu {
-                    Some(gpu) if session.runtime.movie_frame().is_none() => {
+                match (&mut backend.gpu, filter.linear_sampler()) {
+                    (Some(gpu), Some(sampler_linear))
+                        if session.runtime.movie_frame().is_none() =>
+                    {
                         render_gpu(&mut session, gpu)?;
-                        gpu.present(view_rect(view), linear, cursor)?;
+                        gpu.present(view_rect(view), sampler_linear, cursor)?;
                         if session.runtime.capture_due()
                             && let Some(frame) = gpu.read()
                         {
@@ -280,8 +286,24 @@ fn run(
                         }
                         backend.frame = None;
                     }
-                    gpu => {
-                        let (mut frame, rect) = if let Some(image) = session.runtime.movie_frame() {
+                    (gpu, None) => {
+                        let frame = session.compose_cpu_frame(linear, false)?;
+                        let display = frame.presentation_canvas(SCREEN, mode, filter)?;
+                        window.present(display.pixels(), SCREEN, SCREEN_RECT, false, cursor)?;
+                        if let Some(gpu) = gpu {
+                            gpu.forget_presented();
+                        }
+                        if session.runtime.capture_due() {
+                            session.runtime.supply_capture(frame.clone())?;
+                        }
+                        backend.frame = Some(ConsoleFrame::Canvas(frame));
+                    }
+                    (gpu, Some(sampler_linear)) => {
+                        let movie = session
+                            .runtime
+                            .movie_frame()
+                            .filter(|_| scale_override.is_none());
+                        let (mut frame, rect) = if let Some(image) = movie {
                             let rect =
                                 movie_view_rect(view, size, [image.width(), image.height()])?;
                             (
@@ -298,7 +320,7 @@ fn run(
                         let image = frame.image();
                         let dimensions = [image.width(), image.height()];
                         if let Err(error) =
-                            window.present(image.pixels(), dimensions, rect, linear, cursor)
+                            window.present(image.pixels(), dimensions, rect, sampler_linear, cursor)
                         {
                             if !matches!(frame, ConsoleFrame::Movie { .. }) || dimensions == size {
                                 return Err(error.into());
@@ -309,7 +331,7 @@ fn run(
                                 canvas.pixels(),
                                 size,
                                 view_rect(view),
-                                linear,
+                                sampler_linear,
                                 cursor,
                             )?;
                             frame = ConsoleFrame::Canvas(canvas);
@@ -334,8 +356,7 @@ fn run(
 
 /// Shows a full-screen host page.
 fn show(window: &mut sys::VitaWindow, image: &RgbaImage) -> Result<()> {
-    let rect = [0.0, 0.0, SCREEN[0] as f32, SCREEN[1] as f32];
-    Ok(window.present(image.pixels(), SCREEN, rect, false, None)?)
+    Ok(window.present(image.pixels(), SCREEN, SCREEN_RECT, false, None)?)
 }
 
 /// Runs the selection screen; `None` when the player closes it.

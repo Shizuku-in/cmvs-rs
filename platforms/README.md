@@ -15,3 +15,16 @@ Run commands from the repository root unless a different directory is listed.
 - The Apple launcher imports fonts at runtime. Sign the device IPA before installation.
 - Android: run from `platforms/android` with the NDK and `cargo-ndk`. Only `x86_64` is built by default; pass `-PrustAbis=arm64-v8a,x86_64` for devices.
 - Switch and PS Vita scripts run inside the platform's Docker image; see their READMEs.
+
+## Scale filters
+
+Desktop accepts `--scale-filter <name>`. Android, Apple, and Web offer the same filters at launch. Choices are `nearest`, `bilinear`, `keys`, `mitchell`, `lanczos3`, `lanczos3-anti-ringing`, and `lanczos4`. The selection applies to screen presentation. Screenshots use the logical frame.
+
+All players also read this setting from the user's `cmvs.cfg` or `cvns.cfg`. Switch and PS Vita read it from the game's `users/<game-id>/` directory and use software for filters beyond nearest and bilinear.
+
+```ini
+[CMVS_RS_DISPLAY]
+SCALE_FILTER=mitchell
+```
+
+Launch choices take priority. `game` follows the original in-game draw mode.

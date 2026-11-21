@@ -7,10 +7,12 @@ import android.content.SharedPreferences
 import android.os.Bundle
 import android.text.InputType
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import java.io.File
 import java.io.IOException
@@ -28,6 +30,7 @@ class LauncherActivity : Activity() {
     private lateinit var fontLabel: TextView
     private lateinit var status: TextView
     private lateinit var face: EditText
+    private lateinit var scaleFilter: Spinner
     private lateinit var gameButton: Button
     private lateinit var fontButton: Button
     private lateinit var startButton: Button
@@ -59,6 +62,15 @@ class LauncherActivity : Activity() {
         face.inputType = InputType.TYPE_CLASS_NUMBER
         face.setText(settings.getInt("face", 0).toString())
         layout.addView(face)
+        val filterLabel = text(layout, "缩放滤镜")
+        scaleFilter = Spinner(this)
+        scaleFilter.id = View.generateViewId()
+        filterLabel.labelFor = scaleFilter.id
+        scaleFilter.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
+            filters.map { it.second })
+        val savedFilter = settings.getString("scaleFilter", "")
+        scaleFilter.setSelection(filters.indexOfFirst { it.first == savedFilter }.coerceAtLeast(0))
+        layout.addView(scaleFilter)
         startButton = button(layout, "启动") { launch() }
         cancelButton = button(layout, "取消导入") { cancelled.set(true) }
         status = text(layout, "")
@@ -89,6 +101,7 @@ class LauncherActivity : Activity() {
         gameButton.isEnabled = !busy
         fontButton.isEnabled = !busy
         face.isEnabled = !busy
+        scaleFilter.isEnabled = !busy
         startButton.isEnabled = !busy && selected("game").isDirectory && selected("font").isFile
         cancelButton.visibility = if (busy) View.VISIBLE else View.GONE
     }
@@ -146,8 +159,9 @@ class LauncherActivity : Activity() {
         try {
             val index = face.text.toString().toInt()
             if (index !in 0..1024) throw IllegalArgumentException()
-            settings.edit().putInt("face", index).apply()
-            val config = "${settings.getString("game", "")}\n${settings.getString("font", "")}\n$index\n"
+            val filter = filters[scaleFilter.selectedItemPosition].first
+            settings.edit().putInt("face", index).putString("scaleFilter", filter).apply()
+            val config = "${settings.getString("game", "")}\n${settings.getString("font", "")}\n$index\n$filter\n"
             val temporary = File(filesDir, "launch.tmp")
             Files.write(temporary.toPath(), config.toByteArray(StandardCharsets.UTF_8))
             Files.move(temporary.toPath(), File(filesDir, "launch.cfg").toPath(), StandardCopyOption.REPLACE_EXISTING)
@@ -194,5 +208,15 @@ class LauncherActivity : Activity() {
     private companion object {
         private const val GAME = 1
         private const val FONT = 2
+        private val filters = listOf(
+            "" to "默认",
+            "nearest" to "最近邻",
+            "bilinear" to "双线性",
+            "keys" to "Keys 双三次",
+            "mitchell" to "Mitchell",
+            "lanczos3" to "Lanczos3",
+            "lanczos3-anti-ringing" to "Lanczos3（抗振铃）",
+            "lanczos4" to "Lanczos4",
+        )
     }
 }

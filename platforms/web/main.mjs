@@ -2,6 +2,7 @@ import { AudioDevice } from './audio-device.mjs';
 const $ = id => document.getElementById(id);
 let canvas = $('canvas'), context, logicalSize = [canvas.width, canvas.height];
 let worker, timer, saveKey, audio, audioTimer, commentInput, commentObserver, launch=0;
+let outputObserver;
 const physical = new Map();
 const keyCodes = {Backspace:20,Tab:21,Enter:22,NumpadEnter:22,ShiftLeft:23,ShiftRight:23,ControlLeft:24,ControlRight:24,Escape:25,Space:26,PageUp:27,PageDown:28,End:29,Home:30,Insert:31,Delete:32,ArrowUp:33,ArrowDown:34,ArrowLeft:35,ArrowRight:36,NumpadMultiply:47,NumpadAdd:48,NumpadSubtract:49,NumpadDecimal:50,NumpadDivide:51,Semicolon:112,Equal:113,Comma:114,Minus:115,Period:116,Slash:117,Backquote:118,BracketLeft:119,Backslash:120,BracketRight:121,Quote:122};
 for (let i=0;i<10;i++) { keyCodes['Numpad'+i]=37+i; keyCodes['Digit'+i]=76+i; }
@@ -12,6 +13,7 @@ function status(text) { $('status').textContent = text; }
 function stop(text) {
   launch++;
   closeComment();
+  outputObserver?.disconnect(); outputObserver = undefined;
   clearTimeout(timer); clearInterval(audioTimer);
   if(audio) {void audio.close(); audio=undefined;}
   worker?.terminate(); worker = undefined; physical.clear();
@@ -53,12 +55,24 @@ $('setup').onsubmit = async event => {
     else if (data.type === 'ready') {
       logicalSize=[data.width,data.height];
       if(renderer==='cpu') {canvas.width = data.width; canvas.height = data.height;}
+      canvas.classList.toggle('filtered', data.scaleFilter);
+      if (data.scaleFilter) {
+        canvas.style.setProperty('--canvas-width', `${data.width}px`);
+        canvas.style.setProperty('--canvas-ratio', data.width / data.height);
+        outputObserver = new ResizeObserver(resizeOutput);
+        outputObserver.observe(canvas);
+        resizeOutput();
+      }
       saveKey = data.saveKey;
       $('export').disabled = false; canvas.focus();
       status(`运行中 · ${renderer==='webgpu'?'WebGPU':'CPU'} · 存档自动保存在当前浏览器`); send({type:'tick'});
     } else if (data.type === 'frame') {
-      canvas.style.imageRendering = data.renderMode === 1 ? 'auto' : 'pixelated';
-      if(data.pixels) context.putImageData(new ImageData(new Uint8ClampedArray(data.pixels.buffer),data.width,data.height),0,0);
+      canvas.style.imageRendering = outputObserver || data.renderMode === 1 ? 'auto' : 'pixelated';
+      if (data.pixels) {
+        if (canvas.width !== data.width) canvas.width = data.width;
+        if (canvas.height !== data.height) canvas.height = data.height;
+        context.putImageData(new ImageData(new Uint8ClampedArray(data.pixels.buffer),data.width,data.height),0,0);
+      }
     } else if (data.type === 'comment-input') editComment(data.id, data.initial, data.rect, data.maxChars);
     else if (data.type === 'next') timer = setTimeout(() => send({type:'tick'}),data.delay);
     else if (data.type === 'stopped') stop('已停止，存档和设置已保存。');
@@ -72,7 +86,7 @@ $('setup').onsubmit = async event => {
   };
   try {
     const offscreen=renderer==='webgpu'?canvas.transferControlToOffscreen():undefined;
-    send({type:'start',canvas:offscreen,files:[...$('game').files].map(file=>({path:file.webkitRelativePath.split('/').slice(1).join('/'),file})),font:$('font').files[0],face:Number($('face').value),profile:$('profile').value.trim(),skip:$('skip').checked,backup:$('backup').files[0]},offscreen?[offscreen]:[]);
+    send({type:'start',canvas:offscreen,files:[...$('game').files].map(file=>({path:file.webkitRelativePath.split('/').slice(1).join('/'),file})),font:$('font').files[0],face:Number($('face').value),profile:$('profile').value.trim(),skip:$('skip').checked,backup:$('backup').files[0],scaleFilter:$('scale-filter').value},offscreen?[offscreen]:[]);
   } catch(error) {stop('启动失败：'+error);}
 };
 $('stop').onclick = () => {
@@ -80,7 +94,15 @@ $('stop').onclick = () => {
   clearTimeout(timer); $('stop').disabled=true; send({type:'stop'});
 };
 $('export').onclick = () => send({type:'export'});
-$('fullscreen').onclick = () => $('stage').requestFullscreen().catch(error => status(String(error)));
+$('fullscreen').onclick = () => $('stage').requestFullscreen()
+  .then(() => canvas.focus({preventScroll:true}))
+  .catch(error => status(String(error)));
+function resizeOutput() {
+  if (!outputObserver) return;
+  const bounds = canvas.getBoundingClientRect();
+  send({type:'resize',width:Math.round(bounds.width*devicePixelRatio),height:Math.round(bounds.height*devicePixelRatio)});
+}
+window.addEventListener('resize', resizeOutput);
 function point(event) {
   const bounds = canvas.getBoundingClientRect();
   return [Math.floor((event.clientX-bounds.left)*logicalSize[0]/bounds.width),Math.floor((event.clientY-bounds.top)*logicalSize[1]/bounds.height)];

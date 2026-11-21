@@ -21,6 +21,8 @@ enum FastForwardKey: UInt32 {
     let accessibility = GameAccessibility()
     let cpu = CALayer()
     private(set) var canvasFrame = CGRect.zero
+    @ObservationIgnored private var viewportFrame = CGRect.zero
+    @ObservationIgnored private var scaledCpuCanvas = false
     private var clock: CADisplayLink?
     private var previous: CFTimeInterval?
     private var frames = 0
@@ -112,6 +114,7 @@ enum FastForwardKey: UInt32 {
                     let info = try result.get()
                     self.encoding = info["encoding"] as? String ?? self.encoding
                     self.logicalSize = info["size"] as? [Int] ?? self.logicalSize
+                    self.scaledCpuCanvas = info["scaledCpuCanvas"] as? Bool == true
                     self.ready = true
                     self.display(info)
                     self.syncActivity()
@@ -131,21 +134,25 @@ enum FastForwardKey: UInt32 {
         invoke { cmvs_apple_resize($0, width, height, state.windowed, state.resizable, &rect) }
         let frame = CGRect(x: CGFloat(rect[0]) / scale, y: CGFloat(rect[1]) / scale,
                            width: CGFloat(rect[2]) / scale, height: CGFloat(rect[3]) / scale)
+        viewportFrame = frame
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        cpu.frame = frame
+        cpu.contentsScale = scale
+        cpu.frame = scaledCpuCanvas
+            ? CGRect(x: 0, y: 0, width: CGFloat(width) / scale, height: CGFloat(height) / scale)
+            : frame
         CATransaction.commit()
         if canvasFrame != frame {
             Task { @MainActor [weak self] in
-                guard let self, !self.closed, self.canvasFrame != self.cpu.frame else { return }
-                self.canvasFrame = self.cpu.frame
+                guard let self, !self.closed, self.canvasFrame != self.viewportFrame else { return }
+                self.canvasFrame = self.viewportFrame
             }
         }
     }
     func canvasRect(_ rect: [Int]) -> CGRect {
-        // Read the @Observable trigger while keeping synchronous reads aligned with cpu.frame.
+        // Read the @Observable trigger while using the current input viewport.
         _ = canvasFrame
-        let canvas = cpu.frame
+        let canvas = viewportFrame
         guard rect.count == 4, logicalSize.count == 2, logicalSize[0] > 0, logicalSize[1] > 0 else { return .zero }
         let sx = canvas.width / CGFloat(logicalSize[0])
         let sy = canvas.height / CGFloat(logicalSize[1])
@@ -283,7 +290,7 @@ enum FastForwardKey: UInt32 {
             }
             var events = [[String: Any]]()
             while cmvs_apple_next_event(api.handle) == 1 { events.append(try api.object()) }
-            let image = status == 1 && !game.options.metal ? try engine.image() : nil
+            let image = status == 1 && !game.options.metal ? try engine.image(presentation: scaledCpuCanvas) : nil
             return (status, image, events)
         }
     }
@@ -338,7 +345,7 @@ enum FastForwardKey: UInt32 {
                 }
             }
             if result.0 == 1 && !paused && !controls {
-                accessibility.update(at: link.timestamp, engine: engine, cpuFrame: result.1)
+                accessibility.update(at: link.timestamp, engine: engine, cpuFrame: scaledCpuCanvas ? nil : result.1)
             }
             if smokeFrames > 0 && frames == smokeFrames {
                 if let path = ProcessInfo.processInfo.environment["CMVS_SMOKE_OUTPUT"] {

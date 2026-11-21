@@ -82,6 +82,10 @@ canvas {
   touch-action: none;
   image-rendering: pixelated;
 }
+canvas.filtered {
+  width: min(100%, var(--canvas-width), calc(85vh * var(--canvas-ratio)));
+  aspect-ratio: var(--canvas-ratio);
+}
 #comment-input {
   position: absolute;
   box-sizing: border-box;
@@ -97,6 +101,7 @@ canvas {
 }
 #stage:fullscreen { border: 0; background: #000; }
 #stage:fullscreen canvas { max-width: 100vw; max-height: 100vh; }
+#stage:fullscreen canvas.filtered { width: min(100vw, calc(100vh * var(--canvas-ratio))); }
 #status {
   margin: 12px 0 0;
   white-space: pre-wrap;
@@ -125,6 +130,16 @@ canvas {
 </form>
 <details><summary>启动选项与当前限制</summary>
 <label>渲染后端<select id="renderer"><option value="cpu">CPU（软件渲染）</option><option value="webgpu">WebGPU</option></select></label>
+<label>缩放滤镜<select id="scale-filter">
+  <option value="">默认</option>
+  <option value="nearest">最近邻</option>
+  <option value="bilinear">双线性</option>
+  <option value="keys">Keys 双三次</option>
+  <option value="mitchell">Mitchell</option>
+  <option value="lanczos3">Lanczos3</option>
+  <option value="lanczos3-anti-ringing">Lanczos3（抗振铃）</option>
+  <option value="lanczos4">Lanczos4</option>
+</select></label>
 <label>导入存档备份（可选，将替换本游戏的浏览器存档）<input id="backup" type="file" accept=".json"></label>
 <label>引擎档案（留空自动识别）<input id="profile" type="text" placeholder="自动识别"></label>
 <label class="check"><input id="skip" type="checkbox">跳过自动续读（仅支持已登记游戏）</label>

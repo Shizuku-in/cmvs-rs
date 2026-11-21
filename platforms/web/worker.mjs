@@ -60,12 +60,12 @@ async function start(message) {
     });
   }
   files.restore(saved);
-  runtime = new WebRuntime(new Uint8Array(await message.font.arrayBuffer()), message.face, message.profile, message.skip);
+  runtime = new WebRuntime(new Uint8Array(await message.font.arrayBuffer()), message.face, message.profile, message.skip, message.scaleFilter || undefined);
   runtime.set_random_seed(Date.now() >>> 0);
   useGpu = Boolean(message.canvas);
   if (useGpu) await runtime.enable_gpu(message.canvas);
   lastFrame = performance.now();
-  postMessage({ type: 'ready', width: runtime.width(), height: runtime.height(), saveKey });
+  postMessage({ type: 'ready', width: runtime.width(), height: runtime.height(), scaleFilter: runtime.uses_custom_scale_filter(), saveKey });
 }
 async function tick() {
   if (!runtime || busy) return;
@@ -82,8 +82,9 @@ async function tick() {
     flushAudio();
     if (result === 1) {
       lastFrame = now;
-      const pixels = useGpu ? undefined : runtime.pixels();
-      postMessage({ type: 'frame', width: runtime.width(), height: runtime.height(), pixels, renderMode: runtime.render_mode() }, pixels ? [pixels.buffer] : []);
+      const pixels = useGpu ? undefined : runtime.presented_pixels();
+      const [width,height] = runtime.presentation_size();
+      postMessage({ type: 'frame', width, height, pixels, renderMode: runtime.render_mode() }, pixels ? [pixels.buffer] : []);
     }
     const comment = runtime.take_comment_input();
     if (comment) {
@@ -100,6 +101,7 @@ async function handleMessage(data) {
   try {
     if (data.type === 'start') await start(data);
     else if (data.type === 'tick') await tick();
+    else if (data.type === 'resize') runtime?.resize_output(data.width, data.height);
     else if (data.type === 'audio-clock') audio.report(data.clock);
     else if (data.type === 'comment-input') runtime?.submit_comment_input(data.id, data.text ?? undefined);
     else if (data.type === 'input') {

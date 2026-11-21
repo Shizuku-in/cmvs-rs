@@ -5,7 +5,7 @@ use cmvs_core::{
         platform::*,
         settings::{DEFAULT_FONT_FACE, DisplayPreferences, font_face_for_encoding},
     },
-    render::raster::RgbaImage,
+    render::raster::{RgbaImage, ScaleFilter},
 };
 use cmvs_font::text_codec;
 use cmvs_host::CommentInput;
@@ -15,6 +15,7 @@ use std::collections::VecDeque;
 pub struct Backend {
     pub display: DisplayPreferences,
     pub aspect_override: Option<u32>,
+    pub scale_filter: Option<ScaleFilter>,
     pub size: [u32; 2],
     pub output: [u32; 2],
     pub windowed: [u32; 2],
@@ -40,6 +41,12 @@ impl Backend {
                 self.full_move,
             )
         })
+    }
+    pub fn layer_linear(&self) -> bool {
+        self.scale_filter
+            .map_or(self.display.render_mode == 1, |filter| {
+                filter == ScaleFilter::Bilinear
+            })
     }
 }
 impl PlatformBackend for Backend {
@@ -152,7 +159,7 @@ impl PlatformBackend for Backend {
             PlatformRequest::WindowSize(size) if *size == self.size => return Ok(()),
             _ => return Err("unsupported Apple display request".into()),
         }
-        self.events.push_back(json!({"kind":"display","fullscreen":self.display.fullscreen,"mode":self.mode(),"linear":self.display.render_mode==1}));
+        self.events.push_back(json!({"kind":"display","fullscreen":self.display.fullscreen,"mode":self.mode(),"linear":self.layer_linear()}));
         Ok(())
     }
 }

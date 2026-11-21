@@ -172,6 +172,7 @@ fn run(
             ..SessionConfig::default()
         },
     )?;
+    let scale_filter = session.runtime.scale_filter_override(None)?;
     let (audio, audio_thread) = audio::start(root)?;
     let audio_control = audio.host_control();
     session.runtime.set_audio_backend(Box::new(audio))?;
@@ -275,23 +276,37 @@ fn run(
                     .finish_frame(&mut session.runtime, millis(now.duration_since(last_frame)))?;
                 last_frame = now;
                 let linear = backend.display.render_mode == 1;
-                if let Some(gpu) = &mut backend.gpu {
+                let filter = scale_filter
+                    .filter(|_| [view.width, view.height] != size)
+                    .unwrap_or_else(|| linear.into());
+                let cursor = controls
+                    .cursor_visible()
+                    .then(|| view.to_target(controls.pointer()));
+                if let (Some(gpu), Some(sampler_linear)) =
+                    (&mut backend.gpu, filter.linear_sampler())
+                {
                     render_gpu(&mut session, gpu, linear)?;
-                    let cursor = controls
-                        .cursor_visible()
-                        .then(|| view.to_target(controls.pointer()));
-                    gpu.present(mode, linear, cursor)?;
+                    gpu.present(mode, sampler_linear, cursor)?;
                     if session.runtime.capture_due() {
                         session.runtime.supply_capture(gpu.read()?)?;
                     }
+                    backend.frame = None;
                 } else {
                     let frame = session.compose_cpu_frame(linear, false)?;
-                    surface.fill(0);
-                    frame.draw_scaled(&mut surface, SCREEN[0], SCREEN[1], mode, linear)?;
-                    if controls.cursor_visible() {
-                        draw_cursor(&mut surface, view, controls.pointer());
+                    if let Some(gpu) = &mut backend.gpu {
+                        // The deko3d swapchain owns the window, so upload the CPU-scaled canvas.
+                        let display = frame.presentation_canvas(SCREEN, mode, filter)?;
+                        gpu.render_image(&display, SCREEN, false)?;
+                        gpu.present(1, false, cursor)?;
+                        gpu.forget_presented();
+                    } else {
+                        surface.fill(0);
+                        frame.draw_filtered(&mut surface, SCREEN[0], SCREEN[1], mode, filter)?;
+                        if cursor.is_some() {
+                            draw_cursor(&mut surface, view, controls.pointer());
+                        }
+                        window.present(&surface)?;
                     }
-                    window.present(&surface)?;
                     if session.runtime.capture_due() {
                         session.runtime.supply_capture(frame.clone())?;
                     }

@@ -60,6 +60,8 @@ int32_t cmvs_apple_restore_saves(CmvsApple *, const char *game, const char *prof
 int32_t cmvs_apple_comment_bytes(CmvsApple *, const char *text);
 int32_t cmvs_apple_comment_valid(CmvsApple *, const char *text, uint32_t chars, uint32_t bytes);
 int32_t cmvs_apple_read_frame(CmvsApple *, const uint8_t **pixels);
+/* Full-size software presentation when a scale filter override is active. Same pointer lifetime. */
+int32_t cmvs_apple_read_presentation(CmvsApple *, const uint8_t **pixels, uint32_t size[2]);
 #ifdef __cplusplus
 }
 #endif

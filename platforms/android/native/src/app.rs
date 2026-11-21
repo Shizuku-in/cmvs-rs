@@ -6,9 +6,9 @@ use android_activity::{
 };
 use cmvs_audio::{HostAudioControl, NativeAudio};
 use cmvs_core::{
-    host::filesystem::resolve_under, host::input::KeyBindings, runtime::FrameBudget,
-    runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent,
-    runtime::SaveStorage,
+    host::filesystem::resolve_under, host::input::KeyBindings, render::raster::ScaleFilter,
+    runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime,
+    runtime::RuntimeEvent, runtime::SaveStorage,
 };
 use cmvs_font::font::FontRenderer;
 use cmvs_host::{
@@ -44,6 +44,7 @@ struct Player {
     graphics: Option<Graphics>,
     startup: Runtime,
     backend: MobileBackend,
+    scale_filter: Option<ScaleFilter>,
     touch: TouchInput,
     bindings: KeyBindings,
     resumed: bool,
@@ -163,7 +164,8 @@ impl Player {
             frame,
             graphics.window.dimensions(),
             self.backend.mode(),
-            self.backend.display.render_mode == 1,
+            self.scale_filter
+                .unwrap_or_else(|| (self.backend.display.render_mode == 1).into()),
             false,
         )? {
             self.backend.frame = Some(frame.clone());
@@ -350,6 +352,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         config.next().ok_or("no font selected")?.as_bytes(),
     )?;
     let face = config.next().ok_or("no font collection index")?.parse()?;
+    let scale_filter = config.next().filter(|s| !s.is_empty());
     let fs = Arc::new(AndroidHostFs);
     let bootstrap = GameBootstrap::load(fs, &root, None, EncodingPolicy::AutoDefaultShiftJis)?;
     let record = bootstrap
@@ -377,6 +380,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
             ..SessionConfig::default()
         },
     )?;
+    let scale_filter = startup.scale_filter_override(scale_filter)?;
     let audio = NativeAudio::new(&root)?;
     let audio_control = audio.host_control();
     audio_control.set_active(false);
@@ -397,6 +401,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         graphics: None,
         startup,
         backend,
+        scale_filter,
         touch: TouchInput::default(),
         bindings,
         resumed: false,

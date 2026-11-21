@@ -26,6 +26,11 @@
 "Automatic" = "自动";
 "Renderer" = "渲染器";
 "Scaling" = "画面缩放";
+"Scale Filter" = "缩放滤镜";
+"Nearest Neighbor" = "最近邻";
+"Bilinear" = "双线性";
+"Keys Bicubic" = "Keys 双三次";
+"Lanczos3 with Anti-Ringing" = "Lanczos3（抗振铃）";
 "Game Preference" = "遵循游戏设置";
 "Original Size" = "原始尺寸";
 "Fit" = "完整显示";
@@ -118,7 +123,7 @@
 "No readable font faces." = "此文件中没有可读取的字体。";
 "Invalid engine response." = "引擎响应无效。";
 "Game closed." = "游戏已关闭。";
-"Invalid logical frame." = "游戏画面数据无效。";
+"Invalid frame." = "游戏画面数据无效。";
 "Cannot create screenshot." = "无法创建截图文件。";
 "Cannot save screenshot." = "无法保存截图。";
 "Engine error: %@" = "引擎错误：%@";

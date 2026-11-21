@@ -1,5 +1,5 @@
 use crate::Result;
-use cmvs_core::render::raster::RgbaImage;
+use cmvs_core::render::raster::{RgbaImage, ScaleFilter};
 use cmvs_host::{GpuTarget, HostSession};
 use cmvs_wgpu::{GpuFrame, Presenter, Renderer};
 
@@ -44,6 +44,7 @@ impl Metal {
         size: [u32; 2],
         mode: u32,
         linear: bool,
+        filter: ScaleFilter,
     ) -> Result<Frame> {
         let frame = session.with_gpu_target(linear, |target| match target {
             GpuTarget::Movie {
@@ -57,7 +58,7 @@ impl Metal {
             self.presenter = (self.rebuild)(&self.renderer)?;
         }
         self.presenter
-            .present(&self.renderer, &frame, size, mode, linear, false)?;
+            .present(&self.renderer, &frame, size, mode, filter, false)?;
         Ok(Frame::Metal(frame))
     }
 }

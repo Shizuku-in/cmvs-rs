@@ -1,5 +1,7 @@
 //! Worker-owned WebGPU surface; only explicit device screenshots read pixels back.
-use cmvs_core::{host::settings::DisplayPreferences, runtime::Runtime};
+use cmvs_core::{
+    host::settings::DisplayPreferences, render::raster::ScaleFilter, runtime::Runtime,
+};
 use cmvs_font::font::FontRenderer;
 use cmvs_host::{GpuTarget, with_gpu_target};
 use cmvs_wgpu::{GpuFrame, Presenter, Renderer, wgpu};
@@ -40,11 +42,16 @@ impl BrowserGpu {
             capture: None,
         })
     }
+    pub fn texture_limit(&self) -> u32 {
+        self.renderer.device.limits().max_texture_dimension_2d
+    }
     pub fn draw(
         &mut self,
         startup: &Runtime,
         font: &mut FontRenderer,
         display: DisplayPreferences,
+        output: [u32; 2],
+        filter: Option<ScaleFilter>,
     ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         self.renderer.check()?;
         if self.presenter.lost {
@@ -53,7 +60,6 @@ impl BrowserGpu {
                 .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(self.canvas.clone()))?;
             self.presenter = Presenter::new(surface, &self.adapter, &self.renderer)?;
         }
-        let size = startup.screen_size();
         let linear = display.render_mode == 1;
         let frame = with_gpu_target(startup, Some(font), linear, |target| match target {
             GpuTarget::Movie {
@@ -63,14 +69,30 @@ impl BrowserGpu {
             } => self.renderer.render_image(image, size, render_mode),
             GpuTarget::Scene(scene) => self.renderer.render(&scene),
         })?;
-        let mode = cmvs_core::render::viewport::presentation_mode(
-            display.fullscreen,
-            display.aspect_scaling,
-            display.aspect_mode,
-        );
-        let presented =
-            self.presenter
-                .present(&self.renderer, &frame, size, mode, linear, false)?;
+        // The browser lays out the canvas and maps input over its full extent.
+        let mode = if filter.is_some() {
+            3
+        } else {
+            cmvs_core::render::viewport::presentation_mode(
+                display.fullscreen,
+                display.aspect_scaling,
+                display.aspect_mode,
+            )
+        };
+        if self.canvas.width() != output[0] {
+            self.canvas.set_width(output[0]);
+        }
+        if self.canvas.height() != output[1] {
+            self.canvas.set_height(output[1]);
+        }
+        let presented = self.presenter.present(
+            &self.renderer,
+            &frame,
+            output,
+            mode,
+            filter.unwrap_or_else(|| linear.into()),
+            false,
+        )?;
         if presented {
             self.capture = None;
             self.frame = Some(frame);

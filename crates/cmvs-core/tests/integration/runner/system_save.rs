@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
-    use cmvs_core::host::settings::DisplayPreferences;
+    use cmvs_core::{host::settings::DisplayPreferences, render::raster::ScaleFilter};
     let mut code = vec![];
     for (op, value) in [
         (0x22e1, 7),
@@ -18,13 +18,38 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     }
     code.extend(0x2000u16.to_le_bytes());
     let root = Root::new("preferences", &code, b"");
-    let original = b"[SOUND_INFO]\nINACTIVE_SOUND_PLAY=0\n[MESSAGE_INFO]\nTEXT_WAIT=2\nTEXT_BOLD=0\nTEXT_REVISION_ALPHA=1\n[FUTURE]\nUNKNOWN=\x82\xa0\n";
+    let original = b"[SOUND_INFO]\nINACTIVE_SOUND_PLAY=0\n[MESSAGE_INFO]\nTEXT_WAIT=2\nTEXT_BOLD=0\nTEXT_REVISION_ALPHA=1\n[CMVS_RS_DISPLAY]\nSCALE_FILTER=lanczos4\n[FUTURE]\nUNKNOWN=\x82\xa0\n";
     fs::write(root.0.join("cmvs.cfg"), original).unwrap();
     let directory = crate::support::temp_dir::TempPath::in_target_tmp("preferences");
     let script = root.script();
     let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     assert!(!run.save_preferences(DisplayPreferences::default()).unwrap());
     run.set_user_data_directory(&directory).unwrap();
+    assert_eq!(
+        run.scale_filter_override(None).unwrap(),
+        Some(ScaleFilter::Lanczos4)
+    );
+    assert_eq!(run.scale_filter_override(Some("game")).unwrap(), None);
+    for (name, filter) in [
+        ("nearest", ScaleFilter::Nearest),
+        ("bilinear", ScaleFilter::Bilinear),
+        ("keys", ScaleFilter::Keys),
+        ("mitchell", ScaleFilter::Mitchell),
+        (
+            "lanczos3",
+            ScaleFilter::Lanczos3 {
+                anti_ringing: false,
+            },
+        ),
+        (
+            "lanczos3-anti-ringing",
+            ScaleFilter::Lanczos3 { anti_ringing: true },
+        ),
+        ("lanczos4", ScaleFilter::Lanczos4),
+    ] {
+        assert_eq!(run.scale_filter_override(Some(name)).unwrap(), Some(filter));
+    }
+    assert!(run.scale_filter_override(Some("Typo")).is_err());
     let mut backend = RecordingBackend::default();
     let mut yielded = false;
     for _ in 0..100 {
@@ -59,6 +84,10 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     drop(run);
     let mut resumed = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     resumed.set_user_data_directory(&directory).unwrap();
+    assert_eq!(
+        resumed.scale_filter_override(None).unwrap(),
+        Some(ScaleFilter::Lanczos4)
+    );
     assert_eq!(resumed.settings(), &settings);
     assert_eq!(resumed.audio().settings(), audio);
     assert_eq!(resumed.audio().voice_ducking(), duck);

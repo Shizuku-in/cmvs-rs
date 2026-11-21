@@ -30,6 +30,7 @@ struct Options: Codable, Equatable {
     var encoding = "auto"
     var font = ""
     var aspect: Int?
+    var scale_filter: String?
     var metal = true
     var native_audio = true
     var game_savedata = false
