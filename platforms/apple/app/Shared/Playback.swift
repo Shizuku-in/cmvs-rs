@@ -6,6 +6,11 @@ import SwiftUI
     import AVFAudio
 #endif
 
+enum FastForwardKey: UInt32 {
+    case shift = 23
+    case control = 24
+}
+
 @MainActor @Observable final class Playback: NSObject, Identifiable {
     let game: Game
     let font: FontFace
@@ -15,6 +20,9 @@ import SwiftUI
     private var clock: CADisplayLink?
     private var previous: CFTimeInterval?
     private var frames = 0
+    @ObservationIgnored private var measuringPerformance = false
+    @ObservationIgnored private var sampleStart: (time: CFTimeInterval, frames: Int)?
+    private(set) var framesPerSecond: Double?
     private var active = true
     private(set) var interrupted = false
     private var interruptionOngoing = false
@@ -32,7 +40,8 @@ import SwiftUI
     var dialog: [String: Any]?
     var draft = ""
     var controls = false
-    var fast = false
+    private(set) var lockedFastForward = Set<FastForwardKey>()
+    @ObservationIgnored private var keyboardFastForward = Set<FastForwardKey>()
     var fullscreen: ((Bool) -> Void)?
     var cursorVisible: ((Bool) -> Void)?
     var cursor: (([String: Any]?) -> Void)?
@@ -129,11 +138,31 @@ import SwiftUI
         focused = value
         syncActivity()
     }
+    func measurePerformance(_ enabled: Bool) {
+        measuringPerformance = enabled
+        sampleStart = nil
+        framesPerSecond = nil
+    }
+    private func samplePerformance(at time: CFTimeInterval) {
+        guard measuringPerformance else { return }
+        if let start = sampleStart {
+            let elapsed = time - start.time
+            guard elapsed >= 1 else { return }
+            framesPerSecond = Double(frames - start.frames) / elapsed
+        }
+        sampleStart = (time, frames)
+    }
+    private var paused: Bool { !active || !focused || interrupted || dialog != nil || error != nil }
+    var canFastForward: Bool { ready && !closed && !paused }
+
     private func syncActivity() {
-        let paused = !active || !focused || interrupted || dialog != nil || error != nil
+        let paused = self.paused
         previous = nil
+        sampleStart = nil
+        framesPerSecond = nil
         if paused {
-            fast = false
+            lockedFastForward.removeAll()
+            keyboardFastForward.removeAll()
             clearKeys?()
         }
         clock?.isPaused = paused
@@ -213,6 +242,7 @@ import SwiftUI
                 frames += 1
                 if let image = result.1 { cpu.contents = image }
             }
+            samplePerformance(at: link.timestamp)
             for e in result.2 {
                 switch e["kind"] as? String {
                 case "audioPaused":
@@ -254,14 +284,24 @@ import SwiftUI
         guard ready, !closed else { return }
         do { try engine.queue.sync { if let api = engine.api { try api.check(f(api.handle)) } } } catch { fail(error) }
     }
-    func key(_ code: UInt32, _ down: Bool) { invoke { cmvs_apple_key($0, code, down) } }
+    func key(_ code: UInt32, _ down: Bool) {
+        if let modifier = FastForwardKey(rawValue: code) {
+            guard canFastForward else { return }
+            if down { keyboardFastForward.insert(modifier) } else { keyboardFastForward.remove(modifier) }
+            if lockedFastForward.contains(modifier) { return }
+        }
+        invoke { cmvs_apple_key($0, code, down) }
+    }
     func pulse(_ code: UInt32) {
         key(code, true)
         key(code, false)
     }
-    func toggleFast() {
-        fast.toggle()
-        key(24, fast)
+    func setFastForward(_ modifier: FastForwardKey, locked: Bool) {
+        guard canFastForward else { return }
+        if locked { lockedFastForward.insert(modifier) } else { lockedFastForward.remove(modifier) }
+        if !keyboardFastForward.contains(modifier) {
+            invoke { cmvs_apple_key($0, modifier.rawValue, locked) }
+        }
     }
     func capture() {
         guard canCapture else { return }

@@ -41,10 +41,8 @@
 "Block presumed commands" = "阻止推定指令";
 "Block unreviewed commands" = "阻止未审核指令";
 "Game controls" = "游戏操作";
-"Menu" = "菜单";
-"Fast-forward" = "快进锁定";
-"Release fast-forward" = "解除快进";
-"Hold to skip" = "按住快进";
+"Shift fast-forward" = "Shift 快进";
+"Ctrl fast-forward" = "Ctrl 快进";
 "Confirm" = "确认";
 "Hide text" = "隐藏对话框";
 "Resume audio" = "恢复音频";
@@ -59,3 +57,14 @@
 "Replace matching save files?" = "替换备份中同名的存档文件？";
 "Restore" = "恢复";
 "OK" = "确定";
+"Open-source licenses" = "开源许可证";
+"Third-party notices" = "第三方声明";
+"Dependency licenses" = "依赖库许可证";
+"License unavailable" = "无法读取许可证";
+"Controls guide" = "操作指南";
+"Return confirms and Space hides text. Hold Shift or Ctrl for the game's corresponding fast-forward mode." = "回车确认，空格隐藏对话框。按住 Shift 或 Ctrl 可使用游戏对应的快进模式。";
+"Left-click to advance, right-click for the game menu, and scroll to browse history." = "左键推进对话，右键打开游戏菜单，滚动鼠标滚轮翻阅对话记录。";
+"Press ⌘S for a screenshot or ⌘F for full screen." = "按 ⌘S 截图，按 ⌘F 切换全屏。";
+"Tap to advance. Tap the ellipsis for game controls." = "轻点推进对话。轻点省略号打开游戏操作栏。";
+"With multi-touch gestures on, tap with two fingers for the game menu, swipe with two to browse history, or tap with three for game controls." = "开启多指手势后，双指轻点打开游戏菜单，双指上下滑动翻阅对话记录，三指轻点切换游戏操作栏。";
+"Show performance" = "显示性能数据";

@@ -3,10 +3,22 @@ import SwiftUI
 struct PlayerScreen: View {
     @Bindable var player: Playback
     @Environment(\.scenePhase) private var phase
+    @AppStorage("showPerformance") private var showPerformance = false
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black
             PlayerCanvas(player: player)
+                .overlay(alignment: .topLeading) {
+                    if showPerformance, player.error == nil, let fps = player.framesPerSecond {
+                        let rate = fps.formatted(.number.precision(.fractionLength(1)))
+                        let interval = fps > 0 ? (1000 / fps).formatted(.number.precision(.fractionLength(1))) : "—"
+                        Text(verbatim: "\(rate) FPS · \(interval) ms")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.white)
+                            .padding(6).background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 6))
+                            .padding().allowsHitTesting(false)
+                    }
+                }
             if !player.ready && player.error == nil {
                 VStack {
                     ProgressView()
@@ -21,28 +33,16 @@ struct PlayerScreen: View {
                 }
                 .accessibilityLabel("Game controls")
                 if player.controls {
-                    Button("Menu") { player.pulse(3) }
-                    Button(player.fast ? "Release fast-forward" : "Fast-forward") { player.toggleFast() }
-                    Text("Hold to skip")
-                        .padding(4)
-                        .onLongPressGesture(
-                            minimumDuration: 0.15, perform: {},
-                            onPressingChanged: { held in
-                                if !player.fast { player.key(24, held) }
-                            })
-                    Button("Confirm") { player.pulse(22) }
-                    Button("Hide text") { player.pulse(26) }
-                    Button("Screenshot") { player.capture() }.disabled(!player.canCapture)
-                    #if os(iOS)
-                        if player.interrupted { Button("Resume audio") { player.resumeAudio() } }
-                        if let message = player.audioError { Text(message) }
-                    #endif
-                    Button("Return to library") { player.finish() }
+                    ViewThatFits(in: .vertical) {
+                        controls
+                        ScrollView { controls }
+                    }.fixedSize(horizontal: true, vertical: false)
                 }
             }.padding(8).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10)).padding()
         }
         .navigationTitle(player.title)
         .onAppear { player.scene(phase == .active) }
+        .onChange(of: showPerformance, initial: true) { _, enabled in player.measurePerformance(enabled) }
         .onChange(of: phase) { _, value in player.scene(value == .active) }
         .onDisappear { player.close() }
         .sheet(
@@ -88,5 +88,30 @@ struct PlayerScreen: View {
                 }.padding().frame(maxWidth: 560, maxHeight: 320).background(.regularMaterial)
             }
         }
+    }
+
+    private var controls: some View {
+        VStack(alignment: .trailing) {
+            fastForward("Shift fast-forward", key: .shift)
+            fastForward("Ctrl fast-forward", key: .control)
+            Button("Confirm") { player.pulse(22) }
+            Button("Hide text") { player.pulse(26) }
+            Button("Screenshot") { player.capture() }.disabled(!player.canCapture)
+            Toggle("Show performance", isOn: $showPerformance).toggleStyle(.button)
+            #if os(iOS)
+                if player.interrupted { Button("Resume audio") { player.resumeAudio() } }
+                if let message = player.audioError { Text(message) }
+            #endif
+            Button("Return to library") { player.finish() }
+        }
+    }
+
+    private func fastForward(_ title: LocalizedStringKey, key: FastForwardKey) -> some View {
+        Toggle(title, isOn: Binding(
+            get: { player.lockedFastForward.contains(key) },
+            set: { player.setFastForward(key, locked: $0) }
+        ))
+        .toggleStyle(.button)
+        .disabled(!player.canFastForward)
     }
 }

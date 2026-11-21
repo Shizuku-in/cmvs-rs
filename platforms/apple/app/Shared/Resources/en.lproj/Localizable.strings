@@ -41,10 +41,8 @@
 "Block presumed commands" = "Block presumed commands";
 "Block unreviewed commands" = "Block unreviewed commands";
 "Game controls" = "Game controls";
-"Menu" = "Menu";
-"Fast-forward" = "Fast-forward";
-"Release fast-forward" = "Release fast-forward";
-"Hold to skip" = "Hold to skip";
+"Shift fast-forward" = "Shift fast-forward";
+"Ctrl fast-forward" = "Ctrl fast-forward";
 "Confirm" = "Confirm";
 "Hide text" = "Hide text";
 "Resume audio" = "Resume audio";
@@ -59,3 +57,14 @@
 "Replace matching save files?" = "Replace matching save files?";
 "Restore" = "Restore";
 "OK" = "OK";
+"Open-source licenses" = "Open-source licenses";
+"Third-party notices" = "Third-party notices";
+"Dependency licenses" = "Dependency licenses";
+"License unavailable" = "License unavailable";
+"Controls guide" = "Controls guide";
+"Return confirms and Space hides text. Hold Shift or Ctrl for the game's corresponding fast-forward mode." = "Return confirms and Space hides text. Hold Shift or Ctrl for the game's corresponding fast-forward mode.";
+"Left-click to advance, right-click for the game menu, and scroll to browse history." = "Left-click to advance, right-click for the game menu, and scroll to browse history.";
+"Press ⌘S for a screenshot or ⌘F for full screen." = "Press ⌘S for a screenshot or ⌘F for full screen.";
+"Tap to advance. Tap the ellipsis for game controls." = "Tap to advance. Tap the ellipsis for game controls.";
+"With multi-touch gestures on, tap with two fingers for the game menu, swipe with two to browse history, or tap with three for game controls." = "With multi-touch gestures on, tap with two fingers for the game menu, swipe with two to browse history, or tap with three for game controls.";
+"Show performance" = "Show performance";

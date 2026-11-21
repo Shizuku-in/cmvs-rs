@@ -346,6 +346,8 @@ private struct OptionsForm: View {
     @Binding var options: Options
     var fonts: [FontFace]
     let global: Bool
+    @AppStorage("showPerformance") private var showPerformance = false
+    @State private var showingLicenses = false
     private static let profiles = Bridge.profiles()
     var body: some View {
         Form {
@@ -374,6 +376,7 @@ private struct OptionsForm: View {
                 Toggle("Multi-touch gestures", isOn: $options.gestures)
             #endif
             Section("Diagnostics") {
+                if global { Toggle("Show performance", isOn: $showPerformance) }
                 Picker("Engine profile", selection: $options.profile) {
                     Text("Automatic").tag("")
                     ForEach(Self.profiles, id: \.self) { Text($0).tag($0) }
@@ -383,6 +386,23 @@ private struct OptionsForm: View {
                 Toggle("Block presumed commands", isOn: $options.block_presumed)
                 Toggle("Block unreviewed commands", isOn: $options.block_unreviewed)
             }
-        }.formStyle(.grouped)
+            if global {
+                Section {
+                    DisclosureGroup("Controls guide") {
+                        Text("Return confirms and Space hides text. Hold Shift or Ctrl for the game's corresponding fast-forward mode.")
+                        #if os(macOS)
+                            Text("Left-click to advance, right-click for the game menu, and scroll to browse history.")
+                            Text("Press ⌘S for a screenshot or ⌘F for full screen.")
+                        #else
+                            Text("Tap to advance. Tap the ellipsis for game controls.")
+                            Text("With multi-touch gestures on, tap with two fingers for the game menu, swipe with two to browse history, or tap with three for game controls.")
+                        #endif
+                    }
+                    Button("Open-source licenses") { showingLicenses = true }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .sheet(isPresented: $showingLicenses) { LicensesView() }
     }
 }

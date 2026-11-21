@@ -41,10 +41,8 @@
 "Block presumed commands" = "推定命令をブロック";
 "Block unreviewed commands" = "未検証命令をブロック";
 "Game controls" = "ゲーム操作";
-"Menu" = "メニュー";
-"Fast-forward" = "早送りを固定";
-"Release fast-forward" = "早送りを解除";
-"Hold to skip" = "押している間スキップ";
+"Shift fast-forward" = "Shift 早送り";
+"Ctrl fast-forward" = "Ctrl 早送り";
 "Confirm" = "決定";
 "Hide text" = "メッセージを隠す";
 "Resume audio" = "音声を再開";
@@ -59,3 +57,14 @@
 "Replace matching save files?" = "同名のセーブファイルを置き換えますか？";
 "Restore" = "復元";
 "OK" = "OK";
+"Open-source licenses" = "オープンソースライセンス";
+"Third-party notices" = "サードパーティーの告知";
+"Dependency licenses" = "依存ライブラリのライセンス";
+"License unavailable" = "ライセンスを読み込めません";
+"Controls guide" = "操作ガイド";
+"Return confirms and Space hides text. Hold Shift or Ctrl for the game's corresponding fast-forward mode." = "Return で決定、スペースでメッセージを非表示にします。Shift または Ctrl を押し続けると、それぞれのキーに対応した早送りになります。";
+"Left-click to advance, right-click for the game menu, and scroll to browse history." = "左クリックで読み進め、右クリックでゲームメニューを開きます。ホイールで履歴をスクロールできます。";
+"Press ⌘S for a screenshot or ⌘F for full screen." = "⌘S でスクリーンショットを撮影し、⌘F でフルスクリーンを切り替えます。";
+"Tap to advance. Tap the ellipsis for game controls." = "タップで読み進めます。「…」をタップすると操作パネルが開きます。";
+"With multi-touch gestures on, tap with two fingers for the game menu, swipe with two to browse history, or tap with three for game controls." = "マルチタッチジェスチャが有効なときは、2 本指のタップでゲームメニュー、上下スワイプで履歴、3 本指のタップで操作パネルを操作できます。";
+"Show performance" = "パフォーマンスを表示";
