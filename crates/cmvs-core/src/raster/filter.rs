@@ -1,7 +1,7 @@
 use super::RgbaImage;
 use crate::{FormatError, viewport::Viewport};
 
-/// Sampling algorithm for image resizing and software presentation.
+/// Sampling algorithm for image resizing and presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleFilter {
     Nearest,

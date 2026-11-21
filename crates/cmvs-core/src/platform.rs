@@ -86,6 +86,12 @@ impl RenderMode {
     }
 }
 
+impl From<RenderMode> for ScaleFilter {
+    fn from(mode: RenderMode) -> Self {
+        mode.filter()
+    }
+}
+
 impl TryFrom<u32> for RenderMode {
     type Error = FormatError;
 

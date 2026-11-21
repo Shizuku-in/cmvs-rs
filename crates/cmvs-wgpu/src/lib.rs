@@ -1,7 +1,6 @@
 //! GPU execution of validated CMVS draw commands, with lazy logical-frame readback.
 use cmvs_core::{
-    host::platform::RenderMode,
-    render::raster::{CacheKey, RgbaImage},
+    render::raster::{CacheKey, RgbaImage, ScaleFilter},
     render::scene_render::Layer,
     render::scene_render::RenderFrame,
     render::scene_render::shader::ShaderBlend,
@@ -477,15 +476,15 @@ impl Renderer {
             size: [image.width(), image.height()],
         })
     }
-    /// Scales a decoded movie onto an opaque logical canvas entirely on the GPU.
+    /// Scales an image to fit an opaque canvas entirely on the GPU.
     pub fn render_image(
         &mut self,
         image: &RgbaImage,
         size: [u32; 2],
-        render_mode: impl Into<RenderMode>,
+        filter: impl Into<ScaleFilter>,
     ) -> Result<GpuFrame> {
         self.frame_start = self.clock;
-        present::scale_image(self, image, size, render_mode.into())
+        present::scale_image(self, image, size, filter.into())
     }
     fn compose(
         &mut self,
