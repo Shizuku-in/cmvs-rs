@@ -23,6 +23,13 @@ int32_t cmvs_apple_fullscreen(CmvsApple *, bool fullscreen);
 int32_t cmvs_apple_detach(CmvsApple *);
 /* 0 budget slice, 1 completed frame, 2 quit, 3 inactive */
 int32_t cmvs_apple_tick(CmvsApple *, uint32_t delta_ms);
+typedef struct {
+    bool sampled;
+    bool primary_held;
+    bool touch_position_sampled;
+} CmvsAppleTickInput;
+/* Same status as cmvs_apple_tick. Fills input even if the tick fails. */
+int32_t cmvs_apple_tick_traced(CmvsApple *, uint32_t delta_ms, CmvsAppleTickInput *input);
 /* Returns 1 with one JSON event in text, or 0 if empty. After a stopped
  * tick, the first event includes the script, PC, step count and reason. */
 int32_t cmvs_apple_next_event(CmvsApple *);

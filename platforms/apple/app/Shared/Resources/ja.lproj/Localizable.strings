@@ -57,6 +57,12 @@
 "Save" = "保存";
 "Playback Stopped" = "再生が停止しました";
 "Copy Diagnostics" = "診断情報をコピー";
+"Debug Recording" = "デバッグ記録";
+"Recording Diagnostics" = "デバッグ記録中";
+"Start Debug Recording" = "デバッグ記録を開始";
+"Stop and Export Debug Recording" = "記録を停止して書き出す";
+"Export Debug Recording…" = "デバッグ記録を書き出す…";
+"%lld events · %lld frames" = "%lld 件のイベント · %lld フレーム";
 "Export ZIP…" = "ZIP を書き出す…";
 "Restore ZIP…" = "ZIP から復元…";
 "Restore" = "復元";

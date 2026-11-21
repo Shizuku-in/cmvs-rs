@@ -23,6 +23,7 @@ final class Canvas: UIView {
         super.init(frame: .zero)
         player.clearKeys = { [weak self] in
             self?.accepted.removeAll()
+            if self?.pending != nil { self?.player.debugRecording?.append(.gesture(decision: .cancelledOnPause)) }
             self?.discardPending()
             if self?.contacts.isEmpty == false { self?.blocked = true }
         }
@@ -93,44 +94,66 @@ final class Canvas: UIView {
         }
         if inside { player.pulse(3) }
     }
-    private func send(_ t: UITouch, _ phase: UInt32, at p: CGPoint) {
-        let id = UInt64(UInt(bitPattern: Unmanaged.passUnretained(t).toOpaque()))
+    private func touchID(_ touch: UITouch) -> UInt64 {
+        UInt64(UInt(bitPattern: Unmanaged.passUnretained(touch).toOpaque()))
+    }
+    private func record(_ touches: Set<UITouch>, _ phase: DebugRecording.Phase) {
+        guard let recording = player.debugRecording else { return }
+        for touch in touches {
+            let id = touchID(touch)
+            if phase == .moved || phase == .ended {
+                let point = touch.location(in: self)
+                let previous = touch.previousLocation(in: self)
+                recording.receive(id, phase: phase, contacts: contacts.count,
+                                  dx: Int(exactly: (point.x - previous.x).rounded()),
+                                  dy: Int(exactly: (point.y - previous.y).rounded()))
+            } else {
+                recording.receive(id, phase: phase, contacts: contacts.count)
+            }
+        }
+    }
+    private func send(_ t: UITouch, _ phase: DebugRecording.Phase, at p: CGPoint) {
         let s = layer.contentsScale
-        player.invoke { cmvs_apple_touch($0, id, phase, p.x * s, p.y * s) }
+        player.touch(touchID(t), phase: phase, x: p.x * s, y: p.y * s)
     }
     private func discardPending() {
         pendingPress?.cancel()
         pendingPress = nil
         pending = nil
     }
-    private func beginPending() {
+    private func beginPending(_ decision: DebugRecording.Gesture) {
         guard let pending else { return }
         discardPending()
-        send(pending.touch, 0, at: pending.origin)
-        send(pending.touch, 1, at: pending.touch.location(in: self))
+        player.debugRecording?.append(.gesture(decision: decision))
+        send(pending.touch, .began, at: pending.origin)
+        send(pending.touch, .moved, at: pending.touch.location(in: self))
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         if touches.allSatisfy({ $0.type == .indirectPointer }), event?.buttonMask.contains(.secondary) == true { return }
         contacts.formUnion(touches)
+        record(touches, .began)
         if contacts.count > 1 {
+            player.debugRecording?.append(.gesture(decision: .cancelledBySecondContact))
             discardPending()
             blocked = true
-            for touch in contacts { send(touch, 3, at: touch.location(in: self)) }
+            for touch in contacts { send(touch, .cancelled, at: touch.location(in: self)) }
         }
         guard !blocked, let touch = touches.first else { return }
         if player.game.options.gestures && touch.type == .direct {
             // Let a second finger join before the engine samples a primary click.
+            player.debugRecording?.append(.gesture(decision: .deferred))
             pending = (touch, touch.location(in: self))
             pendingPress = Task { [weak self] in
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
                 guard !Task.isCancelled else { return }
-                self?.beginPending()
+                self?.beginPending(.startedOnTimer)
             }
         } else {
-            send(touch, 0, at: touch.location(in: self))
+            send(touch, .began, at: touch.location(in: self))
         }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        record(touches, .moved)
         guard !blocked else { return }
         for touch in touches.intersection(contacts) {
             let point = touch.location(in: self)
@@ -140,23 +163,33 @@ final class Canvas: UIView {
                 let dy = point.y - pending.origin.y
                 let dragDistance: CGFloat = 6
                 guard dx * dx + dy * dy >= dragDistance * dragDistance else { continue }
-                beginPending()
+                beginPending(.startedOnMovement)
             } else {
-                send(touch, 1, at: point)
+                send(touch, .moved, at: point)
             }
         }
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        record(touches, .ended)
         if !blocked {
-            if let pending, touches.contains(pending.touch) { beginPending() }
-            for t in touches.intersection(contacts) { send(t, 2, at: t.location(in: self)) }
+            if let pending, touches.contains(pending.touch) { beginPending(.startedOnRelease) }
+            for t in touches.intersection(contacts) { send(t, .ended, at: t.location(in: self)) }
         }
-        contacts.subtract(touches)
-        if contacts.isEmpty { blocked = false }
+        removeContacts(touches)
     }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let pending, touches.contains(pending.touch) { discardPending() }
-        for t in touches { send(t, 3, at: t.location(in: self)) }
+        record(touches, .cancelled)
+        if let pending, touches.contains(pending.touch) {
+            player.debugRecording?.append(.gesture(decision: .cancelledBySystem))
+            discardPending()
+        }
+        for t in touches { send(t, .cancelled, at: t.location(in: self)) }
+        removeContacts(touches)
+    }
+    private func removeContacts(_ touches: Set<UITouch>) {
+        if let recording = player.debugRecording {
+            for touch in touches { recording.forget(touchID(touch)) }
+        }
         contacts.subtract(touches)
         if contacts.isEmpty { blocked = false }
     }

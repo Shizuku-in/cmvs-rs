@@ -57,6 +57,12 @@
 "Save" = "保存";
 "Playback Stopped" = "播放已停止";
 "Copy Diagnostics" = "复制诊断信息";
+"Debug Recording" = "调试记录";
+"Recording Diagnostics" = "正在记录调试信息";
+"Start Debug Recording" = "开始调试记录";
+"Stop and Export Debug Recording" = "停止并导出调试记录";
+"Export Debug Recording…" = "导出调试记录…";
+"%lld events · %lld frames" = "%lld 条事件 · %lld 帧";
 "Export ZIP…" = "导出 ZIP…";
 "Restore ZIP…" = "从 ZIP 恢复…";
 "Restore" = "恢复";

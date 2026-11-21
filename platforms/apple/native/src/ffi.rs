@@ -1,5 +1,5 @@
 //! The C header defines the pointer lifetimes and serialized ownership contract.
-use crate::{Config, Player, Result, inspect, renderer::Frame};
+use crate::{Config, Player, Result, TickInput, inspect, renderer::Frame};
 use cmvs_core::{
     host::platform::{FontDialogResult, MessageDialogResult},
     render::raster::RgbaImage,
@@ -210,9 +210,22 @@ extern "C" fn cmvs_apple_detach(h: *mut Handle) -> i32 {
 }
 #[unsafe(no_mangle)]
 extern "C" fn cmvs_apple_tick(h: *mut Handle, delta: u32) -> i32 {
+    tick(h, delta, None)
+}
+#[unsafe(no_mangle)]
+extern "C" fn cmvs_apple_tick_traced(h: *mut Handle, delta: u32, input: *mut TickInput) -> i32 {
+    let mut trace = TickInput::default();
+    let status = tick(h, delta, Some(&mut trace));
+    if !input.is_null() {
+        // SAFETY: the caller supplies writable storage for the duration of this call.
+        unsafe { input.write(trace) };
+    }
+    status
+}
+fn tick(h: *mut Handle, delta: u32, trace: Option<&mut TickInput>) -> i32 {
     call(h, |h| {
         let p = h.player()?;
-        p.tick(delta).inspect_err(|error| {
+        p.tick(delta, trace).inspect_err(|error| {
             let vm = p.session.runtime.machine();
             p.backend.events.push_front(json!({
                 "kind": "stopped",

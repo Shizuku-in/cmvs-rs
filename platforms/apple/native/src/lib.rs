@@ -59,6 +59,15 @@ struct Player {
     cursor: cmvs_core::format::cursor::CursorVisibility,
     cursor_visible: bool,
 }
+
+#[repr(C)]
+#[derive(Default)]
+struct TickInput {
+    sampled: bool,
+    primary_held: bool,
+    touch_position_sampled: bool,
+}
+
 impl Player {
     fn open(c: Config) -> Result<Self> {
         let boot = inspect::bootstrap(&c.root, c.profile.as_deref(), &c.encoding)?;
@@ -156,7 +165,7 @@ impl Player {
             audio.set_active(!value);
         }
     }
-    fn tick(&mut self, delta: u32) -> Result<i32> {
+    fn tick(&mut self, delta: u32, trace: Option<&mut TickInput>) -> Result<i32> {
         if self.paused || self.backend.output.contains(&0) {
             return Ok(3);
         }
@@ -185,6 +194,7 @@ impl Player {
             self.fresh_touch = false;
         }
         s.driver.sample_input(s.runtime.input_mut(), |input| {
+            let touch_position_sampled = self.touching && self.fresh_touch;
             if self.touching {
                 let (point, pressed) = self.touch.sample_pointer(viewport);
                 let [x, y] = point.unwrap_or([-1, -1]);
@@ -195,6 +205,13 @@ impl Player {
                 s.input.set_held(1, pressed).expect("valid code");
             }
             s.input.sample(&s.bindings, input);
+            if let Some(trace) = trace {
+                *trace = TickInput {
+                    sampled: true,
+                    primary_held: input.mouse(0)[1],
+                    touch_position_sampled,
+                };
+            }
             let point = s.input.pointer();
             let inside = point.iter().all(|i| *i >= 0);
             let shown = self.cursor.update(

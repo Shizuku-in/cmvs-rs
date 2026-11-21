@@ -57,6 +57,12 @@
 "Save" = "Save";
 "Playback Stopped" = "Playback Stopped";
 "Copy Diagnostics" = "Copy Diagnostics";
+"Debug Recording" = "Debug Recording";
+"Recording Diagnostics" = "Recording Diagnostics";
+"Start Debug Recording" = "Start Debug Recording";
+"Stop and Export Debug Recording" = "Stop and Export Debug Recording";
+"Export Debug Recording…" = "Export Debug Recording…";
+"%lld events · %lld frames" = "%lld events · %lld frames";
 "Export ZIP…" = "Export ZIP…";
 "Restore ZIP…" = "Restore ZIP…";
 "Restore" = "Restore";

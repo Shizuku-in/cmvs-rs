@@ -1,5 +1,7 @@
 import Accessibility
+import CoreTransferable
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PlayerScreen: View {
     @Bindable var player: Playback
@@ -36,14 +38,20 @@ struct PlayerScreen: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            if showPerformance, player.error == nil, let fps = player.framesPerSecond {
-                let rate = fps.formatted(.number.precision(.fractionLength(1)))
-                let interval = fps > 0 ? (1000 / fps).formatted(.number.precision(.fractionLength(1))) : "—"
-                Text(verbatim: "\(rate) FPS · \(interval) ms")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.white)
-                    .padding(6).background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 6))
-                    .padding().allowsHitTesting(false)
+            VStack(alignment: .leading, spacing: 6) {
+                if player.debugRecording != nil {
+                    Image(systemName: "record.circle.fill").foregroundStyle(.red)
+                        .accessibilityLabel("Recording Diagnostics")
+                }
+                if showPerformance, player.error == nil, let fps = player.framesPerSecond {
+                    let rate = fps.formatted(.number.precision(.fractionLength(1)))
+                    let interval = fps > 0 ? (1000 / fps).formatted(.number.precision(.fractionLength(1))) : "—"
+                    Text(verbatim: "\(rate) FPS · \(interval) ms")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.white)
+                        .padding(6).background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 6))
+                }
             }
+            .padding().allowsHitTesting(false)
         }
         .overlay(alignment: .bottom) {
             if let name = player.screenshotName {
@@ -82,6 +90,7 @@ struct PlayerScreen: View {
                 let panel = VStack(alignment: .leading, spacing: 16) {
                     Text("Playback Stopped").font(.headline)
                     Text(error).font(.body.monospaced()).textSelection(.enabled)
+                    if let report = player.debugReport { DebugReportActions(report: report) }
                     ViewThatFits(in: .horizontal) {
                         HStack { errorActions(error) }.fixedSize(horizontal: true, vertical: false)
                         VStack(alignment: .leading) { errorActions(error) }
@@ -197,6 +206,14 @@ struct PlayerScreen: View {
                 Toggle("Show Performance", isOn: $showPerformance)
                 Divider()
                 action("Screenshot", icon: "camera") { player.capture() }.disabled(!player.canCapture)
+                if player.debugRecording != nil {
+                    action("Stop and Export Debug Recording", icon: "stop.circle", dismissControls: false) {
+                        player.stopDebugRecording()
+                    }
+                } else {
+                    if let report = player.debugReport { DebugReportActions(report: report) }
+                    action("Start Debug Recording", icon: "record.circle") { player.startDebugRecording() }
+                }
                 #if os(iOS)
                     if player.interrupted {
                         action("Resume Audio", icon: "speaker.wave.2") { player.resumeAudio() }
@@ -208,9 +225,11 @@ struct PlayerScreen: View {
         }.padding()
     }
 
-    private func action(_ title: LocalizedStringKey, icon: String, perform: @escaping () -> Void) -> some View {
+    private func action(
+        _ title: LocalizedStringKey, icon: String, dismissControls: Bool = true, perform: @escaping () -> Void
+    ) -> some View {
         Button {
-            player.controls = false
+            if dismissControls { player.controls = false }
             perform()
         } label: {
             Label(title, systemImage: icon).frame(maxWidth: .infinity, alignment: .leading).controlHitArea()
@@ -220,6 +239,28 @@ struct PlayerScreen: View {
         #else
             .buttonStyle(.bordered)
         #endif
+    }
+}
+
+extension DebugReport: Transferable {
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .json) { report in
+            try SentTransferredFile(report.exportFile())
+        }
+    }
+}
+
+private struct DebugReportActions: View {
+    let report: DebugReport
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(report.summary.eventCount) events · \(report.summary.completedFrames) frames")
+                .font(.caption).foregroundStyle(.secondary)
+            ShareLink(item: report, preview: SharePreview("Debug Recording")) {
+                Label("Export Debug Recording…", systemImage: "square.and.arrow.up").controlHitArea()
+            }
+        }
     }
 }
 

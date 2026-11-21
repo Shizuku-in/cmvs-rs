@@ -27,6 +27,8 @@ enum FastForwardKey: UInt32 {
     @ObservationIgnored private var measuringPerformance = false
     @ObservationIgnored private var sampleStart: (time: CFTimeInterval, frames: Int)?
     private(set) var framesPerSecond: Double?
+    private(set) var debugRecording: DebugRecording?
+    private(set) var debugReport: DebugReport?
     private var active = true
     private(set) var interrupted = false
     private var interruptionOngoing = false
@@ -176,6 +178,27 @@ enum FastForwardKey: UInt32 {
     private var paused: Bool { !active || !focused || interrupted || dialog != nil || error != nil }
     var canFastForward: Bool { ready && !closed && !paused }
 
+    func startDebugRecording() {
+        guard ready, !closed, error == nil, debugRecording == nil else { return }
+        #if os(iOS)
+            let platform = "iOS"
+            let gestures: Bool? = game.options.gestures
+        #else
+            let platform = "macOS"
+            let gestures: Bool? = nil
+        #endif
+        debugReport = nil
+        debugRecording = DebugRecording(environment: .init(
+            platform: platform, metal: game.options.metal,
+            nativeAudio: game.options.native_audio, multiTouchGestures: gestures))
+    }
+
+    func stopDebugRecording() {
+        guard let debugRecording else { return }
+        debugReport = debugRecording.finish()
+        self.debugRecording = nil
+    }
+
     private func syncActivity() {
         let paused = self.paused
         previous = nil
@@ -232,28 +255,45 @@ enum FastForwardKey: UInt32 {
             }
         }
     #endif
+    private func tick(_ delta: UInt32) throws -> (Int32, CGImage?, [[String: Any]]) {
+        let recording = debugRecording
+        let start = recording.map { _ in ProcessInfo.processInfo.systemUptime }
+        var trace = CmvsAppleTickInput()
+        var status: Int32 = -1
+        defer {
+            if let recording, let start {
+                let elapsed = Int((ProcessInfo.processInfo.systemUptime - start) * 1_000_000)
+                let input = trace.sampled ? recording.sample(
+                    primaryHeld: trace.primary_held, touchPositionSampled: trace.touch_position_sampled) : nil
+                recording.append(.tick(frame: frames + 1, deltaMs: delta, elapsedUs: elapsed,
+                                       status: .init(rawValue: status) ?? .failed, input: input), at: start)
+            }
+        }
+        return try engine.queue.sync {
+            guard let api = engine.api else { throw PlayerError("Game closed.") }
+            status = recording == nil
+                ? cmvs_apple_tick(api.handle, delta) : cmvs_apple_tick_traced(api.handle, delta, &trace)
+            if status < 0 {
+                let fallback = PlayerError(engineMessage: api.text)
+                if cmvs_apple_next_event(api.handle) == 1,
+                   let stop = try? JSONDecoder().decode(StopDiagnostic.self, from: Data(api.text.utf8)) {
+                    throw stop
+                }
+                throw fallback
+            }
+            var events = [[String: Any]]()
+            while cmvs_apple_next_event(api.handle) == 1 { events.append(try api.object()) }
+            let image = status == 1 && !game.options.metal ? try engine.image() : nil
+            return (status, image, events)
+        }
+    }
     @objc func step(_ link: CADisplayLink) {
         guard ready, !closed else { return }
         let start = previous ?? link.timestamp - 0.016
         previous = start
         let delta = UInt32(min(250, max(0, (link.timestamp - start) * 1000)))
         do {
-            let result = try engine.queue.sync { () -> (Int32, CGImage?, [[String: Any]]) in
-                guard let api = engine.api else { throw PlayerError("Game closed.") }
-                let result = cmvs_apple_tick(api.handle, delta)
-                if result < 0 {
-                    let fallback = PlayerError(engineMessage: api.text)
-                    if cmvs_apple_next_event(api.handle) == 1,
-                       let stop = try? JSONDecoder().decode(StopDiagnostic.self, from: Data(api.text.utf8)) {
-                        throw stop
-                    }
-                    throw fallback
-                }
-                var events = [[String: Any]]()
-                while cmvs_apple_next_event(api.handle) == 1 { events.append(try api.object()) }
-                let image = result == 1 && !game.options.metal ? try engine.image() : nil
-                return (result, image, events)
-            }
+            let result = try tick(delta)
             if result.0 == 2 {
                 finish()
                 return
@@ -320,6 +360,13 @@ enum FastForwardKey: UInt32 {
         guard ready, !closed else { return }
         do { try engine.queue.sync { if let api = engine.api { try api.check(f(api.handle)) } } } catch { fail(error) }
     }
+    #if os(iOS)
+        func touch(_ id: UInt64, phase: DebugRecording.Phase, x: CGFloat, y: CGFloat) {
+            guard ready, !closed else { return }
+            debugRecording?.dispatch(id, phase: phase)
+            invoke { cmvs_apple_touch($0, id, phase.nativeCode, x, y) }
+        }
+    #endif
     func key(_ code: UInt32, _ down: Bool) {
         if let modifier = FastForwardKey(rawValue: code) {
             guard canFastForward else { return }
@@ -405,6 +452,8 @@ enum FastForwardKey: UInt32 {
         syncActivity()
     }
     func fail(_ cause: Error) {
+        debugRecording?.append(.playbackFailed)
+        stopDebugRecording()
         if smokeFrames > 0 { NSLog("CMVS_SMOKE playback failed: %@", cause.localizedDescription) }
         clock?.isPaused = true
         if ready { engine.queue.sync { if let api = engine.api { _ = cmvs_apple_pause(api.handle, true) } } }
@@ -413,6 +462,8 @@ enum FastForwardKey: UInt32 {
     func close() {
         guard !closed else { return }
         closed = true
+        debugRecording = nil
+        debugReport = nil
         accessibility.enable(false)
         clock?.invalidate()
         clock = nil
