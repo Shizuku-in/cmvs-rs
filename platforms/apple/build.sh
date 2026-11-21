@@ -2,7 +2,8 @@
 set -eu
 
 usage() {
-    echo 'Usage: build.sh {xcframework|macos|ios|ios-simulator} [--configuration Debug|Release] [--reuse-framework]'
+    echo 'Usage: build.sh xcframework [macos] [ios] [ios-simulator]'
+    echo '       build.sh {macos|ios|ios-simulator} [--configuration Debug|Release] [--reuse-framework]'
 }
 
 invalid() {
@@ -12,6 +13,7 @@ invalid() {
 }
 
 platform=
+slices=
 configuration=Release
 reuse=false
 while [ "$#" -gt 0 ]; do
@@ -23,9 +25,15 @@ while [ "$#" -gt 0 ]; do
             shift
             configuration=$1 ;;
         --configuration=*) configuration=${1#*=} ;;
-        xcframework|macos|ios|ios-simulator)
+        xcframework)
             [ -z "$platform" ] || invalid 'Specify one platform'
             platform=$1 ;;
+        macos|ios|ios-simulator)
+            case "$platform" in
+                '') platform=$1 ;;
+                xcframework) slices="$slices $1" ;;
+                *) invalid 'Specify one platform' ;;
+            esac ;;
         *) invalid "Unknown argument: $1" ;;
     esac
     shift
@@ -46,23 +54,30 @@ framework=$out/CmvsApple.xcframework
 build_framework() (
     cd "$repo_dir"
     export MACOSX_DEPLOYMENT_TARGET=14.0 IPHONEOS_DEPLOYMENT_TARGET=17.0 CARGO_TARGET_DIR="$target_dir"
-    for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim; do
-        cargo build --locked --release -p cmvs-apple --target "$target"
-    done
-
     mkdir -p "$out"
     stage=$(mktemp -d "$out/xcframework.XXXXXX")
     trap 'rm -rf "$stage"' EXIT
     trap 'exit 1' HUP INT TERM
     archive=release/libcmvs_apple.a
-    lipo -create "$target_dir/aarch64-apple-darwin/$archive" "$target_dir/x86_64-apple-darwin/$archive" \
-        -output "$stage/libcmvs_apple.a"
-    headers=$apple_dir/native/include
-    xcodebuild -create-xcframework \
-        -library "$stage/libcmvs_apple.a" -headers "$headers" \
-        -library "$target_dir/aarch64-apple-ios/$archive" -headers "$headers" \
-        -library "$target_dir/aarch64-apple-ios-sim/$archive" -headers "$headers" \
-        -output "$stage/CmvsApple.xcframework"
+    set -- -create-xcframework
+    for slice in ${slices:-macos ios ios-simulator}; do
+        case "$slice" in
+            macos) targets='aarch64-apple-darwin x86_64-apple-darwin' ;;
+            ios) targets=aarch64-apple-ios ;;
+            ios-simulator) targets=aarch64-apple-ios-sim ;;
+        esac
+        for target in $targets; do
+            cargo build --locked --release -p cmvs-apple --target "$target"
+        done
+        if [ "$slice" = macos ]; then
+            library=$stage/libcmvs_apple.a
+            lipo -create "$target_dir/aarch64-apple-darwin/$archive" "$target_dir/x86_64-apple-darwin/$archive" -output "$library"
+        else
+            library=$target_dir/$targets/$archive
+        fi
+        set -- "$@" -library "$library" -headers "$apple_dir/native/include"
+    done
+    xcodebuild "$@" -output "$stage/CmvsApple.xcframework"
     rm -rf "$framework"
     mv "$stage/CmvsApple.xcframework" "$framework"
 )
