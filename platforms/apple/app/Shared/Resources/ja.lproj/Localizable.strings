@@ -121,6 +121,10 @@
 "empty save backup" = "セーブのバックアップは空です。";
 "invalid save entry" = "バックアップ内のセーブファイルが無効です。";
 "invalid save entry size" = "バックアップ内のファイルサイズが無効です。";
+"save backup belongs to another game" = "このバックアップは別のゲームのものです。";
+"CSS1 game identifier differs from target" = "システムセーブのゲーム ID がこのゲームと一致することを確認できません。";
+"system save belongs to another engine family" = "このシステムセーブは別のエンジン形式です。";
+"configuration belongs to another engine family" = "この設定は別のエンジン形式です。";
 "unsupported save ZIP directory" = "このセーブ ZIP のディレクトリ形式には対応していません。";
 "no completed frame" = "保存できるフレームがまだありません。";
 "%@ · PC 0x%@ · %llu steps" = "%@ · PC 0x%@ · %llu ステップ";

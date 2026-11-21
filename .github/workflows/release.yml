@@ -118,7 +118,12 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          export CMVS_VERSION="${TAG#v}" CMVS_BUILD_NUMBER="$GITHUB_RUN_NUMBER"
+          version=${TAG#v}
+          export CMVS_VERSION="${version%%[-+]*}" CMVS_BUILD_NUMBER="$GITHUB_RUN_NUMBER"
+          if ! [[ "$CMVS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a numeric major.minor.patch version in $TAG"
+            exit 1
+          fi
           sh platforms/apple/build.sh macos
           sh platforms/apple/build.sh ios --reuse-framework
           for root in target/apple/macos/CMVS.app/Contents target/apple/ios/CMVS.app; do

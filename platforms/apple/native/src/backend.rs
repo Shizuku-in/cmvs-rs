@@ -16,6 +16,10 @@ pub struct Backend {
     pub display: DisplayPreferences,
     pub aspect_override: Option<u32>,
     pub size: [u32; 2],
+    pub output: [u32; 2],
+    pub windowed: [u32; 2],
+    pub resizable: bool,
+    pub full_move: bool,
     pub frame: Option<Frame>,
     pub events: VecDeque<Value>,
     pub comment: CommentInput,
@@ -24,12 +28,16 @@ pub struct Backend {
     pub encoding: TextEncoding,
 }
 impl Backend {
+    pub fn viewport(&self) -> Option<cmvs_input::Viewport> {
+        cmvs_input::Viewport::for_canvas(self.size, self.output, self.mode())
+    }
     pub fn mode(&self) -> u32 {
         self.aspect_override.unwrap_or_else(|| {
-            cmvs_core::render::viewport::presentation_mode(
+            cmvs_core::render::viewport::presentation_mode_with_full_move(
                 self.display.fullscreen,
                 self.display.aspect_scaling,
                 self.display.aspect_mode,
+                self.full_move,
             )
         })
     }
@@ -39,10 +47,10 @@ impl PlatformBackend for Backend {
         self.size
     }
     fn window_size(&self) -> Result<[u32; 2]> {
-        Ok(self.size)
+        Ok(self.output)
     }
     fn windowed_size(&self) -> Result<[u32; 2]> {
-        Ok(self.size)
+        Ok(self.windowed)
     }
     fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool> {
         Ok(mode == 5)
@@ -63,7 +71,7 @@ impl PlatformBackend for Backend {
         Ok(self.display.render_mode)
     }
     fn resizable(&self) -> Result<bool> {
-        Ok(false)
+        Ok(self.resizable)
     }
     fn pixel_shader_major(&self) -> Result<u8> {
         Ok(0)
@@ -135,6 +143,12 @@ impl PlatformBackend for Backend {
                 return Ok(());
             }
             PlatformRequest::FullscreenMonitor(_) | PlatformRequest::Icon { .. } => return Ok(()),
+            PlatformRequest::WindowSize(size) if self.resizable => {
+                self.windowed = *size;
+                self.events
+                    .push_back(json!({"kind":"windowSize", "size":size}));
+                return Ok(());
+            }
             PlatformRequest::WindowSize(size) if *size == self.size => return Ok(()),
             _ => return Err("unsupported Apple display request".into()),
         }

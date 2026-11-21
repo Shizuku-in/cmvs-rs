@@ -106,23 +106,37 @@ final class LibraryTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: documents.appending(path: "Fonts").path))
     }
 
-    func testLegacySavesImportedOnlyOnce() throws {
+    func testMigratingTwoEditionsPreservesTheirSeparateProgress() throws {
         let fm = FileManager.default
-        let directory = fm.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? fm.removeItem(at: directory) }
-        // FNV-1a of "/game" in the UIKit prototype.
-        let source = URL(fileURLWithPath: "/game")
-        let old = directory.appending(path: "287421120eed3df4")
-        let current = directory.appending(path: "example")
-        try fm.createDirectory(at: old, withIntermediateDirectories: true)
-        try Data([1]).write(to: old.appending(path: "save001.dat"))
-        try Game.migrateSaves(source: source, destination: current)
-        let slot = current.appending(path: "save001.dat")
-        XCTAssertEqual(try Data(contentsOf: slot), Data([1]))
-        try Data([2]).write(to: slot)
-        try Game.migrateSaves(source: source, destination: current)
-        XCTAssertEqual(try Data(contentsOf: slot), Data([2]))
-        XCTAssertEqual(try Data(contentsOf: old.appending(path: "save001.dat")), Data([1]))
+        let root = fm.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let saves = root.appending(path: "Saves")
+        let info = GameInfo(game: "example", profile: "", family: "CMVS", basis: "", encoding: "gbk", size: [], savedata: false)
+        var catalog = Library.Catalog()
+        func addEdition(_ name: String) throws -> String {
+            let source = root.appending(path: name)
+            try fm.createDirectory(at: source, withIntermediateDirectories: true)
+            let bookmark = try source.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+            catalog.games.append(Game(id: UUID(), name: name, info: info, bookmark: bookmark, options: Options()))
+            return Game.sourceKey(try XCTUnwrap(catalog.games.last).resolve())
+        }
+        let original = try addEdition("Original")
+        let patched = try addEdition("Patched")
+        func slot(_ folder: String) -> URL { saves.appending(path: folder + "/save001.dat") }
+        for (folder, byte) in [(info.game!, UInt8(1)), (patched, UInt8(2))] {
+            try fm.createDirectory(at: saves.appending(path: folder), withIntermediateDirectories: true)
+            try Data([byte]).write(to: slot(folder))
+        }
+        XCTAssertEqual(Game.sourceKey(URL(fileURLWithPath: "/game")), "287421120eed3df4")
+        XCTAssertTrue(try Library.migrateSaveFolders(&catalog, saves: saves))
+        XCTAssertEqual(catalog.games.map(\.saveFolderName), ["source-" + original, "source-" + patched])
+        for (game, byte) in zip(catalog.games, [UInt8(1), 2]) {
+            XCTAssertEqual(try Data(contentsOf: slot(game.saveFolderName)), Data([byte]))
+        }
+        try Data([3]).write(to: slot("source-" + patched))
+        XCTAssertFalse(try Library.migrateSaveFolders(&catalog, saves: saves))
+        XCTAssertEqual(try Data(contentsOf: slot("source-" + patched)), Data([3]))
+        XCTAssertEqual(try Data(contentsOf: slot(patched)), Data([2]))
     }
 
     func testImportRejectsSymlinkBeforeCopying() throws {

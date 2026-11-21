@@ -689,9 +689,6 @@ private struct GameConfiguration: View {
                     }.value
                 }
                 if let i = library.data.games.firstIndex(where: { $0.id == game.id }) {
-                    if info.game != game.info.game {
-                        library.data.games[i].saveFolder = game.saves.lastPathComponent
-                    }
                     library.data.games[i].info = info
                     library.data.games[i].options = options
                 }

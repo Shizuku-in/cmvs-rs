@@ -42,19 +42,20 @@ enum FastForwardKey: UInt32 {
     var clearKeys: (() -> Void)?
     var warp: ((CGPoint) -> Void)?
     var title: String
-    var error: String?
+    private(set) var error: String?
     var dialog: [String: Any]?
     var draft = ""
     var controls = false
     private(set) var lockedFastForward = Set<FastForwardKey>()
     @ObservationIgnored private var keyboardFastForward = Set<FastForwardKey>()
     var fullscreen: ((Bool) -> Void)?
+    var windowState: (() -> (windowed: Bool, resizable: Bool))?
+    var resizeWindow: ((CGSize) -> Void)?
     var cursorVisible: ((Bool) -> Void)?
     var cursor: (([String: Any]?) -> Void)?
     var closeError: ((String) -> Void)?
     var quit: (() -> Void)?
     var encoding: String
-    private var mode = 1
     private var logicalSize: [Int]
     private var viewSize = CGSize.zero
     private var scale: CGFloat = 1
@@ -122,17 +123,12 @@ enum FastForwardKey: UInt32 {
         self.scale = scale
         let width = UInt32(size.width * scale)
         let height = UInt32(size.height * scale)
-        if ready { invoke { cmvs_apple_resize($0, width, height) } }
-        guard logicalSize.count == 2, logicalSize[0] > 0, logicalSize[1] > 0 else { return }
-        let w = CGFloat(logicalSize[0])
-        let h = CGFloat(logicalSize[1])
-        var factor = min(size.width / w, size.height / h)
-        if mode == 2 { factor = max(size.width / w, size.height / h) }
-        if mode == 0 { factor = min(1 / scale, factor) }
-        let target = mode == 3 ? size : CGSize(width: w * factor, height: h * factor)
-        let frame = CGRect(
-            x: (size.width - target.width) / 2, y: (size.height - target.height) / 2, width: target.width,
-            height: target.height)
+        guard ready else { return }
+        let state = windowState?() ?? (windowed: false, resizable: false)
+        var rect = [Int32](repeating: 0, count: 4)
+        invoke { cmvs_apple_resize($0, width, height, state.windowed, state.resizable, &rect) }
+        let frame = CGRect(x: CGFloat(rect[0]) / scale, y: CGFloat(rect[1]) / scale,
+                           width: CGFloat(rect[2]) / scale, height: CGFloat(rect[3]) / scale)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         cpu.frame = frame
@@ -277,6 +273,11 @@ enum FastForwardKey: UInt32 {
                     syncActivity()
                 case "title": title = e["text"] as? String ?? title
                 case "display": display(e)
+                case "layout": resize(viewSize, scale)
+                case "windowSize":
+                    if let size = e["size"] as? [Int], size.count == 2 {
+                        resizeWindow?(CGSize(width: size[0], height: size[1]))
+                    }
                 case "visibility": cursorVisible?(e["visible"] as? Bool ?? true)
                 case "warp":
                     if let xy = e["point"] as? [Double], xy.count == 2 { warp?(CGPoint(x: xy[0], y: xy[1])) }
@@ -309,7 +310,6 @@ enum FastForwardKey: UInt32 {
         } catch { fail(error) }
     }
     private func display(_ info: [String: Any]) {
-        mode = info["mode"] as? Int ?? 1
         let filter: CALayerContentsFilter = info["linear"] as? Bool == true ? .linear : .nearest
         cpu.magnificationFilter = filter
         cpu.minificationFilter = filter
@@ -423,17 +423,17 @@ enum FastForwardKey: UInt32 {
             let report = closeError
             let didClose = didClose
             engine.queue.async {
-                do { try engine.close() }
+                do { try engine.close(save: false) }
                 catch { DispatchQueue.main.async { report?(error.localizedDescription) } }
                 DispatchQueue.main.async { didClose?() }
             }
         } else {
             do {
                 try engine.queue.sync {
-                    if frames > 0 {
+                    if error == nil && frames > 0 {
                         try? engine.screenshot(to: game.thumbnail)
                     }
-                    try engine.close()
+                    try engine.close(save: error == nil)
                 }
             } catch { closeError?(error.localizedDescription) }
             didClose?()

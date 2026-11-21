@@ -18,6 +18,7 @@ final class Canvas: NSView {
     private var track: NSTrackingArea?
     private var accepted = Set<UInt32>()
     private var started = false
+    private var pendingWindowSize: CGSize?
     private var sizedWindow = false
     private var scrollDistance: CGFloat = 0
     override var acceptsFirstResponder: Bool { true }
@@ -62,6 +63,14 @@ final class Canvas: NSView {
         for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(fullscreenChanged), name: name, object: window)
         }
+        player.windowState = { [weak window] in
+            guard let mask = window?.styleMask else { return (false, false) }
+            return (!mask.contains(.fullScreen), mask.contains(.resizable))
+        }
+        player.resizeWindow = { [weak self] pixels in
+            self?.pendingWindowSize = pixels
+            self?.applyWindowSize()
+        }
         player.fullscreen = { [weak window] value in
             if let window, value != window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
         }
@@ -94,9 +103,16 @@ final class Canvas: NSView {
         }
         needsLayout = true
     }
+    private func applyWindowSize() {
+        guard let window, !window.styleMask.contains(.fullScreen), let pixels = pendingWindowSize else { return }
+        pendingWindowSize = nil
+        let scale = window.backingScaleFactor
+        window.setContentSize(CGSize(width: pixels.width / scale, height: pixels.height / scale))
+    }
     @objc private func fullscreenChanged() {
         guard let window else { return }
         player.invoke { cmvs_apple_fullscreen($0, window.styleMask.contains(.fullScreen)) }
+        applyWindowSize()
     }
     @objc private func focusChanged() {
         accepted.removeAll()

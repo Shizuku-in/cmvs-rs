@@ -17,7 +17,8 @@ int32_t cmvs_apple_validate_font(CmvsApple *, const char *path, uint32_t face);
 int32_t cmvs_apple_open(CmvsApple *, const char *config_json);
 /* Retain the CAMetalLayer until detach returns. Dimensions are physical pixels. */
 int32_t cmvs_apple_attach_metal_layer(CmvsApple *, void *, uint32_t width, uint32_t height);
-int32_t cmvs_apple_resize(CmvsApple *, uint32_t width, uint32_t height);
+/* Returns the presentation rectangle in physical pixels (top-left origin). */
+int32_t cmvs_apple_resize(CmvsApple *, uint32_t width, uint32_t height, bool windowed, bool resizable, int32_t rect[4]);
 int32_t cmvs_apple_fullscreen(CmvsApple *, bool fullscreen);
 int32_t cmvs_apple_detach(CmvsApple *);
 /* 0 budget slice, 1 completed frame, 2 quit, 3 inactive */
@@ -27,7 +28,8 @@ int32_t cmvs_apple_tick(CmvsApple *, uint32_t delta_ms);
 int32_t cmvs_apple_next_event(CmvsApple *);
 /* Returns 1 with the changed accessible page in text; activations refer to that revision. */
 int32_t cmvs_apple_accessibility(CmvsApple *, uint64_t known_revision);
-int32_t cmvs_apple_choose(CmvsApple *, uint64_t revision, uint32_t index);
+/* Pass -1 for a button or 0..255 for a color slider. */
+int32_t cmvs_apple_choose(CmvsApple *, uint64_t revision, uint32_t index, int32_t slider);
 int32_t cmvs_apple_key(CmvsApple *, uint32_t code, bool pressed);
 int32_t cmvs_apple_pointer(CmvsApple *, double x, double y);
 /* Physical surface pixels. Touch phases are begin/move/end/cancel (0..3). */
@@ -44,7 +46,9 @@ int32_t cmvs_apple_comment(CmvsApple *, uint32_t id, const char *text);
 /* Selecting a face returns its engine name in text. NULL cancels. */
 int32_t cmvs_apple_font(CmvsApple *, const char *path, uint32_t face);
 int32_t cmvs_apple_message(CmvsApple *, bool accept);
-int32_t cmvs_apple_backup(CmvsApple *, const char *game, const char *user, bool local, const char *zip, bool restore);
+/* A NULL local_root exports the standalone user save directory. */
+int32_t cmvs_apple_export_saves(CmvsApple *, const char *local_root, const char *user, const char *zip, const char *identity);
+int32_t cmvs_apple_restore_saves(CmvsApple *, const char *game, const char *profile, const char *encoding, const char *user, bool local, const char *zip);
 /* Encoded byte count, or -1 if the text cannot be encoded. */
 int32_t cmvs_apple_comment_bytes(CmvsApple *, const char *text);
 int32_t cmvs_apple_comment_valid(CmvsApple *, const char *text, uint32_t chars, uint32_t bytes);

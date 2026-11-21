@@ -7,6 +7,7 @@ struct GamePage: Decodable {
         let id: [Int]
         let rect: [Int]
         let label: String
+        let slider: UInt8?
     }
     struct TextBlock: Decodable, Identifiable {
         let id: Int
@@ -14,6 +15,7 @@ struct GamePage: Decodable {
         let rect: [Int]
     }
     struct Content: Decodable {
+        let modal: Bool
         let text: [TextBlock]
         let choices: [Choice]
     }
@@ -32,10 +34,11 @@ private actor BitmapTitleReader {
 
         var labels = [[Int]: String]()
         for observation in request.results ?? [] {
-            guard let text = observation.topCandidates(1).first?.string else { continue }
+            guard let text = observation.topCandidates(1).first?.string.trimmingCharacters(in: .whitespacesAndNewlines),
+                !text.isEmpty else { continue }
             let box = observation.boundingBox
             let point = CGPoint(x: box.midX * CGFloat(image.width), y: (1 - box.midY) * CGFloat(image.height))
-            for choice in choices where choice.label.isEmpty {
+            for choice in choices {
                 let r = choice.rect
                 if CGRect(x: r[0], y: r[1], width: r[2], height: r[3]).contains(point) {
                     labels[choice.id] = labels[choice.id].map { $0 + " " + text } ?? text
@@ -52,7 +55,6 @@ private actor BitmapTitleReader {
     @ObservationIgnored private var enabled = false
     @ObservationIgnored private var nextRead: CFTimeInterval = 0
     @ObservationIgnored private var nextRecognition: CFTimeInterval = 0
-    @ObservationIgnored private var recognizedRevision: UInt64?
     @ObservationIgnored private var recognition: Task<Void, Never>?
     private let reader = BitmapTitleReader()
 
@@ -60,7 +62,6 @@ private actor BitmapTitleReader {
         enabled = value
         nextRead = 0
         nextRecognition = 0
-        recognizedRevision = nil
         recognition?.cancel()
         recognition = nil
         page = nil
@@ -78,27 +79,20 @@ private actor BitmapTitleReader {
         if let updated {
             recognition?.cancel()
             recognition = nil
-            recognizedRevision = nil
             bitmapLabels = [:]
             page = updated
             nextRecognition = time + 0.3
         }
-        guard recognition == nil,
-            let page,
-            recognizedRevision != page.revision,
-            time >= nextRecognition,
-            page.content.choices.contains(where: { $0.label.isEmpty })
-        else { return }
+        guard recognition == nil, let page, time >= nextRecognition else { return }
+        let missing = page.content.choices.filter { $0.label.isEmpty && bitmapLabels[$0.id] == nil }
+        guard !missing.isEmpty else { return }
+        nextRecognition = time + 2
         // Capture this completed frame, before the next VM tick changes the labels.
-        guard let image = cpuFrame ?? engine.queue.sync(execute: { try? engine.image() }) else {
-            nextRecognition = time + 2
-            return
-        }
+        guard let image = cpuFrame ?? engine.queue.sync(execute: { try? engine.image() }) else { return }
         recognition = Task {
-            let labels = await reader.labels(in: image, choices: page.content.choices)
+            let labels = await reader.labels(in: image, choices: missing)
             guard !Task.isCancelled, self.page?.revision == page.revision else { return }
-            if labels != bitmapLabels { bitmapLabels = labels }
-            recognizedRevision = page.revision
+            if !labels.isEmpty { bitmapLabels.merge(labels) { _, new in new } }
             recognition = nil
         }
     }
@@ -112,21 +106,31 @@ struct AccessibleCanvas: View {
             ZStack(alignment: .topLeading) {
                 ForEach(page.content.text) { block in
                     let frame = player.canvasRect(block.rect)
-                    Text(verbatim: block.value)
+                    let text = Text(verbatim: block.value)
                         .frame(width: frame.width, height: frame.height)
                         .position(x: frame.midX, y: frame.midY)
-                        .accessibilityAction { player.pulse(22) }
+                    if page.content.modal { text } else { text.accessibilityAction { player.pulse(22) } }
                 }
                 ForEach(Array(page.content.choices.enumerated()), id: \.element.id) { index, choice in
                     let frame = player.canvasRect(choice.rect)
-                    Button {
-                        player.invoke { cmvs_apple_choose($0, page.revision, UInt32(index)) }
-                    } label: {
-                        if !choice.label.isEmpty {
-                            Text(verbatim: choice.label)
-                        } else if let title = player.accessibility.bitmapLabels[choice.id] {
-                            Text(verbatim: title)
-                        } else { Text("Option \(index + 1)") }
+                    let choose: (Int32) -> Void = { value in
+                        player.invoke { cmvs_apple_choose($0, page.revision, UInt32(index), value) }
+                    }
+                    Group {
+                        if let slider = choice.slider {
+                            Slider(value: Binding(
+                                get: { Double(slider) }, set: { choose(Int32($0.rounded())) }
+                            ), in: 0...255, step: 1) { Text(verbatim: choice.label) }
+                                .accessibilityValue(Text(verbatim: String(slider)))
+                        } else {
+                            Button { choose(-1) } label: {
+                                if !choice.label.isEmpty {
+                                    Text(verbatim: choice.label)
+                                } else if let title = player.accessibility.bitmapLabels[choice.id] {
+                                    Text(verbatim: title)
+                                } else { Text("Option \(index + 1)") }
+                            }
+                        }
                     }
                     .frame(width: frame.width, height: frame.height)
                     .position(x: frame.midX, y: frame.midY)

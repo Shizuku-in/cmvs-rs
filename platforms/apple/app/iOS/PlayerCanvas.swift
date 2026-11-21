@@ -131,8 +131,19 @@ final class Canvas: UIView {
         }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if !blocked && pending == nil {
-            for t in touches.intersection(contacts) { send(t, 1, at: t.location(in: self)) }
+        guard !blocked else { return }
+        for touch in touches.intersection(contacts) {
+            let point = touch.location(in: self)
+            if let pending {
+                guard touch == pending.touch else { continue }
+                let dx = point.x - pending.origin.x
+                let dy = point.y - pending.origin.y
+                let dragDistance: CGFloat = 6
+                guard dx * dx + dy * dy >= dragDistance * dragDistance else { continue }
+                beginPending()
+            } else {
+                send(touch, 1, at: point)
+            }
         }
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {

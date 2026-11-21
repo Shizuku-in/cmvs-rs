@@ -78,18 +78,48 @@ impl MessageDialog {
         self.kind == MessageDialogKind::Confirm
     }
 
+    fn buttons(&self) -> [(Button, bool); 4] {
+        [
+            (Button::Cancel, self.has_cancel()),
+            (Button::Accept, true),
+            (Button::Up, self.top > 0),
+            (Button::Down, self.top + LINES_VISIBLE < self.lines.len()),
+        ]
+    }
+
+    pub(super) fn describe(&self, page: &mut dialog::DialogPage, decode: impl Fn(u16) -> char) {
+        page.text(
+            [18, 14, 364, 24],
+            self.caption.iter().copied().map(&decode).collect(),
+        );
+        let body = self
+            .lines
+            .iter()
+            .skip(self.top)
+            .take(LINES_VISIBLE)
+            .map(|line| line.iter().copied().map(&decode).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        page.text([TEXT_LEFT, 56, TEXT_WIDTH, 115], body);
+        for (button, enabled) in self.buttons() {
+            if enabled {
+                let label = match button {
+                    Button::Up => "Scroll up",
+                    Button::Down => "Scroll down",
+                    Button::Cancel => "Cancel",
+                    Button::Accept if self.has_cancel() => "Yes",
+                    Button::Accept => "OK",
+                };
+                page.control(button.rect(), label, None);
+            }
+        }
+    }
+
     pub(super) fn update(&mut self, input: &mut ActionInput, rect: [i64; 4]) -> Update {
         let before = (self.top, self.focus);
         let (point, inside) = dialog::hit_point(rect, input.pointer());
         let bottom = self.lines.len().saturating_sub(LINES_VISIBLE);
-        let over = [
-            (Button::Cancel, self.has_cancel()),
-            (Button::Accept, true),
-            (Button::Up, self.top > 0),
-            (Button::Down, self.top < bottom),
-        ]
-        .into_iter()
-        .find_map(|(button, enabled)| {
+        let over = self.buttons().into_iter().find_map(|(button, enabled)| {
             (enabled && inside && dialog::contains(button.rect(), point)).then_some(button)
         });
         let mouse = input.mouse(0);

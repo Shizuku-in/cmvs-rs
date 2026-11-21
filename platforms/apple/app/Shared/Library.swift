@@ -16,6 +16,7 @@ struct PlayerError: LocalizedError {
 
 struct GameInfo: Codable, Equatable {
     var game: String?
+    var backupIdentity: String?
     var profile, family, basis, encoding: String
     var size: [Int]
     var savedata: Bool
@@ -75,24 +76,28 @@ struct Game: Identifiable, Codable, Equatable {
         return try URL(resolvingBookmarkData: bookmark, options: options, relativeTo: nil, bookmarkDataIsStale: &stale)
     }
 
-    var saves: URL {
+    var saves: URL { Library.userFiles.appending(path: "Saves").appending(path: saveFolderName) }
+    var saveFolderName: String {
         let name = saveFolder ?? info.game ?? id.uuidString
         let safe =
             !name.isEmpty
             && name.utf8.allSatisfy {
                 (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95
             }
-        return Library.userFiles.appending(path: "Saves").appending(path: safe ? name : id.uuidString)
+        return safe ? name : id.uuidString
     }
 
-    // The UIKit player keyed saves by the FNV-1a hash of the selected folder path.
-    static func migrateSaves(source: URL, destination: URL) throws {
-        let fm = FileManager.default
+    // Match UIKit's hash of the selected folder, including when copying a game into the library.
+    static func sourceKey(_ source: URL) -> String {
         let hash = source.path.utf8.reduce(UInt64(14_695_981_039_346_656_037)) {
             ($0 ^ UInt64($1)) &* 1_099_511_628_211
         }
+        return String(format: "%016llx", hash)
+    }
+
+    static func importSaves(from old: URL, to destination: URL) throws {
+        let fm = FileManager.default
         let parent = destination.deletingLastPathComponent()
-        let old = parent.appending(path: String(format: "%016llx", hash))
         guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: destination.path) else { return }
         let staged = parent.appending(path: ".import-\(UUID())")
         defer { try? fm.removeItem(at: staged) }
@@ -197,13 +202,47 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
             let fm = FileManager.default
             try fm.createDirectory(at: directory, withIntermediateDirectories: true)
             if let legacyDirectory { try Self.migrateCatalog(from: legacyDirectory, to: directory) }
-            data = fm.fileExists(atPath: index.path)
+            var catalog = fm.fileExists(atPath: index.path)
                 ? try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: index)) : Catalog()
+            if try Self.migrateSaveFolders(&catalog, saves: (legacyDirectory ?? directory).appending(path: "Saves")) {
+                try JSONEncoder().encode(catalog).write(to: index, options: .atomic)
+            }
+            data = catalog
             loadError = nil
         } catch {
             loadError = error.localizedDescription
         }
     }
+
+    // Preserve earlier Swift catalogs that used the detected game ID or the entry UUID.
+    static func migrateSaveFolders(_ catalog: inout Catalog, saves: URL) throws -> Bool {
+        let oldFolders = catalog.games.map(\.saveFolderName)
+        let groups = Dictionary(grouping: oldFolders, by: { $0 })
+        var changed = false
+        for i in catalog.games.indices {
+            let game = catalog.games[i]
+            if game.saveFolder?.hasPrefix("source-") == true { continue }
+            let source = game.bookmark == nil ? nil : (try? game.resolve())
+            let key = source.map(Game.sourceKey)
+            let folder = key.map { "source-" + $0 } ?? "entry-\(game.id)"
+            guard folder != game.saveFolder else { continue }
+            let destination = saves.appending(path: folder)
+            var old = saves.appending(path: oldFolders[i])
+            if let key {
+                let legacy = saves.appending(path: key)
+                // Shared progress is ambiguous. Prefer this source's own UIKit saves when available.
+                if !FileManager.default.fileExists(atPath: old.path)
+                    || (groups[oldFolders[i], default: []].count > 1 && FileManager.default.fileExists(atPath: legacy.path)) {
+                    old = legacy
+                }
+            }
+            try Game.importSaves(from: old, to: destination)
+            catalog.games[i].saveFolder = folder
+            changed = true
+        }
+        return changed
+    }
+
     // Move the index last so an interrupted upgrade can resume on the next launch.
     static func migrateCatalog(from documents: URL, to support: URL) throws {
         let fm = FileManager.default
@@ -315,10 +354,11 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
                     ? nil
                     : try source.bookmarkData(
                         options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
-                let game = Game(
-                    id: id, name: source.lastPathComponent, info: info, bookmark: bookmark, options: options)
+                let key = Game.sourceKey(source)
+                let game = Game(id: id, name: source.lastPathComponent, info: info, bookmark: bookmark,
+                                options: options, saveFolder: "source-" + key)
                 #if os(iOS)
-                    try Game.migrateSaves(source: source, destination: game.saves)
+                    try Game.importSaves(from: game.saves.deletingLastPathComponent().appending(path: key), to: game.saves)
                 #endif
                 return game
             } catch {

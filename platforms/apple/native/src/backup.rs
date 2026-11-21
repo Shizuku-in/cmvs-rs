@@ -1,5 +1,14 @@
 use crate::Result;
-use cmvs_core::format::system_save::ProfileSystemSave;
+use cmvs_core::{
+    format::{
+        MAX_PAYLOAD,
+        save::{Csv2Save, SaveFamily},
+        system_save::{Css0Save, Css1Save, PersistentStarts, ProfileSystemSave},
+    },
+    host::settings::Configuration,
+    runtime::script_control::Startup,
+};
+use cmvs_host::GameBootstrap;
 use std::{
     fs::{self, File},
     io::{self, Cursor, Read, Seek, SeekFrom},
@@ -73,18 +82,24 @@ fn files(dir: &Path) -> Result<Vec<(String, u64)>> {
     Ok(names)
 }
 
-pub fn run(root: &Path, user: &Path, local: bool, archive: &Path, import: bool) -> Result<()> {
-    let lock = if import {
-        ProfileSystemSave::open_for_restore(user, root, local)?
-    } else if local {
-        cmvs_host::game_savedata(root, user)?
+pub fn export(
+    local_root: Option<&Path>,
+    user: &Path,
+    archive: &Path,
+    identity: &str,
+) -> Result<()> {
+    if let Some(root) = local_root {
+        let lock = cmvs_host::game_savedata(root, user)?;
+        write_archive(lock.directory(), archive, identity)
     } else {
-        ProfileSystemSave::open(user, root)?
-    };
-    let dir = lock.directory();
-    if import {
-        return restore(dir, archive);
+        let _lock = ProfileSystemSave::lock_for_export(user)?;
+        write_archive(user, archive, identity)
     }
+}
+
+const COMMENT_PREFIX: &str = "cmvs-rs save backup: ";
+
+fn write_archive(dir: &Path, archive: &Path, identity: &str) -> Result<()> {
     let mut temp =
         tempfile::NamedTempFile::new_in(archive.parent().ok_or("missing ZIP destination")?)?;
     let names = files(dir)?;
@@ -92,6 +107,9 @@ pub fn run(root: &Path, user: &Path, local: bool, archive: &Path, import: bool) 
         return Err("no save files to export".into());
     }
     let mut zip = ZipWriter::new(temp.as_file_mut());
+    if !identity.is_empty() {
+        zip.set_comment(format!("{COMMENT_PREFIX}{identity}"));
+    }
     for (name, size) in names {
         let file = File::open(dir.join(&name))?;
         zip.start_file(name, SimpleFileOptions::default())?;
@@ -154,9 +172,85 @@ fn open_archive(mut file: File) -> Result<ZipArchive<File>> {
     Ok(ZipArchive::new(file)?)
 }
 
-fn restore(dir: &Path, path: &Path) -> Result<()> {
+enum SaveFormat {
+    Cmvs(Option<u32>),
+    Cvns(PersistentStarts),
+}
+
+pub fn import(boot: &GameBootstrap, user: &Path, local: bool, archive: &Path) -> Result<()> {
+    let lock = ProfileSystemSave::open_for_restore(user, &boot.root, local)?;
+    let dir = lock.directory();
+    let selection = &boot.game.selection;
+    let format = if let Some(map) = selection.profile.command_map() {
+        SaveFormat::Cvns(PersistentStarts::from_start(&boot.script, &map)?)
+    } else {
+        let declared = selection.record.map(|r| r.game_id).or_else(|| {
+            Startup::execute(&boot.script, selection.profile)
+                .ok()?
+                .bootstrap
+                .settings()
+                .get(&0x201d)
+                .copied()
+        });
+        SaveFormat::Cmvs(selection.profile.css1_game_id(declared))
+    };
+    restore(dir, archive, &crate::inspect::backup_identity(boot), format)
+}
+
+impl SaveFormat {
+    fn validate(&self, name: &str, path: &Path, size: u64) -> Result<()> {
+        if name.starts_with("font-faces/") {
+            return Ok(());
+        }
+        let family = match self {
+            Self::Cmvs(_) => SaveFamily::Cmvs,
+            Self::Cvns(_) => SaveFamily::Cvns,
+        };
+        if name.contains(".cfg") {
+            let cfg = if family == SaveFamily::Cvns {
+                "cvns.cfg"
+            } else {
+                "cmvs.cfg"
+            };
+            if !name.starts_with(cfg) {
+                return Err("configuration belongs to another engine family".into());
+            }
+            Configuration::read(path)?;
+            return Ok(());
+        }
+        if size > MAX_PAYLOAD as u64 {
+            return Err("save exceeds supported size".into());
+        }
+        let bytes = fs::read(path)?;
+        match (self, name) {
+            (Self::Cmvs(expected), "system.dat" | "system.bak") => {
+                let id = Css1Save::decode(&bytes)?.layout().game_id;
+                if id != 0 && *expected != Some(id) {
+                    return Err("CSS1 game identifier differs from target".into());
+                }
+            }
+            (Self::Cvns(starts), "save000.dat" | "save000.bak") => {
+                Css0Save::decode(&bytes, *starts)?;
+            }
+            (_, "system.dat" | "system.bak" | "save000.bak") => {
+                return Err("system save belongs to another engine family".into());
+            }
+            _ => {
+                Csv2Save::decode_family(&bytes, family)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn restore(dir: &Path, path: &Path, identity: &str, format: SaveFormat) -> Result<()> {
     let staging = tempfile::tempdir_in(dir)?;
     let mut zip = open_archive(File::open(path)?)?;
+    if let Some(label) = zip.comment().strip_prefix(COMMENT_PREFIX.as_bytes())
+        && label != identity.as_bytes()
+    {
+        return Err("save backup belongs to another game".into());
+    }
     let mut total = 0;
     let mut names = Vec::new();
     for i in 0..zip.len() {
@@ -175,6 +269,7 @@ fn restore(dir: &Path, path: &Path) -> Result<()> {
         if io::copy(&mut (&mut file).take(n + 1), &mut File::create_new(&dest)?)? != n {
             return Err("invalid save entry size".into());
         }
+        format.validate(&name, &dest, n)?;
         names.push(name);
     }
     if names.is_empty() {
@@ -232,19 +327,25 @@ mod tests {
         let archive = tmp.path().join("save.zip");
         fs::create_dir(&game)?;
         fs::create_dir_all(user.join("font-faces"))?;
-        fs::write(user.join("system.dat"), b"system")?;
-        fs::write(user.join("save001.dat"), b"original slot")?;
+        use cmvs_core::format::save::HEADER_SIZE;
+        let mut header = [0; HEADER_SIZE];
+        header[..4].copy_from_slice(b"CSV2");
+        header[4..8].copy_from_slice(&(HEADER_SIZE as u32).to_le_bytes());
+        header[16..35].copy_from_slice(b"2026-01-01 00:00:00");
+        let slot = Csv2Save::encode(&header, b"snapshot", b"", b"script")?;
+        fs::write(user.join("save001.dat"), &slot)?;
         fs::write(user.join("font-faces/CMVS-F-ab"), b"face")?;
-        run(&game, &user, false, &archive, false)?;
         let held = ProfileSystemSave::open(&user, &game)?;
-        assert!(run(&game, &user, false, &archive, true).is_err());
+        assert!(export(None, &user, &archive, "game").is_err());
         drop(held);
-        fs::rename(user.join("system.dat"), user.join("system.bak"))?;
+        fs::remove_dir(&game)?;
+        export(None, &user, &archive, "game")?;
         fs::write(user.join("save001.dat"), b"updated slot")?;
         fs::remove_dir_all(user.join("font-faces"))?;
-        run(&game, &user, false, &archive, true)?;
-        assert_eq!(fs::read(user.join("system.dat"))?, b"system");
-        assert_eq!(fs::read(user.join("save001.dat"))?, b"original slot");
+        assert!(restore(&user, &archive, "other", SaveFormat::Cmvs(Some(0))).is_err());
+        assert_eq!(fs::read(user.join("save001.dat"))?, b"updated slot");
+        restore(&user, &archive, "game", SaveFormat::Cmvs(Some(0)))?;
+        assert_eq!(fs::read(user.join("save001.dat"))?, slot);
         assert_eq!(fs::read(user.join("font-faces/CMVS-F-ab"))?, b"face");
         Ok(())
     }
@@ -252,20 +353,53 @@ mod tests {
     #[test]
     fn export_size_limits() -> Result<()> {
         let tmp = tempfile::tempdir()?;
-        let game = tmp.path().join("game");
         let user = tmp.path().join("user");
-        fs::create_dir(&game)?;
         fs::create_dir(&user)?;
         File::create(user.join("save001.dat"))?.set_len(MAX_FILE + 1)?;
         let archive = tmp.path().join("save.zip");
-        assert!(run(&game, &user, false, &archive, false).is_err());
+        assert!(export(None, &user, &archive, "").is_err());
         assert!(!archive.exists());
 
         for i in 1..=5 {
             File::create(user.join(format!("save{i:03}.dat")))?.set_len(MAX_FILE)?;
         }
-        assert!(run(&game, &user, false, &archive, false).is_err());
+        assert!(export(None, &user, &archive, "").is_err());
         assert!(!archive.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_backup_with_foreign_system_id_preserves_both_generations() -> Result<()> {
+        use cmvs_core::{
+            format::system_save::Css1Parameters, host::random::CrtRandom, vm::evaluate::State,
+        };
+        use std::io::Write;
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path();
+        let archive = dir.join("saves.zip");
+        fs::write(dir.join("system.dat"), b"original primary")?;
+        fs::write(dir.join("system.bak"), b"original backup")?;
+        let mut state = State::default();
+        state.fill_bits(2048, 260096, false)?;
+        state.fill_integers(2048, 2048, 0)?;
+        state.fill_floats(1024, 1024, 0)?;
+        state.fill_strings(64, 64, b"")?;
+        let mut zip = ZipWriter::new(File::create(&archive)?);
+        let params = Css1Parameters::draw(&mut CrtRandom::new(1));
+        for (name, id) in [("system.dat", 42), ("system.bak", 51)] {
+            zip.start_file(name, SimpleFileOptions::default())?;
+            zip.write_all(&Css1Save::encode_initial_state(
+                &state,
+                id,
+                params,
+                [&[], &[]],
+            )?)?;
+        }
+        zip.finish()?;
+        let err = restore(dir, &archive, "game", SaveFormat::Cmvs(Some(42))).unwrap_err();
+        assert_eq!(err.to_string(), "CSS1 game identifier differs from target");
+        assert_eq!(fs::read(dir.join("system.dat"))?, b"original primary");
+        assert_eq!(fs::read(dir.join("system.bak"))?, b"original backup");
         Ok(())
     }
 
@@ -288,18 +422,23 @@ mod tests {
     }
 
     #[test]
-    fn rejected_entry_leaves_original_slot_intact() -> Result<()> {
+    fn rejected_entry_leaves_original_file_intact() -> Result<()> {
         let tmp = tempfile::tempdir()?;
         let dir = tmp.path();
-        fs::write(dir.join("save001.dat"), b"original")?;
+        fs::write(dir.join("cmvs.cfg"), b"original")?;
         let archive = dir.join("saves.zip");
         let mut zip = ZipWriter::new(File::create(&archive)?);
-        for name in ["save001.dat", "font-faces/../save002.dat"] {
+        for name in ["cmvs.cfg", "font-faces/../save002.dat"] {
             zip.start_file(name, SimpleFileOptions::default())?;
         }
         zip.finish()?;
-        assert!(restore(dir, &archive).is_err());
-        assert_eq!(fs::read(dir.join("save001.dat"))?, b"original");
+        assert_eq!(
+            restore(dir, &archive, "game", SaveFormat::Cmvs(Some(0)))
+                .unwrap_err()
+                .to_string(),
+            "invalid save entry"
+        );
+        assert_eq!(fs::read(dir.join("cmvs.cfg"))?, b"original");
         Ok(())
     }
 }

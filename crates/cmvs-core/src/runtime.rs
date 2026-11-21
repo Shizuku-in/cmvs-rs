@@ -107,6 +107,7 @@ mod dialog;
 mod frame;
 mod message_dialog;
 mod text_dialog;
+pub use dialog::{DialogButton, DialogPage};
 pub use frame::{FrameBudget, FrameDriver, FrameOutcome};
 pub use text_dialog::CommentEdit;
 mod lifecycle;

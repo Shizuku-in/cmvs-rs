@@ -155,15 +155,26 @@ struct SaveRow: View {
             do {
                 let game = game
                 let output = try await Task.detached {
-                    let archive = source == nil ? try SaveArchive(game: game) : nil
-                    let url = source ?? archive!.url
-                    let root = try game.resolve()
-                    try scoped(root) {
-                        try scoped(url) {
-                            let api = Bridge()
-                            try api.check(cmvs_apple_backup(api.handle, root.path, game.saves.path,
-                                                           game.options.game_savedata, url.path, source != nil))
+                    let api = Bridge()
+                    if let source {
+                        let root = try game.resolve()
+                        try scoped(root) {
+                            try scoped(source) {
+                                try api.check(cmvs_apple_restore_saves(api.handle, root.path, game.options.profile,
+                                    game.info.encoding, game.saves.path, game.options.game_savedata, source.path))
+                            }
                         }
+                        return nil as SaveArchive?
+                    }
+                    let archive = try SaveArchive(game: game)
+                    let identity = game.info.backupIdentity ?? game.info.game ?? ""
+                    if game.options.game_savedata {
+                        let root = try game.resolve()
+                        try scoped(root) {
+                            try api.check(cmvs_apple_export_saves(api.handle, root.path, game.saves.path, archive.url.path, identity))
+                        }
+                    } else {
+                        try api.check(cmvs_apple_export_saves(api.handle, nil, game.saves.path, archive.url.path, identity))
                     }
                     return archive
                 }.value

@@ -121,6 +121,10 @@
 "empty save backup" = "The save backup is empty.";
 "invalid save entry" = "The backup contains an invalid save file.";
 "invalid save entry size" = "A save file in the backup has an invalid size.";
+"save backup belongs to another game" = "This backup belongs to another game.";
+"CSS1 game identifier differs from target" = "The system save’s game ID could not be matched to this game.";
+"system save belongs to another engine family" = "This system save uses a different engine format.";
+"configuration belongs to another engine family" = "This configuration uses a different engine format.";
 "unsupported save ZIP directory" = "The save ZIP uses an unsupported directory format.";
 "no completed frame" = "No frame is ready to capture.";
 "%@ · PC 0x%@ · %llu steps" = "%@ · PC 0x%@ · %llu steps";

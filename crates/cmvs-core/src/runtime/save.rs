@@ -327,24 +327,9 @@ fn validate_child_slots_without_button_lists<'a>(
 
 impl Runtime {
     pub(super) fn system_save_identifier(&self) -> Option<u32> {
-        use crate::profile::InspectedBuild;
-
-        // 20070119 0x408b00 / 20071117 0x40bdf0 / 20080719 0x40bea0 zero the CSS1
-        // header and never write offset 68: a format constant, not a game identifier.
-        if matches!(
-            self.gate.profile().inspected_build(),
-            Some(
-                InspectedBuild::Cmvs20070119
-                    | InspectedBuild::Cmvs20071117
-                    | InspectedBuild::Cmvs20080719
-                    | InspectedBuild::Cmvs20080903
-                    | InspectedBuild::Cmvs20090815
-            )
-        ) {
-            Some(0)
-        } else {
-            self.bootstrap.settings().get(&0x201d).copied()
-        }
+        self.gate
+            .profile()
+            .css1_game_id(self.bootstrap.settings().get(&0x201d).copied())
     }
     fn validate_build_snapshot(
         &self,

@@ -156,9 +156,19 @@ impl ProfileSystemSave {
         Self::open_game_savedata_with_fs(game_root, crate::filesystem::default_fs())
     }
 
-    fn open_directory(directory: PathBuf, fs: Arc<dyn HostFs>, repair: bool) -> io::Result<Self> {
+    /// Lock an existing application-owned save directory for a read-only export.
+    #[cfg(feature = "std-fs")]
+    pub fn lock_for_export(directory: &Path) -> io::Result<File> {
+        let fs = crate::filesystem::default_fs();
+        if !fs.symlink_metadata(directory)?.is_dir() {
+            return Err(io::Error::other("expected a save directory"));
+        }
+        Self::lock_directory(directory, &*fs)
+    }
+
+    fn lock_directory(directory: &Path, fs: &dyn HostFs) -> io::Result<File> {
         let lock_path = directory.join(".cmvs-system.lock");
-        if regular_file(&*fs, &lock_path)? && fs.metadata(&lock_path)?.len() != 0 {
+        if regular_file(fs, &lock_path)? && fs.metadata(&lock_path)?.len() != 0 {
             return Err(io::Error::other("profile lock file must be empty"));
         }
         let lock = OpenOptions::new()
@@ -166,7 +176,7 @@ impl ProfileSystemSave {
             .write(true)
             .create(true)
             .truncate(false)
-            .open_with(&*fs, &lock_path)?;
+            .open_with(fs, &lock_path)?;
         if lock.metadata()?.len() != 0 {
             return Err(io::Error::other("profile lock file must be empty"));
         }
@@ -176,6 +186,11 @@ impl ProfileSystemSave {
                 format!("cannot lock user data directory: {error}"),
             )
         })?;
+        Ok(lock)
+    }
+
+    fn open_directory(directory: PathBuf, fs: Arc<dyn HostFs>, repair: bool) -> io::Result<Self> {
+        let lock = Self::lock_directory(&directory, &*fs)?;
         let profile = Self {
             fs,
             directory,

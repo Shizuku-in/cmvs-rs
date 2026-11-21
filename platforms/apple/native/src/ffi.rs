@@ -125,7 +125,7 @@ extern "C" fn cmvs_apple_attach_metal_layer(
             return Err("missing Metal layer".into());
         }
         let p = h.player()?;
-        p.output = [width, height];
+        p.backend.output = [width, height];
         #[cfg(target_vendor = "apple")]
         {
             use cmvs_wgpu::wgpu::{Backends, Instance, InstanceDescriptor, SurfaceTargetUnsafe};
@@ -133,11 +133,14 @@ extern "C" fn cmvs_apple_attach_metal_layer(
                 backends: Backends::METAL,
                 ..InstanceDescriptor::new_without_display_handle()
             });
-            // SAFETY: the Swift view retains its CAMetalLayer until synchronous detach.
-            let surface = unsafe {
-                instance.create_surface_unsafe(SurfaceTargetUnsafe::CoreAnimationLayer(layer))
-            }?;
-            p.metal = Some(crate::renderer::Metal::new(surface, &instance)?);
+            let surface_instance = instance.clone();
+            p.metal = Some(crate::renderer::Metal::new(&instance, move || {
+                // SAFETY: Swift retains the CAMetalLayer until synchronous detach.
+                Ok(unsafe {
+                    surface_instance
+                        .create_surface_unsafe(SurfaceTargetUnsafe::CoreAnimationLayer(layer))
+                }?)
+            })?);
             Ok(0)
         }
         #[cfg(not(target_vendor = "apple"))]
@@ -147,13 +150,40 @@ extern "C" fn cmvs_apple_attach_metal_layer(
     })
 }
 #[unsafe(no_mangle)]
-extern "C" fn cmvs_apple_resize(h: *mut Handle, width: u32, height: u32) -> i32 {
+extern "C" fn cmvs_apple_resize(
+    h: *mut Handle,
+    width: u32,
+    height: u32,
+    windowed: bool,
+    resizable: bool,
+    rect: *mut [i32; 4],
+) -> i32 {
     call(h, |h| {
         let p = h.player()?;
-        if p.output != [width, height] {
-            p.output = [width, height];
-            p.touch.cancel(p.session.runtime.input_mut());
-            p.session.input.clear(p.session.runtime.input_mut());
+        let output = [width, height];
+        if p.backend.output != output {
+            p.backend.output = output;
+            p.touch.reset_contacts();
+            p.touching = false;
+            p.fresh_touch = false;
+            p.reader.cancel();
+            p.session.input.cancel_pointer();
+        }
+        p.backend.resizable = resizable;
+        if windowed {
+            p.backend.windowed = output;
+        }
+        // SAFETY: the caller supplies storage for four consecutive signed coordinates.
+        let rect = unsafe { rect.as_mut() }.ok_or("missing viewport destination")?;
+        if output.contains(&0) {
+            *rect = [0; 4];
+        } else {
+            let v = cmvs_core::render::viewport::Viewport::new(
+                p.backend.size,
+                output,
+                p.backend.mode(),
+            )?;
+            *rect = [v.left as i32, v.top as i32, v.width as i32, v.height as i32];
         }
         Ok(0)
     })
@@ -226,11 +256,12 @@ extern "C" fn cmvs_apple_accessibility(h: *mut Handle, known_revision: u64) -> i
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn cmvs_apple_choose(h: *mut Handle, revision: u64, index: u32) -> i32 {
+extern "C" fn cmvs_apple_choose(h: *mut Handle, revision: u64, index: u32, slider: i32) -> i32 {
     call(h, |h| {
         let p = h.player()?;
         if !p.paused {
-            p.reader.choose(revision, index as usize);
+            p.reader
+                .choose(revision, index as usize, u8::try_from(slider).ok());
         }
         Ok(0)
     })
@@ -256,6 +287,7 @@ extern "C" fn cmvs_apple_pointer(h: *mut Handle, x: f64, y: f64) -> i32 {
             p.touching = false;
         }
         let [sx, sy] = p
+            .backend
             .viewport()
             .and_then(|v| v.to_script([x, y]))
             .unwrap_or([-1, -1]);
@@ -276,7 +308,7 @@ extern "C" fn cmvs_apple_touch(h: *mut Handle, id: u64, phase: u32, x: f64, y: f
         let p = h.player()?;
         p.touching = true;
         p.fresh_touch = true;
-        if let Some(v) = p.viewport()
+        if let Some(v) = p.backend.viewport()
             && p.touch.pointer_event(
                 TouchEvent {
                     id,
@@ -381,21 +413,47 @@ extern "C" fn cmvs_apple_read_frame(h: *mut Handle, pixels: *mut *const u8) -> i
     })
 }
 #[unsafe(no_mangle)]
-extern "C" fn cmvs_apple_backup(
+extern "C" fn cmvs_apple_export_saves(
+    h: *mut Handle,
+    local_root: *const c_char,
+    user: *const c_char,
+    path: *const c_char,
+    identity: *const c_char,
+) -> i32 {
+    call(h, |_| {
+        let root = (!local_root.is_null())
+            .then(|| string(local_root))
+            .transpose()?;
+        crate::backup::export(
+            root.as_deref().map(Path::new),
+            Path::new(&string(user)?),
+            Path::new(&string(path)?),
+            &string(identity)?,
+        )?;
+        Ok(0)
+    })
+}
+#[unsafe(no_mangle)]
+extern "C" fn cmvs_apple_restore_saves(
     h: *mut Handle,
     game: *const c_char,
+    profile: *const c_char,
+    encoding: *const c_char,
     user: *const c_char,
     local: bool,
     path: *const c_char,
-    import: bool,
 ) -> i32 {
     call(h, |_| {
-        crate::backup::run(
+        let boot = inspect::bootstrap(
             Path::new(&string(game)?),
+            Some(&string(profile)?),
+            &string(encoding)?,
+        )?;
+        crate::backup::import(
+            &boot,
             Path::new(&string(user)?),
             local,
             Path::new(&string(path)?),
-            import,
         )?;
         Ok(0)
     })

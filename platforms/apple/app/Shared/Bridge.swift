@@ -75,8 +75,6 @@ final class Engine {
                 try bridge.check(
                     cmvs_apple_attach_metal_layer(
                         bridge.handle, Unmanaged.passUnretained(layer).toOpaque(), width, height))
-            } else {
-                try bridge.check(cmvs_apple_resize(bridge.handle, width, height))
             }
             api = bridge
             return info
@@ -105,7 +103,7 @@ final class Engine {
         CGImageDestinationAddImage(dest, image, nil)
         guard CGImageDestinationFinalize(dest) else { throw PlayerError("Cannot save screenshot.") }
     }
-    func close() throws {
+    func close(save: Bool) throws {
         defer {
             api = nil
             retainedLayer = nil
@@ -114,7 +112,7 @@ final class Engine {
         }
         if let api {
             defer { _ = cmvs_apple_detach(api.handle) }
-            try api.check(cmvs_apple_save_preferences(api.handle))
+            if save { try api.check(cmvs_apple_save_preferences(api.handle)) }
         }
     }
 }

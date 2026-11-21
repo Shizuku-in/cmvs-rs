@@ -121,6 +121,10 @@
 "empty save backup" = "存档备份为空。";
 "invalid save entry" = "存档备份中的文件无效。";
 "invalid save entry size" = "备份中的存档文件大小无效。";
+"save backup belongs to another game" = "此备份属于其他游戏。";
+"CSS1 game identifier differs from target" = "无法确认系统存档的游戏 ID 与当前游戏一致。";
+"system save belongs to another engine family" = "此系统存档使用其他引擎的格式。";
+"configuration belongs to another engine family" = "此配置使用其他引擎的格式。";
 "unsupported save ZIP directory" = "不支持此存档 ZIP 目录格式。";
 "no completed frame" = "尚无可截取的完整画面。";
 "%@ · PC 0x%@ · %llu steps" = "%@ · PC 0x%@ · %llu 步";

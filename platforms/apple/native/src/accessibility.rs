@@ -12,6 +12,8 @@ pub(crate) struct Choice {
     id: [usize; 2],
     rect: [i32; 4],
     label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slider: Option<u8>,
 }
 
 impl Choice {
@@ -37,6 +39,7 @@ fn text_scale(scale_bits: u32) -> Option<f32> {
 pub(crate) struct Page {
     #[serde(skip)]
     script: Vec<u8>,
+    modal: bool,
     text: Vec<TextBlock>,
     choices: Vec<Choice>,
 }
@@ -44,6 +47,24 @@ pub(crate) struct Page {
 impl Page {
     pub fn read(run: &Runtime, encoding: TextEncoding) -> Self {
         let mut page = Self::default();
+        if let Some(dialog) =
+            run.dialog_page(|code| character(encoding, code).unwrap_or(char::REPLACEMENT_CHARACTER))
+        {
+            page.modal = true;
+            page.script = run.machine().current_name().to_vec();
+            for (id, (rect, value)) in dialog.text.into_iter().enumerate() {
+                page.text.push(TextBlock { id, rect, value });
+            }
+            for (id, button) in dialog.buttons.into_iter().enumerate() {
+                page.choices.push(Choice {
+                    id: [controls::GROUPS + MESSAGE_WINDOWS + 1, id],
+                    rect: button.rect,
+                    label: button.label,
+                    slider: button.slider,
+                });
+            }
+            return page;
+        }
         if run.movies().has_player() {
             return page;
         }
@@ -178,6 +199,7 @@ impl Page {
                 id,
                 rect,
                 label: String::new(),
+                slider: None,
             });
         }
     }
@@ -253,7 +275,8 @@ impl Page {
 
     fn matches_stage(&self, current: &Self, index: usize, stage: &Click) -> bool {
         match stage {
-            Click::Hover => self.same_choices(current, &self.choice_keys()),
+            Click::Hover => self == current,
+            Click::Press if self.modal => self == current,
             Click::Press => self.same_target(current, index),
             Click::Release(expected) => self.same_choices(current, expected),
         }
@@ -267,7 +290,14 @@ impl Page {
 pub(crate) struct Reader {
     pub page: Page,
     pub revision: u64,
-    pending: Option<(u64, usize, Click)>,
+    pending: Option<Activation>,
+}
+
+struct Activation {
+    revision: u64,
+    index: usize,
+    point: [i32; 2],
+    stage: Click,
 }
 
 enum Click {
@@ -279,8 +309,8 @@ enum Click {
 impl Reader {
     pub fn update(&mut self, page: Page) {
         if self.revision == 0 || page != self.page {
-            if let Some((_, index, ref stage)) = self.pending
-                && self.page.matches_stage(&page, index, stage)
+            if let Some(action) = &self.pending
+                && self.page.matches_stage(&page, action.index, &action.stage)
             {
                 return;
             }
@@ -289,10 +319,28 @@ impl Reader {
         }
     }
 
-    pub fn choose(&mut self, revision: u64, index: usize) {
-        if revision == self.revision && index < self.page.choices.len() && self.pending.is_none() {
-            self.pending = Some((revision, index, Click::Hover));
+    pub fn choose(&mut self, revision: u64, index: usize, slider: Option<u8>) {
+        let Some(choice) = self.page.choices.get(index) else {
+            return;
+        };
+        if revision != self.revision || self.pending.is_some() {
+            return;
         }
+        let [x, y, w, h] = choice.rect;
+        let dx = match (choice.slider, slider) {
+            (None, None) => w / 2,
+            (Some(current), Some(value)) => {
+                let scaled = i64::from(w - 1) * i64::from(value);
+                ((scaled + if value > current { 254 } else { 0 }) / 255) as i32
+            }
+            _ => return,
+        };
+        self.pending = Some(Activation {
+            revision,
+            index,
+            point: [x + dx, y + h / 2],
+            stage: Click::Hover,
+        });
     }
 
     pub fn cancel(&mut self) {
@@ -304,27 +352,32 @@ impl Reader {
         current: impl FnOnce() -> Page,
         input: &mut cmvs_host::InputState,
     ) -> bool {
-        let Some((revision, index, stage)) = self.pending.take() else {
+        let Some(mut action) = self.pending.take() else {
             return false;
         };
         let current = current();
-        if revision != self.revision || !self.page.matches_stage(&current, index, &stage) {
+        if action.revision != self.revision
+            || !self
+                .page
+                .matches_stage(&current, action.index, &action.stage)
+        {
             input.cancel_primary_button();
             return true;
         }
-        let [x, y, w, h] = self.page.choices[index].rect;
-        input.set_pointer(x + w / 2, y + h / 2);
-        match stage {
+        let [x, y] = action.point;
+        input.set_pointer(x, y);
+        action.stage = match action.stage {
             Click::Hover => {
                 input.cancel_primary_button();
-                self.pending = Some((revision, index, Click::Press));
+                Click::Press
             }
             Click::Press => {
                 input.pulse(1).expect("valid primary button");
-                self.pending = Some((revision, index, Click::Release(current.choice_keys())));
+                Click::Release(current.choice_keys())
             }
-            Click::Release(_) => {}
-        }
+            Click::Release(_) => return true,
+        };
+        self.pending = Some(action);
         true
     }
 }
@@ -372,7 +425,7 @@ mod tests {
         let mut actions = ActionInput::default();
         let keys = KeyBindings::parse("[KEY_FUNCTION_01]\nKEY_DATA_01=1\n").unwrap();
         reader.update(options());
-        reader.choose(reader.revision, 1);
+        reader.choose(reader.revision, 1, None);
         for (pressed, released) in [(false, false), (true, false), (false, true)] {
             assert!(reader.sample(options, &mut input));
             input.sample(&keys, &mut actions);
@@ -383,7 +436,7 @@ mod tests {
             );
         }
 
-        reader.choose(reader.revision, 0);
+        reader.choose(reader.revision, 0, None);
         reader.sample(options, &mut input);
         reader.sample(Page::default, &mut input);
         input.sample(&keys, &mut actions);
@@ -391,8 +444,23 @@ mod tests {
         assert!(!reader.sample(options, &mut input));
         let stale = reader.revision;
         reader.update(Page::default());
-        reader.choose(stale, 0);
+        reader.choose(stale, 0, None);
         assert!(!reader.sample(options, &mut input));
+    }
+
+    #[test]
+    fn replacement_label_before_hover_cancels_activation() {
+        let mut reader = Reader::default();
+        let mut input = InputState::default();
+        reader.update(options());
+        reader.choose(reader.revision, 1, None);
+        let replacement = || {
+            let mut page = options();
+            page.choices[1].label = "Another option".into();
+            page
+        };
+        assert!(reader.sample(replacement, &mut input));
+        assert!(!reader.sample(replacement, &mut input));
     }
 
     #[test]
@@ -410,7 +478,7 @@ mod tests {
         };
 
         reader.update(options());
-        reader.choose(reader.revision, 1);
+        reader.choose(reader.revision, 1, None);
 
         // Frame 1: Hover moves pointer without pressing.
         assert!(reader.sample(options, &mut input));
@@ -438,7 +506,7 @@ mod tests {
         assert_eq!(reader.revision, 2);
 
         // If Press changes the available choices, Release is cancelled to protect the next screen.
-        reader.choose(reader.revision, 0);
+        reader.choose(reader.revision, 0, None);
         assert!(reader.sample(hovered, &mut input));
         input.sample(&keys, &mut actions);
         assert!(reader.sample(hovered, &mut input));

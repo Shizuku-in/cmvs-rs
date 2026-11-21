@@ -18,7 +18,7 @@ use cmvs_core::{
 };
 use cmvs_font::font::FontRenderer;
 use cmvs_host::{HostSession, SessionConfig, game_savedata};
-use cmvs_input::{TouchInput, Viewport};
+use cmvs_input::TouchInput;
 use renderer::{Frame, Metal};
 use serde::Deserialize;
 use std::{path::PathBuf, time::Duration};
@@ -51,7 +51,6 @@ struct Player {
     output_audio: Option<ios_audio::Output>,
     metal: Option<Metal>,
     use_metal: bool,
-    output: [u32; 2],
     touch: TouchInput,
     touching: bool,
     fresh_touch: bool,
@@ -103,10 +102,15 @@ impl Player {
         } else {
             None
         };
+        let size = session.runtime.screen_size();
         let mut backend = Backend {
             display: session.runtime.display_preferences(),
             aspect_override: c.aspect.filter(|m| *m <= 3),
-            size: session.runtime.screen_size(),
+            size,
+            output: size,
+            windowed: size,
+            resizable: false,
+            full_move: session.runtime.platform().window_full_move(),
             encoding: session.encoding,
             frame: None,
             events: Default::default(),
@@ -123,7 +127,6 @@ impl Player {
         Ok(Self {
             session,
             reader: Default::default(),
-            output: backend.size,
             backend,
             audio,
             #[cfg(target_os = "ios")]
@@ -138,9 +141,6 @@ impl Player {
             cursor: Default::default(),
             cursor_visible: true,
         })
-    }
-    fn viewport(&self) -> Option<Viewport> {
-        Viewport::for_canvas(self.backend.size, self.output, self.backend.mode())
     }
     fn pause(&mut self, value: bool) {
         self.paused = value;
@@ -157,10 +157,10 @@ impl Player {
         }
     }
     fn tick(&mut self, delta: u32) -> Result<i32> {
-        if self.paused || self.output.contains(&0) {
+        if self.paused || self.backend.output.contains(&0) {
             return Ok(3);
         }
-        let viewport = self.viewport().ok_or("invalid viewport")?;
+        let viewport = self.backend.viewport().ok_or("invalid viewport")?;
         #[cfg(target_os = "ios")]
         if let Some(audio) = &self.output_audio
             && audio.needs_restart()?
@@ -215,10 +215,19 @@ impl Player {
             &mut FrameBudget::time(Duration::from_millis(8)),
             |rt| rt.tick(&mut self.backend),
         )?;
+        let mode = self.backend.mode();
+        self.backend.full_move = s.runtime.platform().window_full_move();
+        if mode != self.backend.mode() {
+            self.backend
+                .events
+                .push_back(serde_json::json!({"kind":"layout"}));
+        }
         if let Some([x, y]) = s.runtime.input_mut().take_warp() {
             self.fresh_touch = false;
             s.input.set_pointer(x, y);
-            if cfg!(target_os = "macos") {
+            if cfg!(target_os = "macos")
+                && let Some(viewport) = self.backend.viewport()
+            {
                 self.backend.events.push_back(
                     serde_json::json!({"kind":"warp","point":viewport.to_window([x,y])}),
                 );
@@ -231,7 +240,7 @@ impl Player {
                 self.backend.frame = Some(if self.use_metal {
                     let frame = self.metal.as_mut().ok_or("Metal layer is detached")?.draw(
                         s,
-                        self.output,
+                        self.backend.output,
                         self.backend.mode(),
                         linear,
                     )?;

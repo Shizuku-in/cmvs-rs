@@ -15,20 +15,27 @@ impl Frame {
         }
     }
 }
+type RebuildPresenter = Box<dyn Fn(&Renderer) -> Result<Presenter>>;
+
 pub struct Metal {
+    rebuild: RebuildPresenter,
     presenter: Presenter,
     renderer: Renderer,
 }
 impl Metal {
     #[cfg(target_vendor = "apple")]
     pub fn new(
-        surface: cmvs_wgpu::wgpu::Surface<'static>,
         instance: &cmvs_wgpu::wgpu::Instance,
+        create_surface: impl Fn() -> Result<cmvs_wgpu::wgpu::Surface<'static>> + 'static,
     ) -> Result<Self> {
+        let surface = create_surface()?;
         let (renderer, adapter) = Renderer::new(instance, Some(&surface))?;
         Ok(Self {
             presenter: Presenter::new(surface, &adapter, &renderer)?,
             renderer,
+            rebuild: Box::new(move |renderer| {
+                Presenter::new(create_surface()?, &adapter, renderer)
+            }),
         })
     }
     pub fn draw(
@@ -46,11 +53,11 @@ impl Metal {
             } => self.renderer.render_image(image, size, linear),
             GpuTarget::Scene(frame) => self.renderer.render(&frame),
         })?;
+        if self.presenter.lost {
+            self.presenter = (self.rebuild)(&self.renderer)?;
+        }
         self.presenter
             .present(&self.renderer, &frame, size, mode, linear, false)?;
-        if self.presenter.lost {
-            return Err("Metal surface lost".into());
-        }
         Ok(Frame::Metal(frame))
     }
 }
