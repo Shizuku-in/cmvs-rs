@@ -94,7 +94,7 @@ impl ProfileSystemSave {
         fs: Arc<dyn HostFs>,
     ) -> io::Result<Self> {
         let directory = external_directory(&*fs, directory, game_root)?;
-        Self::open_directory(directory, fs)
+        Self::open_directory(directory, fs, false)
     }
 
     #[cfg(feature = "std-fs")]
@@ -105,6 +105,26 @@ impl ProfileSystemSave {
     /// Explicitly opt into the game's own savedata directory using `fs`. Other game files
     /// remain read-only, and a symlink may not redirect writes into resources.
     pub fn open_game_savedata_with_fs(game_root: &Path, fs: Arc<dyn HostFs>) -> io::Result<Self> {
+        Self::game_directory(game_root, fs, false)
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn open_for_restore(directory: &Path, game_root: &Path, local: bool) -> io::Result<Self> {
+        let fs = crate::filesystem::default_fs();
+        if local {
+            match Self::game_directory(game_root, fs.clone(), true) {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
+                    ) => {}
+                result => return result,
+            }
+        }
+        Self::open_directory(external_directory(&*fs, directory, game_root)?, fs, true)
+    }
+
+    fn game_directory(game_root: &Path, fs: Arc<dyn HostFs>, repair: bool) -> io::Result<Self> {
         let game_root = fs.canonicalize(game_root)?;
         let directory = game_root.join("savedata");
         match fs.create_dir_all(&directory) {
@@ -122,7 +142,7 @@ impl ProfileSystemSave {
                 "savedata resolves outside the game directory",
             ));
         }
-        let profile = Self::open_directory(directory, fs)?;
+        let profile = Self::open_directory(directory, fs, repair)?;
         // Opening an existing lock alone does not prove that saves can be
         // created or atomically replaced in this directory.
         drop(profile.stage(&[])?);
@@ -136,9 +156,19 @@ impl ProfileSystemSave {
         Self::open_game_savedata_with_fs(game_root, crate::filesystem::default_fs())
     }
 
-    fn open_directory(directory: PathBuf, fs: Arc<dyn HostFs>) -> io::Result<Self> {
+    /// Lock an existing application-owned save directory for a read-only export.
+    #[cfg(feature = "std-fs")]
+    pub fn lock_for_export(directory: &Path) -> io::Result<File> {
+        let fs = crate::filesystem::default_fs();
+        if !fs.symlink_metadata(directory)?.is_dir() {
+            return Err(io::Error::other("expected a save directory"));
+        }
+        Self::lock_directory(directory, &*fs)
+    }
+
+    fn lock_directory(directory: &Path, fs: &dyn HostFs) -> io::Result<File> {
         let lock_path = directory.join(".cmvs-system.lock");
-        if regular_file(&*fs, &lock_path)? && fs.metadata(&lock_path)?.len() != 0 {
+        if regular_file(fs, &lock_path)? && fs.metadata(&lock_path)?.len() != 0 {
             return Err(io::Error::other("profile lock file must be empty"));
         }
         let lock = OpenOptions::new()
@@ -146,7 +176,7 @@ impl ProfileSystemSave {
             .write(true)
             .create(true)
             .truncate(false)
-            .open_with(&*fs, &lock_path)?;
+            .open_with(fs, &lock_path)?;
         if lock.metadata()?.len() != 0 {
             return Err(io::Error::other("profile lock file must be empty"));
         }
@@ -156,6 +186,11 @@ impl ProfileSystemSave {
                 format!("cannot lock user data directory: {error}"),
             )
         })?;
+        Ok(lock)
+    }
+
+    fn open_directory(directory: PathBuf, fs: Arc<dyn HostFs>, repair: bool) -> io::Result<Self> {
+        let lock = Self::lock_directory(&directory, &*fs)?;
         let profile = Self {
             fs,
             directory,
@@ -164,7 +199,7 @@ impl ProfileSystemSave {
         };
         let primary = regular_file(&*profile.fs, &profile.path())?;
         let backup = regular_file(&*profile.fs, &profile.backup_path())?;
-        if !primary && backup {
+        if !repair && !primary && backup {
             return Err(io::Error::other(
                 "profile system.dat is missing but system.bak exists; restore the backup explicitly",
             ));

@@ -103,9 +103,49 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  apple:
+    name: Apple players
+    needs: [verify]
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
+      - run: brew install xcodegen
+      - name: Package players
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#v}
+          export CMVS_VERSION="${version%%[-+]*}" CMVS_BUILD_NUMBER="$GITHUB_RUN_NUMBER"
+          if ! [[ "$CMVS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a numeric major.minor.patch version in $TAG"
+            exit 1
+          fi
+          sh platforms/apple/build.sh macos
+          sh platforms/apple/build.sh ios --reuse-framework
+          for root in target/apple/macos/CMVS.app/Contents target/apple/ios/CMVS.app; do
+            test "$(plutil -extract CFBundleShortVersionString raw "$root/Info.plist")" = "$CMVS_VERSION"
+            test "$(plutil -extract CFBundleVersion raw "$root/Info.plist")" = "$CMVS_BUILD_NUMBER"
+            notices="$root/DEPENDENCY-LICENSES.txt"
+            if [ -d "$root/Resources" ]; then notices="$root/Resources/DEPENDENCY-LICENSES.txt"; fi
+            grep -Fq 'Copyright (c) 2014 Mathijs van de Nes' "$notices"
+          done
+          mkdir -p dist target/apple/Payload
+          ditto -c -k --keepParent target/apple/macos/CMVS.app "dist/cmvs-macos-$TAG.zip"
+          ditto target/apple/ios/CMVS.app target/apple/Payload/CMVS.app
+          ditto -c -k --keepParent target/apple/Payload "dist/cmvs-ios-$TAG.ipa"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-apple
+          path: dist/*
+          if-no-files-found: error
+
   publish:
     name: publish release
-    needs: [switch, psvita]
+    needs: [switch, psvita, apple]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

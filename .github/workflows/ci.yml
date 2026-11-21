@@ -260,3 +260,98 @@ jobs:
             platforms/psvita/build/cmvs-vita.vpk
             platforms/psvita/build/cmvs-vita-probe.vpk
           if-no-files-found: error
+
+  apple:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: brew install xcodegen
+      - name: Clippy
+        run: |
+          cargo clippy --locked -p cmvs-apple -- -D warnings
+          cargo clippy --locked -p cmvs-apple --target aarch64-apple-ios -- -D warnings
+      - run: cargo test --locked -p cmvs-apple
+      - name: Build macOS and device XCFramework
+        run: sh platforms/apple/build.sh xcframework macos ios
+      - name: Build macOS apps
+        run: |
+          sh platforms/apple/build.sh macos --reuse-framework --configuration Debug
+          sh platforms/apple/build.sh macos --reuse-framework
+          ditto -c -k --keepParent target/apple/macos/CMVS.app target/apple/macOS.zip
+      - name: Build device app
+        run: sh platforms/apple/build.sh ios --reuse-framework
+      - name: Package unsigned device IPA
+        working-directory: target/apple
+        run: |
+          mkdir -p Payload
+          ditto ios/CMVS.app Payload/CMVS.app
+          ditto -c -k --keepParent Payload cmvs-ios.ipa
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cmvs-ios-device
+          path: target/apple/cmvs-ios.ipa
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cmvs-apple
+          path: target/apple/macOS.zip
+          if-no-files-found: error
+
+  apple-simulator:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - name: Start iPhone simulator
+        run: |
+          device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for devices in json.load(sys.stdin)["devices"].values() for d in devices if d["name"].startswith("iPhone")))')
+          echo "SIMULATOR_UDID=$device" >> "$GITHUB_ENV"
+          xcrun simctl boot "$device" || xcrun simctl bootstatus "$device" -b
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+      - run: brew install xcodegen
+      - name: Build simulator XCFramework
+        run: sh platforms/apple/build.sh xcframework ios-simulator
+      - name: Build simulator app
+        run: sh platforms/apple/build.sh ios-simulator --reuse-framework
+      - name: Swift simulator tests
+        working-directory: platforms/apple
+        run: |
+          xcodebuild test -scheme CmvsIOS -parallel-testing-enabled NO -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath ../../target/apple/DerivedData
+      - name: Smoke test simulator app
+        working-directory: platforms/apple
+        run: |
+          device=$SIMULATOR_UDID
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" ../../target/apple/ios-simulator/CMVS.app
+          data=$(xcrun simctl get_app_container "$device" org.cmvs.player data)
+          game="$data/Documents/Smoke"
+          python3 tests/smoke_game.py "$game"
+          cp "/System/Library/Fonts/Supplemental/Arial.ttf" "$data/Documents/smoke.ttf"
+          export SIMCTL_CHILD_CMVS_GAME_DIR="$game" SIMCTL_CHILD_CMVS_PROFILE=cmvs-20160201
+          export SIMCTL_CHILD_CMVS_FONT="$data/Documents/smoke.ttf" SIMCTL_CHILD_CMVS_SMOKE_FRAMES=1
+          export SIMCTL_CHILD_CMVS_SMOKE_OUTPUT="$data/Documents/smoke.png"
+          xcrun simctl launch --terminate-running-process "$device" org.cmvs.player
+          for i in {1..60}; do
+            test -s "$SIMCTL_CHILD_CMVS_SMOKE_OUTPUT" && break
+            sleep 1
+          done
+          if ! test -s "$SIMCTL_CHILD_CMVS_SMOKE_OUTPUT" || ! swift tests/check_frame.swift "$SIMCTL_CHILD_CMVS_SMOKE_OUTPUT"; then
+            xcrun simctl spawn "$device" log show --last 5m --predicate 'eventMessage CONTAINS "CMVS_SMOKE"' || true
+            echo "::error::Simulator smoke test did not produce a valid logical frame"
+            exit 1
+          fi
+      - run: ditto -c -k --keepParent target/apple/ios-simulator/CMVS.app target/apple/Simulator.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cmvs-apple-simulator
+          path: target/apple/Simulator.zip
+          if-no-files-found: error

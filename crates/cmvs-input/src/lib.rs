@@ -76,19 +76,30 @@ impl TouchInput {
     /// Cancels all contacts and queued presses without producing a click edge.
     /// Focus is unchanged; subsequent new contacts may begin a gesture.
     pub fn cancel(&mut self, input: &mut ActionInput) {
+        self.reset_contacts();
+        self.history.clear(input);
+    }
+
+    pub fn reset_contacts(&mut self) {
         self.contacts.clear();
         self.primary = None;
         self.pointer = None;
         self.pulse = false;
-        self.history.clear(input);
     }
 
     /// Use a viewport matching the current renderer for both events and sampling.
     /// A native cancellation of the primary contact cancels its pending click;
     /// other contacts remain blocked until their own end/cancellation arrives.
     pub fn event(&mut self, event: TouchEvent, viewport: Viewport, input: &mut ActionInput) {
+        if self.pointer_event(event, viewport) {
+            self.history.clear(input);
+        }
+    }
+
+    /// Update contacts for hosts with a shared input history. Returns true on primary cancellation.
+    pub fn pointer_event(&mut self, event: TouchEvent, viewport: Viewport) -> bool {
         if !self.focused {
-            return;
+            return false;
         }
         match event.phase {
             TouchPhase::Started => {
@@ -120,10 +131,11 @@ impl TouchInput {
                     self.primary = None;
                     self.pointer = None;
                     self.pulse = false;
-                    self.history.clear(input);
+                    return true;
                 }
             }
         }
+        false
     }
 
     /// Exactly once at the host's input boundary, never per VM budget slice.
@@ -131,12 +143,21 @@ impl TouchInput {
     /// Multiple taps between samples coalesce, as with desktop button pulses.
     /// Keep the final position through release for the core drag recognizer.
     pub fn frame(&mut self, bindings: &KeyBindings, viewport: Viewport, input: &mut ActionInput) {
-        let point = self.pointer.and_then(|point| viewport.to_script(point));
+        let (point, pressed) = self.sample_pointer(viewport);
         let mut codes = [false; 128];
-        codes[1] = self.primary.is_some() || self.pulse;
-        self.pulse = false;
+        codes[1] = pressed;
         self.history.update(bindings, &codes, input);
         let [x, y] = point.unwrap_or([-1, -1]);
         input.set_pointer(x, y);
+    }
+
+    /// Consume the touch sample when combining touch, keyboard and mouse in one code history.
+    pub fn sample_pointer(&mut self, viewport: Viewport) -> (Option<[i32; 2]>, bool) {
+        let pressed = self.primary.is_some() || self.pulse;
+        self.pulse = false;
+        (
+            self.pointer.and_then(|point| viewport.to_script(point)),
+            pressed,
+        )
     }
 }

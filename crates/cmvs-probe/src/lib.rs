@@ -2,7 +2,7 @@
 //! address appears in this crate; state is judged from engine-level observations, build
 //! differences are capabilities, and every result states the verdict level it reached.
 pub mod checks;
-pub mod controls;
+pub use cmvs_core::runtime::controls;
 pub mod device;
 pub mod json;
 pub mod manifest;

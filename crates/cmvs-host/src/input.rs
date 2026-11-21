@@ -54,6 +54,20 @@ impl InputState {
         Ok(())
     }
 
+    pub fn cancel_primary_button(&mut self) {
+        self.held[1] = false;
+        self.pulses[1] = false;
+        self.codes.forget_primary_button();
+    }
+
+    /// Drop mouse buttons, wheel pulses and the old location when the viewport changes.
+    pub fn cancel_pointer(&mut self) {
+        self.held[1..=7].fill(false);
+        self.pulses[1..=7].fill(false);
+        self.codes.forget_pointer();
+        self.set_pointer(-1, -1);
+    }
+
     /// Clears all currently held codes while keeping any already-latched pulses intact.
     pub fn clear_held(&mut self) {
         self.held.fill(false);

@@ -54,6 +54,53 @@ pub(super) struct Dialog {
     rect: [i64; 4],
 }
 
+/// Visible text and pointer targets of a modal dialog in logical canvas coordinates.
+#[derive(Default)]
+pub struct DialogPage {
+    pub text: Vec<([i32; 4], String)>,
+    pub buttons: Vec<DialogButton>,
+    rect: [i64; 4],
+}
+
+pub struct DialogButton {
+    pub rect: [i32; 4],
+    pub label: String,
+    /// Position on a color channel's horizontal track, from left to right.
+    pub slider: Option<u8>,
+}
+
+impl DialogPage {
+    fn canvas_rect(&self, [x, y, w, h]: [usize; 4]) -> [i32; 4] {
+        let [left, top, width, height] = self.rect;
+        // Invert hit_point's floor division at both edges.
+        let px = |v| (left + (v as i64 * width + WIDTH as i64 - 1) / WIDTH as i64) as i32;
+        let py = |v| (top + (v as i64 * height + HEIGHT as i64 - 1) / HEIGHT as i64) as i32;
+        [px(x), py(y), px(x + w) - px(x), py(y + h) - py(y)]
+    }
+
+    pub(super) fn text(&mut self, rect: [usize; 4], value: String) {
+        if !value.trim().is_empty() {
+            self.text.push((self.canvas_rect(rect), value));
+        }
+    }
+
+    pub(super) fn control(
+        &mut self,
+        rect: [usize; 4],
+        label: impl Into<String>,
+        slider: Option<u8>,
+    ) {
+        let rect = self.canvas_rect(rect);
+        if rect[2] > 0 && rect[3] > 0 {
+            self.buttons.push(DialogButton {
+                rect,
+                label: label.into(),
+                slider,
+            });
+        }
+    }
+}
+
 impl Dialog {
     fn image(
         &self,
@@ -125,6 +172,21 @@ impl Runtime {
         clear_edges(&mut self.input);
         self.frame_delta = 0;
         Ok(())
+    }
+
+    /// Read the current modal panel using the host's game-font decoder.
+    pub fn dialog_page(&self, decode: impl Fn(u16) -> char) -> Option<DialogPage> {
+        let dialog = self.dialog.as_ref()?;
+        let mut page = DialogPage {
+            rect: dialog.rect,
+            ..Default::default()
+        };
+        match &dialog.content {
+            Content::Color(picker) => picker.describe(&mut page),
+            Content::Message(message) => message.describe(&mut page, decode),
+            Content::Text(text) => text.describe(&mut page, decode),
+        }
+        Some(page)
     }
 
     /// Logical canvas rectangle of the focused inline comment field.

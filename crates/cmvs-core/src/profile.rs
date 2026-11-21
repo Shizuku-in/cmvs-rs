@@ -52,6 +52,25 @@ impl EngineProfile {
             "system.dat"
         }
     }
+    /// CSS1 header identifier for this build and the game's 0x201d startup setting.
+    pub fn css1_game_id(&self, declared: Option<u32>) -> Option<u32> {
+        // 20070119 0x408b00 / 20071117 0x40bdf0 / 20080719 0x40bea0 zero the CSS1
+        // header and never write offset 68: a format constant, not a game identifier.
+        if matches!(
+            self.inspected_build(),
+            Some(
+                InspectedBuild::Cmvs20070119
+                    | InspectedBuild::Cmvs20071117
+                    | InspectedBuild::Cmvs20080719
+                    | InspectedBuild::Cmvs20080903
+                    | InspectedBuild::Cmvs20090815
+            )
+        ) {
+            Some(0)
+        } else {
+            declared
+        }
+    }
     /// Gameplay save slot format and slot-numbering family.
     pub fn save_family(&self) -> crate::save::SaveFamily {
         if self.is_cvns() {

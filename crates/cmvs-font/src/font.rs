@@ -220,7 +220,8 @@ pub(crate) fn codec(encoding: TextEncoding) -> Result<&'static encoding_rs::Enco
     }
 }
 
-fn character(encoding: TextEncoding, code: u16) -> Result<char, FormatError> {
+/// Decodes a recorded glyph using the same rules as the font rasterizer.
+pub fn character(encoding: TextEncoding, code: u16) -> Result<char, FormatError> {
     if encoding == TextEncoding::Utf8 {
         // UTF-8 glyph codes are Unicode scalar values (see TextEncoding).
         return char::from_u32(u32::from(code))

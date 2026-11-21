@@ -156,9 +156,16 @@ impl Renderer {
                 ..Default::default()
             })
             .await?;
+        let mut required_limits = wgpu::Limits::default();
+        // The scene shader passes only UVs between stages. Some Metal adapters
+        // expose 15 locations, one fewer than the WebGPU default.
+        required_limits.max_inter_stage_shader_variables = required_limits
+            .max_inter_stage_shader_variables
+            .min(adapter.limits().max_inter_stage_shader_variables);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("CMVS GPU"),
+                required_limits,
                 ..Default::default()
             })
             .await?;

@@ -1,66 +1,28 @@
-# Apple players
+# 构建 Apple 播放器
 
-The macOS player uses the existing native window and audio backend. The iOS
-player uses UIKit for folder selection, touch input and RGBA presentation, with
-the shared `cmvs-host` player for the VM, software compositor, OpenType text,
-native audio and saves. Xcode, Python 3 and Rust stable are required.
+在 macOS 上安装 Xcode、XcodeGen、jq 和 Rust stable。以下命令均在仓库根目录运行。添加游戏、选择字体与恢复存档的步骤见[启动器使用指南](app/README.md)。
+
+## 构建应用
+
+首次构建先安装四个 Rust 目标，再生成 macOS、iOS 真机和模拟器共用的 XCFramework。修改 Rust 代码或 C 头文件后，重新运行第二条命令。
 
 ```sh
-python3 platforms/apple/build.py macos
-target/release/cmvs-desktop /path/to/game --encoding shift-jis \
-  --user-data-dir /path/to/writable-user --audio native --font /path/to/font.otf
-
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-python3 platforms/apple/build.py ios --font /path/to/font.otf
-python3 platforms/apple/build.py ios-simulator --font /path/to/font.otf
+rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
+sh platforms/apple/build.sh xcframework
 ```
 
-iOS output is `target/apple/<target>/Cmvs.app`. The device app is unsigned:
-sign it with your own provisioning profile and identity before installing it.
-The simulator app has an ad-hoc signature. The build includes the explicitly
-provided font; verify its redistribution terms before sharing the bundle.
-Game files are never bundled.
+按运行平台选择一条命令。脚本会用 XcodeGen 生成工程，并将应用写到对应目录。
 
-Open a game folder through the iOS document picker. The security-scoped folder
-remains accessible until closing the game. Input is mapped through the
-letterboxed game rectangle; a short tap survives until the next VM frame.
-Saves and settings go to a stable per-folder namespace under the app's
-Documents/Saves directory. Selecting another folder saves preferences and
-releases the previous player. Backgrounding pauses execution and mutes audio.
+| 运行平台 | 构建命令 | 产物 |
+|---|---|---|
+| macOS（Intel 和 Apple 芯片） | `sh platforms/apple/build.sh macos --reuse-framework` | `target/apple/macos/CMVS.app` |
+| iOS 模拟器（arm64） | `sh platforms/apple/build.sh ios-simulator --reuse-framework` | `target/apple/ios-simulator/CMVS.app` |
+| iPhone / iPad 真机 | `sh platforms/apple/build.sh ios --reuse-framework` | `target/apple/ios/CMVS.app` |
 
-For simulator diagnostics, `SIMCTL_CHILD_CMVS_GAME_DIR` can point to an existing
-read-only game directory when running `xcrun simctl launch`. Optional
-`SIMCTL_CHILD_CMVS_SMOKE_FRAMES` and `SIMCTL_CHILD_CMVS_SMOKE_OUTPUT` capture a
-completed frame and close the player after the requested number of VM frames.
-These use the same player and presentation path as the document picker.
+Release 流程将 macOS 通用应用打包为 ZIP，将 iOS 真机应用打包为未签名 IPA。安装 IPA 前需使用自己的签名身份和描述文件签名。
 
-The host C API is in `crates/cmvs-host/cmvs_host.h`. Calls on a handle are
-serialized by its owner. The host must respect cooperative budget slices:
-only completed VM frames advance the serial and expose new RGBA pixels. Native
-audio owns its device callback. The iOS player opens a UIKit text field and
-keyboard from the in-game save-comment editor. Font selection is cancelled;
-unsupported window requests report errors. CMV decoding is shared with core;
-MGV/Theora movies decode through `cmvs-video` on a prefetching worker thread.
+## 验证
 
-## Validation, 2026-11-06
+在 Linux 或 macOS 上运行 `cargo test --locked -p cmvs-apple` 可检查 Rust 桥接层与存档备份恢复。Linux 上的 CPU 冒烟测试已从合成游戏读回非黑的 64×48 逻辑帧。
 
-Apple Silicon macOS release compilation, a native Amatsutsumi 1.03 title run
-with a 48 kHz stereo output device, and iOS arm64 device/simulator linking were
-tested. The iOS 18.3 simulator ran the same installation for 600 completed
-frames and exported a non-black 1280x720 title frame. Device execution has not
-been tested.
-
-The real-installation probe passes R1, I4 and V1-V4: fresh startup, backlog
-round-trip, save/restart/load continuation through 20 message waits, snapshot
-round-trip and backup-slot behavior. These are headless input replays, not
-physical iOS touch verification. V5, which plays a complete route before
-checking system-save persistence, exhausted both a 10-million-step budget and
-the default 50-million-step budget; complete-route coverage is not claimed.
-
-The original and exact 1.03 startup hashes belong to the same `amatsutsumi`
-record, retaining the existing Android/Switch save-directory identity. Its
-script archive and original x86/x64 executables are unchanged. Game records
-may list multiple exact `start` hashes; duplicate hashes or archives across
-separate games remain invalid, and unknown startup hashes fail identification.
-The tested resources use Japanese text. Third-party DLL/PK translation overlays
-are not loaded by this implementation.
+Apple CI 构建三种应用，运行 Swift 模拟器测试，并检查逻辑帧为 64×48 且非黑屏。模拟器没有 Metal 设备时，冒烟测试使用 CPU 渲染。复现命令见 [Apple CI 步骤](../../.github/workflows/ci.yml)。真机音频中断、触控和存读档仍待验证。

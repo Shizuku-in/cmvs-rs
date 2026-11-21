@@ -102,10 +102,12 @@ use std::{
 };
 
 mod color_picker;
+pub mod controls;
 mod dialog;
 mod frame;
 mod message_dialog;
 mod text_dialog;
+pub use dialog::{DialogButton, DialogPage};
 pub use frame::{FrameBudget, FrameDriver, FrameOutcome};
 pub use text_dialog::CommentEdit;
 mod lifecycle;
@@ -456,7 +458,8 @@ pub struct Runtime {
     message_flags: MessageFlags,
     settings: crate::settings::SettingsHost,
     configuration: crate::settings::Configuration,
-    messages: MessageHost,
+    // Keep the window and text tables off small host thread stacks.
+    messages: Box<MessageHost>,
     history: HistoryHost,
     random: CrtRandom,
     audio: AudioHost,
@@ -596,7 +599,7 @@ impl Runtime {
         buttons.set_screen_size(screen_size);
         let mut camera = CameraHost::for_profile(profile);
         camera.set_screen_size(screen_size);
-        let mut messages = MessageHost::for_profile(profile);
+        let mut messages = Box::new(MessageHost::for_profile(profile));
         messages.set_screen_size(screen_size);
         let text = configuration.bytes();
         let mut save_menu = SaveMenuHost::for_profile(profile);
@@ -1690,7 +1693,7 @@ impl Runtime {
             .scene_movies
             .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie);
         let is_movie_player = entry.uses_movie_player();
-        let mut sequence_messages = Some(&mut self.messages);
+        let mut sequence_messages = Some(self.messages.as_mut());
         let mut hosts = crate::dispatch::Hosts {
             runtime: true,
             in_game_message_dialogs: self.in_game_message_dialogs,

@@ -130,6 +130,27 @@ impl ColorPicker {
         }
     }
 
+    pub(super) fn describe(&self, page: &mut dialog::DialogPage) {
+        let hex = |[r, g, b]: [u8; 3]| format!("#{r:02X}{g:02X}{b:02X}");
+        page.text([18, 14, 364, 28], format!("Color {}", hex(self.color)));
+        for control in Control::ALL {
+            let label = match control {
+                Control::Red => "Red".into(),
+                Control::Green => "Green".into(),
+                Control::Blue => "Blue".into(),
+                Control::First => hex(self.swatches[0]),
+                Control::Second => hex(self.swatches[1]),
+                Control::Cancel => "Cancel".into(),
+                Control::Accept => "OK".into(),
+            };
+            page.control(
+                control.rect(),
+                label,
+                control.channel().map(|i| self.color[i]),
+            );
+        }
+    }
+
     pub(super) fn render(&self) -> Panel {
         let mut panel = Panel::new();
         panel.text([18, 18], b"COLOR", INK);

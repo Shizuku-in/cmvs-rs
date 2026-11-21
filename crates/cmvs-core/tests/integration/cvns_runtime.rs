@@ -875,6 +875,16 @@ fn cvns_in_game_message_dialogs_wait_for_the_player_and_return_the_answer() {
     frame(&mut run, [0, 0], Some(22)); // Opening Return is consumed.
     let exit_call = run.machine().pending_system();
     assert_eq!(exit_call.map(|(_, command)| command), Some(0x5b0));
+    let decode = |code: u16| char::from_u32(u32::from(code)).unwrap();
+    let page = run.dialog_page(decode).unwrap();
+    assert_eq!(page.text[1].1, "QUIT THE GAME?");
+    assert_eq!(
+        page.buttons
+            .iter()
+            .map(|b| b.label.as_str())
+            .collect::<Vec<_>>(),
+        ["Cancel", "Yes"]
+    );
     let steps = run.steps();
     assert_ne!(run.render_scene_frame().unwrap(), clear);
     frame(&mut run, [0, 0], Some(22));
@@ -898,9 +908,17 @@ fn cvns_in_game_message_dialogs_wait_for_the_player_and_return_the_answer() {
         let i = (4 * ((y + dy) * width + x + dx)) as usize;
         assert_eq!(alert.pixels()[i..i + 3], [238, 242, 249]);
     }
-    frame(&mut run, [330, 200], Some(1));
+    let page = run.dialog_page(decode).unwrap();
+    assert_eq!(page.text[0].1, "TITLE");
+    assert_eq!(page.text[1].1, "BODY");
+    assert_eq!(page.buttons.len(), 1);
+    assert_eq!(page.buttons[0].label, "OK");
+    let [left, top, w, h] = page.buttons[0].rect;
+    let ok = [left - x + w / 2, top - y + h / 2];
+    frame(&mut run, ok, Some(1));
     assert_eq!(run.machine().stack().len_bytes(), 12);
-    frame(&mut run, [330, 200], None);
+    frame(&mut run, ok, None);
+    assert!(run.dialog_page(decode).is_none());
     assert_eq!(run.machine().stack().len_bytes(), 0);
     assert_eq!(run.machine().state().system_integer(0), Some(1));
 

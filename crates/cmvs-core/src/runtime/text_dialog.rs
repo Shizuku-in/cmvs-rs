@@ -368,6 +368,49 @@ impl TextDialog {
         Update::from_change(std::mem::take(&mut self.changed))
     }
 
+    pub(super) fn describe(&self, page: &mut dialog::DialogPage, decode: impl Fn(u16) -> char) {
+        let string = |codes: &[u16]| codes.iter().copied().map(&decode).collect::<String>();
+        let title = wrap_text(&self.binding.request.title, self.encoding, 362);
+        let title = if self.binding.request.title.is_empty() {
+            "Edit comment".into()
+        } else {
+            string(&title[0])
+        };
+        page.text([18, 14, 364, 24], title);
+        let prompt = self
+            .prompt
+            .iter()
+            .skip(self.prompt_top)
+            .take(PROMPT_ROWS)
+            .map(|line| string(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        page.text([18, 57, 328, 46], prompt);
+        if let Some(error) = self.error {
+            page.text(
+                [18, 165, 364, 16],
+                String::from_utf8_lossy(error).into_owned(),
+            );
+        }
+        for &control in self.controls() {
+            let label = match control {
+                Control::Field => {
+                    let draft = string(&self.field_layout().codes);
+                    if draft.is_empty() {
+                        "Enter comment".into()
+                    } else {
+                        draft
+                    }
+                }
+                Control::Cancel => "Cancel".into(),
+                Control::Accept => "OK".into(),
+                Control::PromptUp => "Scroll up".into(),
+                Control::PromptDown => "Scroll down".into(),
+            };
+            page.control(control.rect(), label, None);
+        }
+    }
+
     pub(super) fn render(
         &self,
         mut font: Option<&mut (dyn GlyphRasterizer + Send + 'static)>,

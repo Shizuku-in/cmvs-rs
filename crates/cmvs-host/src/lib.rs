@@ -892,6 +892,26 @@ mod tests {
         assert!(input.held(8));
         assert_eq!(input.pointer(), [50, 60]);
 
+        host.set_held(1, true).unwrap();
+        host.sample(&bindings, &mut input);
+        host.cancel_primary_button();
+        host.sample(&bindings, &mut input);
+        assert_eq!(input.mouse(0), [false; 3]);
+        assert!(!input.released(0));
+        assert!(input.held(8));
+        assert!(!input.pressed(8));
+
+        host.set_key(3, true).unwrap();
+        host.sample(&bindings, &mut input);
+        host.pulse(4).unwrap();
+        host.cancel_pointer();
+        host.sample(&bindings, &mut input);
+        assert_eq!(input.mouse(1), [false; 3]);
+        assert_eq!(input.mouse(2), [false; 3]);
+        assert_eq!(input.pointer(), [-1, -1]);
+        assert!(input.held(8));
+        assert!(!input.pressed(8));
+
         host.clear(&mut input);
         host.sample(&bindings, &mut input);
         assert!(!input.held(8));

@@ -1,0 +1,76 @@
+name: Cmvs
+options:
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1"
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    CURRENT_PROJECT_VERSION: 1
+    GENERATE_INFOPLIST_FILE: YES
+    CODE_SIGN_STYLE: Automatic
+targetTemplates:
+  Player:
+    type: application
+    productName: CMVS
+    sources:
+      - path: ../../THIRD_PARTY_NOTICES.txt
+        buildPhase: resources
+      - path: ../../target/apple/DEPENDENCY-LICENSES.txt
+        buildPhase: resources
+      - path: ../../LICENSE-MIT
+        buildPhase: resources
+      - path: ../../LICENSE-APACHE
+        buildPhase: resources
+    dependencies:
+      - framework: ../../target/apple/CmvsApple.xcframework
+        embed: false
+    settings:
+      base:
+        PRODUCT_NAME: CMVS
+        INFOPLIST_KEY_CFBundleDisplayName: CMVS
+        PRODUCT_BUNDLE_IDENTIFIER: org.cmvs.player
+        OTHER_LDFLAGS: "$(inherited) -lc++ -lz -framework Metal -framework QuartzCore -framework CoreGraphics -framework Security -framework SystemConfiguration -framework AudioToolbox -framework CoreAudio -framework AVFAudio -framework CoreFoundation -framework Foundation"
+targets:
+  CmvsMac:
+    templates: [Player]
+    platform: macOS
+    sources: [app/Shared, app/macOS]
+    settings:
+      base:
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_IDENTITY: "-"
+  CmvsIOS:
+    templates: [Player]
+    platform: iOS
+    sources: [app/Shared, app/iOS]
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_FILE: ios.plist
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait"
+  CmvsTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [app/Tests]
+    dependencies:
+      - framework: ../../target/apple/CmvsApple.xcframework
+        embed: false
+      - target: CmvsIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.cmvs.player.tests
+schemes:
+  CmvsIOS:
+    build:
+      targets:
+        CmvsIOS: all
+    test:
+      targets: [CmvsTests]
+  CmvsMac:
+    build:
+      targets:
+        CmvsMac: all
