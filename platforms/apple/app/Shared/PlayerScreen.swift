@@ -181,7 +181,8 @@ struct PlayerScreen: View {
     }
 
     private func controls(in size: CGSize) -> some View {
-        let layout = usesColumns(size) ? AnyLayout(HStackLayout(alignment: .top, spacing: 16)) : AnyLayout(VStackLayout())
+        let twoColumns = usesColumns(size)
+        let layout = twoColumns ? AnyLayout(HStackLayout(alignment: .top, spacing: 16)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
         return layout {
             VStack(alignment: .leading, spacing: 4) {
                 action("Confirm", icon: "return") { player.pulse(22) }
@@ -189,10 +190,12 @@ struct PlayerScreen: View {
                 action("Previous History Entry", icon: "chevron.up") { player.pulse(4) }
                 action("Next History Entry", icon: "chevron.down") { player.pulse(5) }
             }
-            VStack(alignment: .leading, spacing: 4) {
+            if !twoColumns { Divider() }
+            VStack(alignment: .leading, spacing: 6) {
                 Toggle("Shift Fast-Forward", isOn: player.fastForwardBinding(.shift)).disabled(!player.canFastForward)
                 Toggle("Ctrl Fast-Forward", isOn: player.fastForwardBinding(.control)).disabled(!player.canFastForward)
                 Toggle("Show Performance", isOn: $showPerformance)
+                Divider()
                 action("Screenshot", icon: "camera") { player.capture() }.disabled(!player.canCapture)
                 #if os(iOS)
                     if player.interrupted {

@@ -92,7 +92,10 @@ struct SaveRow: View {
                 VStack(alignment: .leading) { actions }
             }.buttonStyle(.borderless).disabled(busy || exporting)
             if busy { ProgressView().controlSize(.small).accessibilityLabel("Processing Saves") }
-            if let feedback { Text(feedback).font(.caption) }
+            if let feedback {
+                Label(feedback, systemImage: "checkmark.circle.fill")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .task(id: RefreshKey(game: game, revision: library.playbackRevision[game.id])) { await refresh() }
         .fileExporter(isPresented: $exporting, item: archive, contentTypes: [.zip], defaultFilename: game.filename) { result in
@@ -117,15 +120,17 @@ struct SaveRow: View {
     }
 
     @ViewBuilder private var actions: some View {
-        Button { backup(nil) } label: { Text("Export ZIP…").controlHitArea() }
-            .accessibilityLabel("Export Saves for \(game.name)").disabled(summary.system + summary.slots == 0)
-        Button { picking = true } label: { Text("Restore ZIP…").controlHitArea() }
-            .accessibilityLabel("Restore Saves for \(game.name)")
-        #if os(macOS)
-            Button("Show in Finder") {
-                if let dir = summary.directory { NSWorkspace.shared.activateFileViewerSelecting([dir]) }
-            }.disabled(summary.directory == nil)
-        #endif
+        Group {
+            Button { backup(nil) } label: { Label("Export ZIP…", systemImage: "square.and.arrow.up").controlHitArea() }
+                .accessibilityLabel("Export Saves for \(game.name)").disabled(summary.system + summary.slots == 0)
+            Button { picking = true } label: { Label("Restore ZIP…", systemImage: "square.and.arrow.down").controlHitArea() }
+                .accessibilityLabel("Restore Saves for \(game.name)")
+            #if os(macOS)
+                Button("Show in Finder", systemImage: "folder") {
+                    if let dir = summary.directory { NSWorkspace.shared.activateFileViewerSelecting([dir]) }
+                }.disabled(summary.directory == nil)
+            #endif
+        }.labelStyle(.titleAndIcon)
     }
 
     private func refresh() async {

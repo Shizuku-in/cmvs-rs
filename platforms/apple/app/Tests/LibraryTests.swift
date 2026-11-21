@@ -210,4 +210,43 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(restored.saves, game.saves)
         XCTAssertEqual(restored.options.encoding, "gbk")
     }
+
+    func testDependencyCatalogParsesPackagesAndExpandsSharedLicenses() {
+        let raw = """
+            Dependency licenses for linked Apple target crates.
+
+            === PACKAGES ===
+
+            == ogg 0.8.0 — BSD-3-Clause ==
+
+            Copyright (c) 2016-2017 est31
+
+            == ogg 0.9.2 — BSD-3-Clause ==
+
+            Copyright (c) 2016-2017 est31
+
+            == zip 7.2.0 — MIT ==
+            Shared: MIT
+
+            Copyright (c) 2014 Mathijs van de Nes
+
+            === SHARED LICENSES ===
+
+            == [MIT] ==
+
+            Permission is hereby granted, free of charge.
+            """
+        let catalog = DependencyCatalog.parse(raw)
+        XCTAssertEqual(catalog.packages.count, 3)
+        XCTAssertEqual(catalog.packages[0].id, "ogg@0.8.0")
+        XCTAssertEqual(catalog.packages[1].id, "ogg@0.9.2")
+        XCTAssertEqual(catalog.packages[2].shared, ["MIT"])
+        XCTAssertEqual(catalog.shared, [.init(name: "MIT", text: "Permission is hereby granted, free of charge.")])
+
+        let detail = catalog.detailText(for: catalog.packages[2])
+        XCTAssertTrue(detail.contains("zip 7.2.0 — MIT"))
+        XCTAssertTrue(detail.contains("Copyright (c) 2014 Mathijs van de Nes"))
+        XCTAssertTrue(detail.contains("--- MIT ---"))
+        XCTAssertTrue(detail.contains("Permission is hereby granted, free of charge."))
+    }
 }

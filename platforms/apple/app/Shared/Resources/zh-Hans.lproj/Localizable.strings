@@ -150,3 +150,9 @@
 "Retry" = "重试";
 "Option %lld" = "选项 %lld";
 "Game Controls" = "游戏控制";
+"Dependencies" = "依赖库";
+"Shared Licenses" = "共享许可证";
+"Pointer" = "指针与滚轮";
+"Keyboard & Menu" = "键盘与菜单";
+"Touch" = "触控与手势";
+"Keyboard" = "外接键盘";

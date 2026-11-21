@@ -44,7 +44,7 @@ struct FontList: View {
         Group {
             if library.data.fonts.isEmpty && library.systemFonts.isEmpty {
                 ContentUnavailableView {
-                    Label("No Fonts", systemImage: "textformat")
+                    Label("No Fonts", systemImage: "f.cursive")
                 } description: {
                     Text("Import a font before starting a game.")
                 } actions: { Button("Import Font…", action: pick) }
@@ -61,7 +61,12 @@ struct FontList: View {
                 .searchable(text: $search)
             }
         }
-        .toolbar { Button("Import Font…", action: pick) }
+        .toolbar {
+            Button(action: pick) {
+                Label("Import Font…", systemImage: "plus")
+            }
+            .help("Import Font…")
+        }
         .confirmationDialog("Delete Font File?", isPresented: Binding(
             get: { removing != nil }, set: { if !$0 { removing = nil } }
         ), titleVisibility: .visible, presenting: removing) { face in

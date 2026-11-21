@@ -150,3 +150,9 @@
 "Retry" = "再試行";
 "Option %lld" = "選択肢 %lld";
 "Game Controls" = "ゲーム操作";
+"Dependencies" = "依存パッケージ";
+"Shared Licenses" = "共通ライセンス";
+"Pointer" = "ポインタ";
+"Keyboard & Menu" = "キーボードとメニュー";
+"Touch" = "タッチとジェスチャ";
+"Keyboard" = "キーボード";

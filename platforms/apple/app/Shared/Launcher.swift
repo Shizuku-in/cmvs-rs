@@ -114,7 +114,7 @@ private enum SectionName: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .games: "books.vertical"
-        case .fonts: "textformat"
+        case .fonts: "f.cursive"
         case .saves: "archivebox"
         case .settings: "gearshape"
         }
@@ -135,7 +135,7 @@ private struct Launcher: View {
     #endif
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.dynamicTypeSize) private var typeSize
-    @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 160
+    @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 190
     @State private var section: SectionName? = .games
     @State private var picking = false
     @State private var pickFont = false
@@ -145,6 +145,7 @@ private struct Launcher: View {
     @State private var removing: Game?
     @State private var targeted = false
     @State private var grid = true
+    @State private var showingGuide = false
     @State private var smokeStarted = false
 
     var body: some View {
@@ -187,6 +188,7 @@ private struct Launcher: View {
             }
         }
         .sheet(item: $editing) { game in GameConfiguration(game: game, library: library) }
+        .sheet(isPresented: $showingGuide) { ControlsGuideView() }
         .alert(Text(verbatim: library.error?.title ?? ""), isPresented: Binding(
             get: { library.error != nil }, set: { if !$0 { library.error = nil } })
         ) {
@@ -289,6 +291,10 @@ private struct Launcher: View {
                     }
                 }
                 .toolbar {
+                    Button { showingGuide = true } label: {
+                        Label("Controls Guide", systemImage: "questionmark.circle")
+                    }
+                    .help("Controls Guide")
                     Button {
                         grid.toggle()
                     } label: {
@@ -340,20 +346,40 @@ private struct Launcher: View {
             Text(game.name).font(.headline).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                 .fixedSize(horizontal: false, vertical: true)
             Text(verbatim: "\(game.info.profile) · \(game.info.encodingLabel)").font(.caption).foregroundStyle(.secondary)
-            if let last = game.lastPlayed {
+            if !grid && !typeSize.isAccessibilitySize, let last = game.lastPlayed {
                 Text(last, format: .dateTime.year().month().day()).font(.caption).foregroundStyle(.secondary)
-            } else if grid {
-                Text(verbatim: " ").font(.caption).accessibilityHidden(true)
             }
         }
+        #if os(iOS)
+            let chipSize: CGFloat = 32
+            let actionSpacing: CGFloat = 0
+        #else
+            let chipSize: CGFloat = 28
+            let actionSpacing: CGFloat = 6
+        #endif
         let configure = Button { editing = game } label: {
-            if grid { Image(systemName: "gearshape").controlHitArea() }
-            else { Text("Configure") }
-        }.accessibilityLabel("Configure \(game.name)").help("Configure").disabled(player?.game.id == game.id)
-        let stackActions = typeSize.isAccessibilitySize || (compact && !grid)
-        let actions = (stackActions ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())) {
-            Button { play(game) } label: { Text("Play").controlHitArea() }
-                .buttonStyle(.borderedProminent).accessibilityLabel("Play \(game.name)").disabled(player != nil)
+            Image(systemName: "gearshape")
+                .frame(width: chipSize, height: chipSize)
+                .background(.secondary.opacity(0.14), in: Circle())
+                .controlHitArea()
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel("Configure \(game.name)")
+        .help("Configure")
+        .disabled(player?.game.id == game.id)
+        let playButton = Button { play(game) } label: {
+            Image(systemName: "play.fill")
+                .frame(width: chipSize, height: chipSize)
+                .background(Color.accentColor.opacity(0.16), in: Circle())
+                .controlHitArea()
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Play \(game.name)")
+        .help("Play")
+        .disabled(player != nil)
+        let actions = (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout(spacing: actionSpacing))) {
+            playButton
             configure
         }
         return Group {
@@ -361,7 +387,21 @@ private struct Launcher: View {
                 VStack(alignment: .leading, spacing: 8) {
                     cover
                     details
-                    actions
+                    if typeSize.isAccessibilitySize {
+                        if let last = game.lastPlayed {
+                            Text(last, format: .dateTime.year().month().day()).font(.caption).foregroundStyle(.secondary)
+                        }
+                        actions
+                    } else {
+                        HStack(alignment: .center, spacing: 8) {
+                            if let last = game.lastPlayed {
+                                Text(last, format: .dateTime.year().month().day())
+                                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
+                            actions
+                        }
+                    }
                 }
             } else {
                 HStack {
@@ -469,7 +509,6 @@ private struct OptionsForm: View {
                     LabeledContent("Storage") { Text(game.bookmark == nil ? "Library Copy" : "Referenced Folder") }
                     if info.size.count == 2 { LabeledContent("Original Size", value: "\(info.size[0]) × \(info.size[1])") }
                     LabeledContent("Global Default", value: defaultFont?.name ?? String(localized: "No Fonts"))
-                    Button("Restore Defaults") { reset?() }
                 }
             }
             Picker("Text Encoding", selection: $options.encoding) {
@@ -512,24 +551,67 @@ private struct OptionsForm: View {
             } header: { Text("Diagnostics") } footer: {
                 Text("Use these options to diagnose startup or script problems. They change how the game resumes and which commands it runs.")
             }
+            if game != nil {
+                Section {
+                    Button("Restore Defaults") { reset?() }
+                }
+            }
             if global {
                 Section {
-                    DisclosureGroup("Controls Guide") {
-                        Text("Return confirms and Space hides text. Hold Shift or Ctrl for the game's corresponding fast-forward mode.")
-                        #if os(macOS)
-                            Text("Left-click to advance, right-click for the game menu, and scroll to browse history.")
-                            Text("Choose Game > Screenshot to capture a frame. Press ⌃⌘F for full screen.")
-                        #else
-                            Text("Tap to advance. Tap the ellipsis for game controls.")
-                            Text("With multi-touch gestures on, tap with two fingers for the game menu, swipe with two to browse history, or tap with three for game controls.")
-                        #endif
-                    }
                     Button("Open-Source Licenses") { showingLicenses = true }
                 }
             }
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showingLicenses) { LicensesView() }
+    }
+}
+
+private struct ControlsGuideView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                #if os(macOS)
+                    Section("Pointer") {
+                        Label(
+                            "Left-click to advance, right-click for the game menu, and scroll to browse history.",
+                            systemImage: "cursorarrow.click")
+                    }
+                    Section("Keyboard & Menu") {
+                        Label(
+                            "Return confirms and Space hides text. Hold Shift or Ctrl for the game's corresponding fast-forward mode.",
+                            systemImage: "keyboard")
+                        Label(
+                            "Choose Game > Screenshot to capture a frame. Press ⌃⌘F for full screen.",
+                            systemImage: "menubar.rectangle")
+                    }
+                #else
+                    Section("Touch") {
+                        Label("Tap to advance. Tap the ellipsis for game controls.", systemImage: "hand.tap")
+                        Label(
+                            "With multi-touch gestures on, tap with two fingers for the game menu, swipe with two to browse history, or tap with three for game controls.",
+                            systemImage: "hand.draw")
+                    }
+                    Section("Keyboard") {
+                        Label(
+                            "Return confirms and Space hides text. Hold Shift or Ctrl for the game's corresponding fast-forward mode.",
+                            systemImage: "keyboard")
+                    }
+                #endif
+            }
+            .navigationTitle("Controls Guide")
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
+        #if os(macOS)
+            .frame(minWidth: 460, minHeight: 280)
+        #endif
     }
 }
 
