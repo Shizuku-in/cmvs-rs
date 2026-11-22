@@ -741,6 +741,7 @@ mod tests {
                         rect: [0, 0, 3, 1],
                         color: [20, 30, 40],
                         alpha: 255,
+                        screen_mask: None,
                         blend: Blend::Replace,
                     },
                     // The full coverage table must work at a nonzero dynamic offset.
@@ -840,6 +841,7 @@ mod tests {
                         rect: [0, 0, 3, 1],
                         color: [100, 120, 140],
                         alpha: 255,
+                        screen_mask: None,
                         blend: Blend::Replace,
                     },
                     Layer::Fade(&fade),

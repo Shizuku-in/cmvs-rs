@@ -70,6 +70,7 @@ pub enum Layer<'a> {
         rect: [i64; 4],
         color: [u8; 3],
         alpha: u32,
+        screen_mask: Option<&'a ObjectImage>,
         blend: Blend,
     },
     Cvns(cvns::Draw<'a>),
@@ -108,7 +109,7 @@ impl Blend {
 
 /// The verified textured paths supply white diffuse RGB (0x1400238a0). Stage 0
 /// COLORARG1=TEXTURE, COLORARG2=DIFFUSE, so SUBTRACT saturates RGB to black while
-/// leaving the independent alpha operation intact. Solid primitives use no texture.
+/// leaving the independent alpha operation intact. Solid primitives have no primary texture.
 fn texture_operation(mut layer: Layer<'_>, enabled: bool) -> Layer<'_> {
     if enabled {
         match &mut layer {
@@ -427,6 +428,7 @@ fn solid_layer<'a>(
         },
         color: [r, g, b],
         alpha: alpha.min(255) as u32,
+        screen_mask: None,
         blend: if alpha >= 255 {
             Blend::Replace
         } else if words[1] == 2 {
@@ -829,11 +831,13 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
             rect: [x, y, w, h],
             color,
             alpha,
+            screen_mask,
             blend,
         } => Layer::Solid {
             rect: [x + by[0], y + by[1], w, h],
             color,
             alpha,
+            screen_mask,
             blend,
         },
         fade => fade,
@@ -1301,6 +1305,7 @@ pub fn prepare_scene<'a>(
                     rect: [left, top, w, h],
                     color: [r, g, b],
                     alpha: u32::from(a),
+                    screen_mask: None,
                     blend: Blend::Alpha,
                 }),
                 children: Vec::new(),
@@ -1326,6 +1331,7 @@ pub fn prepare_scene<'a>(
                 ],
                 color: [r, g, b],
                 alpha: fade.opacity.clamp(0, 255) as u32,
+                screen_mask: None,
                 blend: Blend::Alpha,
             }
         };
@@ -1487,6 +1493,7 @@ fn append_modal<'a>(commands: &mut Vec<Layer<'a>>, scene: &'a SceneHost, width: 
             rect: [0, 0, i64::from(width), i64::from(height)],
             color: [8, 11, 18],
             alpha: 144,
+            screen_mask: None,
             blend: Blend::Alpha,
         });
         commands.push(Layer::Projected {
@@ -1769,6 +1776,7 @@ fn tessellate_world_quad<'a>(
 
 /// 0x140020340 mode 4 maps the second texture over the device viewport.
 /// 0x140030a70 copies its green channel into texture alpha; RGB stays primary.
+/// REALIVE 0x14004e3e0 inherits this texture independently of the primary image.
 fn screen_mask<'a>(
     mut layer: Layer<'a>,
     object: &'a SceneObject,
@@ -1780,13 +1788,7 @@ fn screen_mask<'a>(
         .or(object.draw.as_ref());
     let texture = object.secondary_image.as_ref().or_else(|| {
         inherited
-            .filter(|_| {
-                object
-                    .draw
-                    .as_ref()
-                    .is_some_and(|d| d.words[14] & 0xff000000 == 0)
-                    && draw.is_some_and(|d| d.texture_mode == 4)
-            })
+            .filter(|_| draw.is_some_and(|d| d.texture_mode == 4))
             .and_then(|p| p.secondary_image.as_ref())
     });
     if let Some(texture) = texture {
@@ -1796,10 +1798,13 @@ fn screen_mask<'a>(
         match &mut layer {
             Layer::Image {
                 screen_mask,
-                mask,
+                mask: None,
                 blend,
                 ..
-            } if mask.is_none() => {
+            }
+            | Layer::Solid {
+                screen_mask, blend, ..
+            } => {
                 *screen_mask = Some(texture);
                 *blend = blend.alpha();
             }
@@ -1811,6 +1816,17 @@ fn screen_mask<'a>(
         }
     }
     Ok(layer)
+}
+
+fn screen_mask_alpha(
+    texture: &ObjectImage,
+    [width, height]: [u32; 2],
+    [x, y]: [i64; 2],
+    alpha: u32,
+) -> u32 {
+    let tx = x as f32 * texture.pixels.width() as f32 / width as f32 - 0.5;
+    let ty = y as f32 * texture.pixels.height() as f32 / height as f32 - 0.5;
+    (alpha * u32::from(bilinear(texture, tx, ty)[1]) + 127) / 255
 }
 
 fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
@@ -1896,10 +1912,14 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             rect: [left, top, w, h],
             color,
             alpha,
+            screen_mask,
             blend,
         } => {
             for y in top.max(0)..(top + h).min(i64::from(height)) {
                 for x in left.max(0)..(left + w).min(i64::from(width)) {
+                    let alpha = screen_mask.map_or(alpha, |texture| {
+                        screen_mask_alpha(texture, [width, height], [x, y], alpha)
+                    });
                     let dst = ((y * i64::from(width) + x) * 4) as usize;
                     put(&mut pixels[dst..dst + 3], color, alpha, blend);
                 }
@@ -1987,9 +2007,7 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
                 alpha = (alpha as f32 * coverage[usize::from(texture[src + 1])]).round() as u32;
             }
             if let Some(texture) = screen_mask {
-                let tx = x as f32 * texture.pixels.width() as f32 / width as f32 - 0.5;
-                let ty = y as f32 * texture.pixels.height() as f32 / height as f32 - 0.5;
-                alpha = (alpha * u32::from(bilinear(texture, tx, ty)[1]) + 127) / 255;
+                alpha = screen_mask_alpha(texture, [width, height], [x, y], alpha);
             }
             put(&mut pixels[dst..dst + 3], [p[0], p[1], p[2]], alpha, blend);
         }

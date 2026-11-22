@@ -116,6 +116,7 @@ fn cursor_overlays(at: [f64; 2]) -> Vec<[f32; BASE_FLOATS]> {
                     rect,
                     color: [255; 3],
                     alpha: 255,
+                    screen_mask: None,
                     blend: Blend::Replace,
                 },
                 SCREEN,

@@ -149,6 +149,7 @@ mod tests {
                     rect: [i as i64, 0, 1, 1],
                     color: [red + i as u8, 40, 80],
                     alpha: 255,
+                    screen_mask: None,
                     blend: Blend::Replace,
                 })
                 .collect();

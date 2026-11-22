@@ -568,6 +568,9 @@ private struct OptionsForm: View {
             }
             if global {
                 Section {
+                    Link(destination: URL(string: "https://github.com/Shizuku-in/cmvs-rs")!) {
+                        Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
+                    }
                     Button("Open-Source Licenses") { showingLicenses = true }
                 }
             }

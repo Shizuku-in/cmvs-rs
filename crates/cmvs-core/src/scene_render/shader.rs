@@ -209,8 +209,10 @@ pub fn shader_draw<'a>(command: &Layer<'a>, size: [u32; 2]) -> ShaderDraw<'a> {
             rect,
             color,
             alpha,
+            screen_mask,
             blend,
         } => {
+            screen = screen_mask.map(|s| &s.pixels);
             p[16..19].copy_from_slice(&color.map(f32::from));
             flag |= flags::SOLID;
             let [x, y, cw, ch] = rect.map(|v| v as f32);
@@ -295,6 +297,7 @@ mod tests {
                 rect: [2, 3, 4, 5],
                 color: [10, 20, 30],
                 alpha: 200,
+                screen_mask: None,
                 blend: Blend::BlackAdditive,
             },
             [16, 9],
