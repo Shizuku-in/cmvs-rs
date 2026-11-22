@@ -61,7 +61,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: |
-          cargo doc --locked --no-deps --lib -p cmvs-core -p cmvs-host -p cmvs-rs
+          cargo doc --locked --no-deps --lib -p cmvs-core -p cmvs-host
           cargo test --locked -p cmvs-core --doc
       - name: Check CPU-only desktop, headless CLI and no-std-fs core/host
         run: |

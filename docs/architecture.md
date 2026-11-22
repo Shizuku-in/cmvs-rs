@@ -12,16 +12,18 @@
 | `cmvs-host` | 跨平台会话层、不拥有窗口的播放器与 C ABI |
 | `cmvs-desktop` | 桌面窗口、输入、呈现与运行入口 |
 | `cmvs-console` | Switch / Vita 共用的手柄、页面与 GPU 合成策略 |
-| `cmvs-cli` | 格式检查、反汇编、VM trace 与桌面 CLI 入口 |
+| `cmvs-cli` | 格式检查、VM trace 与桌面 CLI 入口 |
+| `cmvs-disassembler` | 脚本反汇编、可编辑项目和翻译表导出 |
+| `cmvs-assembler` | 脚本汇编、资源转换、封包编辑与整作重建 |
+| `cmvs-tooling` | 汇编器与反汇编器共用的脚本布局、翻译格式和文件操作 |
 | `cmvs-profile-research` | 源档案校验、PE 分派分析与运行表生成 |
 | `cmvs-patch` | 补丁资产提取、重编码与转换 |
 | `cmvs-probe` / `cmvs-bench` | 无头运行、路线、输入与存读档检查；热路径微基准测试 |
 | `platforms/*` | 各平台宿主和构建入口，见[平台总览](../platforms/README.md) |
-| 根包 `cmvs-rs` | `cmvs_rs` 兼容导出门面 |
 
 核心定义语义和后端契约，仅依赖 Rust 标准库。宿主提供窗口、设备、字体和输出；Android 和 Web 的文件系统适配位于宿主层。
 
-根包默认仅依赖 core；`desktop`、`audio-output`、`wgpu-renderer` 按需接入后端。共享依赖在根 `Cargo.toml` 声明，精确版本由 `Cargo.lock` 固定。
+共享依赖在根 `Cargo.toml` 声明，精确版本由 `Cargo.lock` 固定。
 
 ## 执行流程
 

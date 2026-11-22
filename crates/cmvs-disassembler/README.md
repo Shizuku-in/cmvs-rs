@@ -1,6 +1,6 @@
 # cmvs-disassembler
 
-Linear `PS2A`/`PSS0` script disassembler, symbolic project exporter, and translation table exporter for CMVS and CVNS scripts. Also provides the shared entry point for the `cmvs-disasm` binary in [`cmvs-cli`](../cmvs-cli/README.md).
+Linear `PS2A`/`PSS0` script disassembler, symbolic project exporter, and translation table exporter for CMVS and CVNS scripts.
 
 ## Usage
 

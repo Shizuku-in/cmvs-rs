@@ -393,7 +393,6 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-desktop",
- "cmvs-disassembler",
  "cmvs-video",
 ]
 
@@ -438,6 +437,7 @@ version = "0.1.0"
 dependencies = [
  "cmvs-core",
  "cmvs-tooling",
+ "tempfile",
 ]
 
 [[package]]
@@ -506,15 +506,6 @@ name = "cmvs-profile-research"
 version = "0.1.0"
 dependencies = [
  "cmvs-core",
-]
-
-[[package]]
-name = "cmvs-rs"
-version = "0.1.0"
-dependencies = [
- "cmvs-audio",
- "cmvs-core",
- "cmvs-desktop",
 ]
 
 [[package]]

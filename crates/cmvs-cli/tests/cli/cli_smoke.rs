@@ -157,10 +157,6 @@ fn all_cli_binaries_honor_help_in_any_position_and_respect_double_dash() {
             ],
         ),
         (
-            env!("CARGO_BIN_EXE_cmvs-disasm"),
-            &[&["script.ps3", "--help"], &["--unknown", "-h"]],
-        ),
-        (
             env!("CARGO_BIN_EXE_cmvs-trace"),
             &[&["--steps", "--help"], &["script.ps3", "--steps", "-h"]],
         ),
@@ -245,7 +241,6 @@ fn all_cli_binaries_honor_help_in_any_position_and_respect_double_dash() {
     fs::write(literal_dir.join("--help"), synthetic_ps2a(&code)).unwrap();
     for (exe, args) in [
         (env!("CARGO_BIN_EXE_cmvs-inspect"), &["--", "--help"][..]),
-        (env!("CARGO_BIN_EXE_cmvs-disasm"), &["--", "--help"][..]),
         (
             env!("CARGO_BIN_EXE_cmvs-trace"),
             &["--profile", "cmvs-20160201", "--", "--help"][..],
@@ -264,49 +259,6 @@ fn all_cli_binaries_honor_help_in_any_position_and_respect_double_dash() {
         );
         assert!(!stdout.starts_with("Usage:"), "{stdout}");
     }
-}
-
-#[test]
-fn disasm_cli_decodes_synthetic_ps2a_script_and_counts_system_commands() {
-    let dir = TempDir::new("disasm-smoke");
-    let script_path = dir.join("synthetic.ps3");
-    let mut code = Vec::new();
-    command(&mut code, 0x201e, &[42]);
-    command(&mut code, 0x201e, &[99]);
-    command(&mut code, 0x2003, &[]);
-    fs::write(&script_path, synthetic_ps2a(&code)).unwrap();
-
-    let exe = env!("CARGO_BIN_EXE_cmvs-disasm");
-    let out = Command::new(exe).arg(&script_path).output().unwrap();
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        stdout.contains("0x0440 StackImmediate { bytes: 4, raw: 42 }"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("system 0x201e"), "{stdout}");
-    assert!(stdout.contains("system 0x2003"), "{stdout}");
-    assert!(
-        stdout.contains(
-            "# Complete linear decode: 5 instructions, 22 code bytes, 2 system command IDs"
-        ),
-        "{stdout}"
-    );
-    assert!(stdout.contains("# system 0x2003: 1"), "{stdout}");
-    assert!(stdout.contains("# system 0x201e: 2"), "{stdout}");
-
-    assert!(
-        !Command::new(exe)
-            .args([script_path.to_str().unwrap(), "extra.ps3"])
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
 }
 
 #[test]

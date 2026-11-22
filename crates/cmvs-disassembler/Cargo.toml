@@ -13,3 +13,6 @@ workspace = true
 [dependencies]
 cmvs-core = { path = "../cmvs-core" }
 cmvs-tooling = { path = "../cmvs-tooling" }
+
+[dev-dependencies]
+tempfile.workspace = true

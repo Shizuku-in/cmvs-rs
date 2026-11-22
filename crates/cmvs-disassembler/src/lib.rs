@@ -1,4 +1,4 @@
-//! Shared entry point for cmvs-disassembler and the cmvs-disasm compatibility command.
+//! Script disassembly, project export, and translation table export.
 mod project;
 use cmvs_core::{
     format::ps3::Script,
@@ -26,7 +26,7 @@ Usage: cmvs-disassembler <script> [--profile <id|game>]
 
 Print linear PS2A/PSS0 instructions and command counts, or export a translation table.
 Add a fourth TSV column for edited rows. Import with cmvs-assembler script import-text.
-Assemble an edited project with cmvs-assembler script assemble. cmvs-disasm accepts the same arguments.";
+Assemble an edited project with cmvs-assembler script assemble.";
 
 pub fn run(args: &[OsString]) -> Result<()> {
     if wants_help(args) {

@@ -13,7 +13,7 @@ cargo run --offline --bin cmvs-trace -- game/data/pack/start.ps3 --steps 10000
 ```
 
 - `cmvs-inspect` 查看 PS2A/PSS0 的头部、分段和原始文本字节。用 `--payload <新文件>` 导出解码负载。
-- `cmvs-disassembler` 按指令顺序反汇编并统计系统命令。兼容命令 `cmvs-disasm` 接受相同参数。
+- `cmvs-disassembler` 按指令顺序反汇编并统计系统命令。
 - `cmvs-trace` 在步数预算内执行脚本。可用 `--profile <档案ID或游戏别名>` 显式指定档案。以归档为输入时，用 `--script <条目名>` 选入口，用 `--script-archive <归档>` 启用脚本切换。
 
 导出译文表后，在需要修改的行末添加一个制表符和译文。前三列依次为段名、原始十六进制字节偏移和原文。省略第四列保留原文，第四列留空表示替换为空串。导入时校验源脚本 SHA-256。数据段译文须与原文编码后的字节数相同。

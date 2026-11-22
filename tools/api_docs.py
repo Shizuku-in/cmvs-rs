@@ -17,14 +17,14 @@ def run(command, **kwargs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-p", "--package", action="append",
-                        help="package to document (repeatable; default: cmvs-core, cmvs-rs)")
+                        help="package to document (repeatable; default: cmvs-core)")
     parser.add_argument("--toolchain", default="nightly-2026-01-20")
     parser.add_argument("--features", help="Cargo features, including package/feature syntax")
     parser.add_argument("--all-features", action="store_true")
     parser.add_argument("--no-default-features", action="store_true")
     parser.add_argument("--offline", action="store_true")
     args = parser.parse_args()
-    packages = list(dict.fromkeys(args.package or ["cmvs-core", "cmvs-rs"]))
+    packages = list(dict.fromkeys(args.package or ["cmvs-core"]))
     cargo = ["cargo", f"+{args.toolchain}"]
     metadata = json.loads(run(cargo + ["metadata", "--no-deps", "--format-version", "1"],
                               capture_output=True, text=True).stdout)
