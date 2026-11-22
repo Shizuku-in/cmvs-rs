@@ -379,13 +379,13 @@ impl FontLibrary {
     pub fn for_character(&mut self, face: &[u8], encoding: TextEncoding, ch: char) -> Arc<FontVec> {
         self.resolve_character(face, encoding, ch).0
     }
-    /// Returns the chosen font and whether glyphs drawn with it can be cached.
+    /// Returns the glyph face, the primary face for baseline placement, and cacheability.
     pub(crate) fn resolve_character(
         &mut self,
         face: &[u8],
         encoding: TextEncoding,
         ch: char,
-    ) -> (Arc<FontVec>, bool) {
+    ) -> (Arc<FontVec>, Arc<FontVec>, bool) {
         let covers = |font: &FontVec| {
             let id = font.glyph_id(ch);
             id.0 != 0 && (ch.is_whitespace() || font.outline(id).is_some())
@@ -399,13 +399,13 @@ impl FontLibrary {
             ),
         };
         if covers(&font) {
-            return (font, cacheable);
+            return (font.clone(), font, cacheable);
         }
         let fallback = std::iter::once(&self.default)
             .chain(&self.fallbacks)
             .find(|font| covers(font))
             .unwrap_or(&self.default);
-        (fallback.clone(), cacheable)
+        (fallback.clone(), font, cacheable)
     }
     fn locate(
         &mut self,
@@ -743,6 +743,26 @@ pub(crate) mod tests {
     /// Minimal self-contained TrueType `sfnt` accepted by `ab_glyph::FontVec`, mapping
     /// `ch` to a rectangular outline glyph `(0, 0)..(xmax, ymax)` so tests run offline.
     pub(crate) fn minimal_ttf_with_box(family: &str, ch: u16, xmax: i16, ymax: i16) -> Vec<u8> {
+        minimal_ttf_with_metrics(family, ch, xmax, ymax, [800, -200])
+    }
+
+    pub(crate) fn minimal_ttf_with_metrics(
+        family: &str,
+        ch: u16,
+        xmax: i16,
+        ymax: i16,
+        [ascent, descent]: [i16; 2],
+    ) -> Vec<u8> {
+        minimal_ttf_with_layout(family, ch, [0, 0, xmax, ymax], [ascent, descent], None)
+    }
+
+    pub(crate) fn minimal_ttf_with_layout(
+        family: &str,
+        ch: u16,
+        [xmin, ymin, xmax, ymax]: [i16; 4],
+        [ascent, descent]: [i16; 2],
+        os2_typo: Option<[i16; 2]>,
+    ) -> Vec<u8> {
         let mut cmap = Vec::new();
         for v in [0u16, 1] {
             cmap.extend(v.to_be_bytes());
@@ -758,13 +778,15 @@ pub(crate) mod tests {
         }
 
         let mut glyf = Vec::new();
-        for v in [1i16, 0, 0, xmax, ymax] {
+        for v in [1i16, xmin, ymin, xmax, ymax] {
             glyf.extend(v.to_be_bytes());
         }
         glyf.extend(3u16.to_be_bytes());
         glyf.extend(0u16.to_be_bytes());
         glyf.extend([0x01u8; 4]);
-        for v in [0i16, xmax, 0, -xmax, 0, 0, ymax, -ymax] {
+        let dx = xmax - xmin;
+        let dy = ymax - ymin;
+        for v in [xmin, dx, 0, -dx, ymin, 0, dy, 0] {
             glyf.extend(v.to_be_bytes());
         }
 
@@ -779,8 +801,8 @@ pub(crate) mod tests {
 
         let mut hhea = vec![0u8; 36];
         hhea[..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-        hhea[4..6].copy_from_slice(&800i16.to_be_bytes());
-        hhea[6..8].copy_from_slice(&(-200i16).to_be_bytes());
+        hhea[4..6].copy_from_slice(&ascent.to_be_bytes());
+        hhea[6..8].copy_from_slice(&descent.to_be_bytes());
         hhea[10..12].copy_from_slice(&1000u16.to_be_bytes());
         hhea[34..36].copy_from_slice(&2u16.to_be_bytes());
 
@@ -802,7 +824,14 @@ pub(crate) mod tests {
         maxp[8..10].copy_from_slice(&1u16.to_be_bytes());
 
         let name = name_table(&[(3, 1, 1, family)]);
-        let tables: [(&[u8; 4], Vec<u8>); 8] = [
+        let mut tables: Vec<(&[u8; 4], Vec<u8>)> = Vec::new();
+        if let Some([typo_asc, typo_desc]) = os2_typo {
+            let mut os2 = vec![0u8; 78];
+            os2[68..70].copy_from_slice(&typo_asc.to_be_bytes());
+            os2[70..72].copy_from_slice(&typo_desc.to_be_bytes());
+            tables.push((b"OS/2", os2));
+        }
+        tables.extend([
             (b"cmap", cmap),
             (b"glyf", glyf),
             (b"head", head),
@@ -811,14 +840,19 @@ pub(crate) mod tests {
             (b"loca", loca),
             (b"maxp", maxp),
             (b"name", name),
-        ];
+        ]);
+
+        let num_tables = tables.len() as u16;
+        let entry_selector = num_tables.ilog2() as u16;
+        let search_range = (1u16 << entry_selector) * 16;
+        let range_shift = num_tables * 16 - search_range;
 
         let mut sfnt = Vec::new();
         sfnt.extend(0x0001_0000u32.to_be_bytes());
-        sfnt.extend((tables.len() as u16).to_be_bytes());
-        sfnt.extend(128u16.to_be_bytes());
-        sfnt.extend(3u16.to_be_bytes());
-        sfnt.extend(0u16.to_be_bytes());
+        sfnt.extend(num_tables.to_be_bytes());
+        sfnt.extend(search_range.to_be_bytes());
+        sfnt.extend(entry_selector.to_be_bytes());
+        sfnt.extend(range_shift.to_be_bytes());
 
         let mut offset = 12 + 16 * tables.len();
         let mut payload = Vec::new();
@@ -841,7 +875,7 @@ pub(crate) mod tests {
     }
 
     /// Rebases each face's table offsets into a `ttcf` collection.
-    fn collection(faces: &[Vec<u8>]) -> Vec<u8> {
+    pub(crate) fn collection(faces: &[Vec<u8>]) -> Vec<u8> {
         let mut out = b"ttcf".to_vec();
         out.extend([0, 1, 0, 0]);
         out.extend((faces.len() as u32).to_be_bytes());
@@ -850,8 +884,13 @@ pub(crate) mod tests {
         for face in faces {
             out.extend((at as u32).to_be_bytes());
             let mut face = face.clone();
-            let table = u32::from_be_bytes(face[20..24].try_into().unwrap()) as usize + at;
-            face[20..24].copy_from_slice(&(table as u32).to_be_bytes());
+            let tables = usize::from(u16::from_be_bytes([face[4], face[5]]));
+            for i in 0..tables {
+                let off_at = 12 + 16 * i + 8;
+                let table =
+                    u32::from_be_bytes(face[off_at..off_at + 4].try_into().unwrap()) as usize + at;
+                face[off_at..off_at + 4].copy_from_slice(&(table as u32).to_be_bytes());
+            }
             at += face.len();
             bodies.push(face);
         }

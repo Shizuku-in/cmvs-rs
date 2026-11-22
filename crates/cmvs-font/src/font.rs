@@ -3,7 +3,7 @@
 use crate::composition::SceneComposition;
 use crate::font_library::FontLibrary;
 use crate::glyph_cache::GlyphCache;
-use ab_glyph::{Font, FontVec, ScaleFont, point};
+use ab_glyph::{Font, FontVec, PxScale, ScaleFont, point};
 use cmvs_core::{
     FormatError, TextEncoding,
     render::camera::CameraHost,
@@ -108,6 +108,150 @@ pub struct FontRenderer {
     glyph_build_calls: u64,
 }
 
+// ab_glyph expresses PxScale relative to ascent minus descent.
+fn em_scale(font: &FontVec, size: u32) -> Result<PxScale, &'static str> {
+    let em = font.units_per_em().ok_or("invalid font em size")?;
+    let height = font.height_unscaled();
+    if !height.is_finite() || height <= 0.0 {
+        return Err("invalid font height");
+    }
+    Ok(PxScale::from(size as f32 * height / em))
+}
+
+fn be_u16(bytes: &[u8], at: usize) -> Option<u16> {
+    let end = at.checked_add(2)?;
+    Some(u16::from_be_bytes(bytes.get(at..end)?.try_into().ok()?))
+}
+
+fn be_i16(bytes: &[u8], at: usize) -> Option<i16> {
+    let end = at.checked_add(2)?;
+    Some(i16::from_be_bytes(bytes.get(at..end)?.try_into().ok()?))
+}
+
+fn be_u32(bytes: &[u8], at: usize) -> Option<u32> {
+    let end = at.checked_add(4)?;
+    Some(u32::from_be_bytes(bytes.get(at..end)?.try_into().ok()?))
+}
+
+/// Reads `OS/2` typographic `(ascender, descender)` when valid, avoiding inflated
+/// `hhea` line-box headroom (e.g. Noto Sans CJK) that would push the baseline too low.
+fn typographic_vertical_metrics(font: &FontVec) -> Option<(f32, f32)> {
+    let data = font.as_slice();
+    let is_ttc = data.get(..4) == Some(b"ttcf");
+    let face_offsets: Vec<usize> = if is_ttc {
+        let count = be_u32(data, 8)? as usize;
+        if count == 0 || count > 256 {
+            return None;
+        }
+        (0..count)
+            .map(|i| Some(be_u32(data, 12 + 4 * i)? as usize))
+            .collect::<Option<Vec<_>>>()?
+    } else {
+        vec![0]
+    };
+
+    let expected_em = font.units_per_em()?;
+    let expected_glyphs = font.glyph_count();
+    let expected_ascent = font.ascent_unscaled();
+    let expected_descent = font.descent_unscaled();
+    let mut matched: Option<Option<(i16, i16)>> = None;
+
+    for offset in face_offsets {
+        let Some(tables) = offset
+            .checked_add(4)
+            .and_then(|at| be_u16(data, at))
+            .map(usize::from)
+        else {
+            continue;
+        };
+        if tables > 512 {
+            continue;
+        }
+        let Some(records) = offset.checked_add(12) else {
+            continue;
+        };
+        let table = |tag: &[u8; 4]| -> Option<&[u8]> {
+            for i in 0..tables {
+                let rec = records.checked_add(16 * i)?;
+                if data.get(rec..rec.checked_add(4)?)? == tag {
+                    let start = be_u32(data, rec.checked_add(8)?)? as usize;
+                    let len = be_u32(data, rec.checked_add(12)?)? as usize;
+                    return data.get(start..start.checked_add(len)?);
+                }
+            }
+            None
+        };
+
+        let os2 = table(b"OS/2").filter(|t| t.len() >= 72);
+        let typo = os2
+            .and_then(|t| Some((be_i16(t, 68)?, be_i16(t, 70)?)))
+            .filter(|&(asc, desc)| asc > 0 && desc <= 0);
+
+        if is_ttc {
+            let (Some(head), Some(maxp), Some(hhea)) =
+                (table(b"head"), table(b"maxp"), table(b"hhea"))
+            else {
+                continue;
+            };
+            let (Some(em), Some(glyphs), Some(hhea_asc), Some(hhea_desc)) = (
+                be_u16(head, 18),
+                be_u16(maxp, 4),
+                be_i16(hhea, 4),
+                be_i16(hhea, 6),
+            ) else {
+                continue;
+            };
+            if f32::from(em) != expected_em || usize::from(glyphs) != expected_glyphs {
+                continue;
+            }
+            let use_typo = os2
+                .and_then(|t| be_u16(t, 62))
+                .is_some_and(|flags| flags & (1 << 7) != 0);
+            let (eff_asc, eff_desc) = if let (true, Some(t)) = (use_typo, os2) {
+                let (Some(asc), Some(desc)) = (be_i16(t, 68), be_i16(t, 70)) else {
+                    continue;
+                };
+                (asc, desc)
+            } else {
+                let mut asc = hhea_asc;
+                let mut desc = hhea_desc;
+                if let Some(t) = os2 {
+                    if asc == 0 {
+                        asc = be_i16(t, 68).unwrap_or(0);
+                    }
+                    if desc == 0 {
+                        desc = be_i16(t, 70).unwrap_or(0);
+                    }
+                }
+                (asc, desc)
+            };
+            if f32::from(eff_asc) != expected_ascent || f32::from(eff_desc) != expected_descent {
+                continue;
+            }
+        }
+
+        match matched {
+            None => matched = Some(typo),
+            Some(prev) if prev == typo => {}
+            Some(_) => return None,
+        }
+    }
+
+    matched
+        .flatten()
+        .map(|(asc, desc)| (f32::from(asc), f32::from(desc)))
+}
+
+fn em_baseline(font: &FontVec, size: u32) -> Result<f32, &'static str> {
+    let (ascent, descent) = typographic_vertical_metrics(font)
+        .unwrap_or_else(|| (font.ascent_unscaled(), font.descent_unscaled()));
+    let height = ascent - descent;
+    if !height.is_finite() || height <= 0.0 {
+        return Err("invalid font height");
+    }
+    Ok(size as f32 * (ascent / height).clamp(0.0, 1.0))
+}
+
 struct PreviewMetrics(Arc<Mutex<FontLibrary>>, TextEncoding);
 impl PreviewMetrics {
     fn font(&self, face: &[u8], ch: char) -> Result<Arc<FontVec>, &'static str> {
@@ -158,7 +302,9 @@ impl cmvs_core::render::message::GlyphMetrics for PreviewMetrics {
         }
         let ch = character(self.1, code).map_err(|e| e.0)?;
         let font = self.font(face, ch)?;
-        let advance = font.as_scaled(size as f32).h_advance(font.glyph_id(ch));
+        let advance = font
+            .as_scaled(em_scale(&font, size)?)
+            .h_advance(font.glyph_id(ch));
         if !advance.is_finite() || advance < 0.0 || advance > u16::MAX as f32 {
             return Err("invalid proportional font advance");
         }
@@ -185,10 +331,8 @@ impl cmvs_core::render::message::GlyphMetrics for PreviewMetrics {
         let ch = character(self.1, code).map_err(|e| e.0)?;
         let font = self.font(face, ch)?;
         let id = font.glyph_id(ch);
-        let scale = size as f32;
-        let baseline = font.as_scaled(scale).ascent();
-        let Some(outline) =
-            font.outline_glyph(id.with_scale_and_position(scale, point(0.0, baseline)))
+        let scale = em_scale(&font, size)?;
+        let Some(outline) = font.outline_glyph(id.with_scale_and_position(scale, point(0.0, 0.0)))
         else {
             return if ch.is_whitespace() {
                 Ok(0)
@@ -203,7 +347,7 @@ impl cmvs_core::render::message::GlyphMetrics for PreviewMetrics {
         let left = bounds.min.x.max(0.0);
         let width = (bounds.max.x - bounds.min.x)
             .max(0.0)
-            .min((scale - left).max(0.0));
+            .min((size as f32 - left).max(0.0));
         Ok((left + width) as u32)
     }
 }
@@ -597,19 +741,21 @@ impl FontRenderer {
         mask: &mut [u8],
     ) -> Result<bool, FormatError> {
         let ch = character(self.encoding, glyph.code)?;
-        let (font, cacheable) = self
+        let (font, primary, cacheable) = self
             .library
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))?
             .resolve_character(&glyph.face, self.encoding, ch);
         let id = font.glyph_id(ch);
-        let scale = glyph.size as f32;
-        let baseline = font.as_scaled(scale).ascent();
+        let scale = em_scale(&font, glyph.size).map_err(FormatError)?;
+        let baseline = em_baseline(&primary, glyph.size)
+            .or_else(|_| em_baseline(&font, glyph.size))
+            .map_err(FormatError)?;
         if let Some(outline) =
             font.outline_glyph(id.with_scale_and_position(scale, point(0.0, baseline)))
         {
             let bounds = outline.px_bounds();
-            let cap = scale * 4.0 + 16.0;
+            let cap = glyph.size as f32 * 4.0 + 16.0;
             if ![bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y]
                 .iter()
                 .all(|v| v.is_finite() && v.abs() <= cap)
@@ -1044,6 +1190,173 @@ mod tests {
     fn invalid_font_data_or_collection_face_is_an_error() {
         assert!(FontRenderer::from_bytes(vec![], 0).is_err());
         assert!(FontRenderer::from_bytes(b"ttcf".to_vec(), 1).is_err());
+    }
+
+    #[test]
+    fn fallback_uses_the_same_em_size_and_baseline() {
+        use crate::font_library::tests::{minimal_ttf_with_box, minimal_ttf_with_metrics};
+
+        let mut font =
+            FontRenderer::from_bytes(minimal_ttf_with_box("Primary", 65, 500, 700), 0).unwrap();
+        let fallback = minimal_ttf_with_metrics("Fallback", 66, 500, 700, [1160, -288]);
+        font.add_fallback(fallback.clone(), 0).unwrap();
+        let standalone = FontRenderer::from_bytes(fallback, 0).unwrap();
+        let mut a = recorded_glyph(65);
+        a.size = 32;
+        let b = RecordedGlyph {
+            code: 66,
+            ..a.clone()
+        };
+        for (renderer, glyph) in [(&font, &a), (&font, &b), (&standalone, &b)] {
+            let metrics = renderer.metrics();
+            assert_eq!(
+                metrics.advance_width(&glyph.face, glyph.code, 32, false),
+                Ok(19)
+            );
+            assert_eq!(metrics.ink_width(&glyph.face, glyph.code, 32), Ok(16));
+        }
+        assert_eq!(
+            font.rasterize_glyph(&a).unwrap(),
+            font.rasterize_glyph(&b).unwrap()
+        );
+
+        // Selected non-default face falling back to the default font keeps the selected baseline.
+        let root = std::env::temp_dir().join(format!(
+            "cmvs-font-selected-baseline-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let selected_bytes = minimal_ttf_with_metrics("Selected", 66, 500, 700, [600, -400]);
+        let selected_path = root.join("selected.ttf");
+        std::fs::write(&selected_path, &selected_bytes).unwrap();
+        let mut renderer =
+            FontRenderer::from_bytes(minimal_ttf_with_box("Default", 65, 500, 700), 0).unwrap();
+        renderer.set_user_directory(&root).unwrap();
+        let selected_face = renderer.import_font(&selected_path, 0).unwrap();
+        let mut selected_a = a.clone();
+        selected_a.face = Arc::from(selected_face.as_slice());
+        let selected_b = RecordedGlyph {
+            code: 66,
+            ..selected_a.clone()
+        };
+        let fallback_default = renderer.rasterize_glyph(&selected_a).unwrap();
+        let direct_selected = renderer.rasterize_glyph(&selected_b).unwrap();
+        let direct_default = renderer.rasterize_glyph(&a).unwrap();
+        assert_eq!(fallback_default, direct_selected);
+        assert_ne!(fallback_default, direct_default);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn asymmetric_hhea_and_os2_baselines_keep_descenders_unclipped() {
+        use crate::font_library::tests::{collection, minimal_ttf_with_layout};
+
+        let row_ink = |image: &RgbaImage, y: usize| -> u64 {
+            let side = image.width() as usize;
+            image.pixels()[y * side * 4..(y + 1) * side * 4]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| u64::from(p[3]))
+                .sum()
+        };
+
+        // Noto Sans CJK style: hhea=[1160, -288], OS/2 typo=[880, -120], CJK box [-120..880].
+        let typo_cjk = minimal_ttf_with_layout("Typo", 65, [0, -120, 500, 880], [880, -120], None);
+        let noto_cjk = minimal_ttf_with_layout(
+            "NotoStyle",
+            65,
+            [0, -120, 500, 880],
+            [1160, -288],
+            Some([880, -120]),
+        );
+        let ttc = collection(&[
+            minimal_ttf_with_layout(
+                "Other",
+                66,
+                [0, -120, 500, 880],
+                [700, -300],
+                Some([700, -300]),
+            ),
+            noto_cjk.clone(),
+        ]);
+        let mut ref_renderer = FontRenderer::from_bytes(typo_cjk, 0).unwrap();
+        let mut noto_renderer = FontRenderer::from_bytes(noto_cjk, 0).unwrap();
+        let mut ttc_renderer = FontRenderer::from_bytes(ttc, 1).unwrap();
+        let mut glyph = recorded_glyph(65);
+        glyph.size = 48;
+        let expected = ref_renderer.rasterize_glyph(&glyph).unwrap();
+        let actual = noto_renderer.rasterize_glyph(&glyph).unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(ttc_renderer.rasterize_glyph(&glyph).unwrap(), expected);
+        // Both top and bottom 2px padding bands remain empty so 2px outlines do not clip.
+        let side = actual.height() as usize;
+        assert_eq!(row_ink(&actual, 0), 0);
+        assert_eq!(row_ink(&actual, 1), 0);
+        assert_eq!(row_ink(&actual, side - 2), 0);
+        assert_eq!(row_ink(&actual, side - 1), 0);
+
+        // Without OS/2, inflated asymmetric hhea still keeps baseline proportional and descenders inside.
+        let no_os2 = minimal_ttf_with_layout("NoOs2", 65, [0, -200, 500, 700], [1160, -288], None);
+        let mut no_os2_renderer = FontRenderer::from_bytes(no_os2, 0).unwrap();
+        glyph.size = 32;
+        let descender = no_os2_renderer.rasterize_glyph(&glyph).unwrap();
+        let side = descender.height() as usize;
+        assert_eq!(row_ink(&descender, side - 1), 0);
+        let ink_rows = (0..side).filter(|&y| row_ink(&descender, y) > 0).count();
+        assert!(ink_rows >= 28, "expected ~29px tall glyph, got {ink_rows}");
+
+        // Extreme hhea (ascent + descent > em) never pushes baseline outside [0, size].
+        let extreme = FontVec::try_from_vec(minimal_ttf_with_layout(
+            "Extreme",
+            65,
+            [0, 0, 500, 700],
+            [1300, -200],
+            None,
+        ))
+        .unwrap();
+        let baseline = em_baseline(&extreme, 32).unwrap();
+        assert!((0.0..=32.0).contains(&baseline), "baseline={baseline}");
+    }
+
+    #[test]
+    fn invalid_font_height_errors_and_broken_primary_falls_back_consistently() {
+        use crate::font_library::tests::{minimal_ttf_with_box, minimal_ttf_with_metrics};
+
+        let broken = minimal_ttf_with_metrics("Broken", 65, 500, 700, [0, 0]);
+        let fallback = minimal_ttf_with_box("Fallback", 66, 500, 700);
+        let mut font = FontRenderer::from_bytes(broken, 0).unwrap();
+        font.add_fallback(fallback.clone(), 0).unwrap();
+        let mut standalone = FontRenderer::from_bytes(fallback, 0).unwrap();
+
+        let mut a = recorded_glyph(65);
+        a.size = 32;
+        let b = RecordedGlyph {
+            code: 66,
+            ..a.clone()
+        };
+        let metrics = font.metrics();
+        assert_eq!(
+            metrics.advance_width(&a.face, a.code, 32, false),
+            Err("invalid font height")
+        );
+        assert_eq!(
+            metrics.ink_width(&a.face, a.code, 32),
+            Err("invalid font height")
+        );
+        assert_eq!(
+            font.rasterize_glyph(&a),
+            Err(FormatError("invalid font height"))
+        );
+
+        // Missing glyph falls back to the valid fallback for both metrics and rasterization.
+        assert_eq!(metrics.advance_width(&b.face, b.code, 32, false), Ok(19));
+        assert_eq!(metrics.ink_width(&b.face, b.code, 32), Ok(16));
+        assert_eq!(
+            font.rasterize_glyph(&b).unwrap(),
+            standalone.rasterize_glyph(&b).unwrap()
+        );
     }
 
     #[test]
