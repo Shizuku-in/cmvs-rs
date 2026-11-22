@@ -3,6 +3,7 @@ mod backend;
 mod backup;
 #[allow(unsafe_code)]
 mod ffi;
+mod fonts;
 mod inspect;
 #[cfg(target_os = "ios")]
 mod ios_audio;
@@ -31,6 +32,8 @@ struct Config {
     user: PathBuf,
     font: PathBuf,
     face: u32,
+    #[serde(default)]
+    fonts: Vec<fonts::Choice>,
     profile: Option<String>,
     encoding: String,
     game_savedata: bool,
@@ -45,6 +48,7 @@ struct Config {
 }
 struct Player {
     session: HostSession,
+    fonts: fonts::Fonts,
     reader: accessibility::Reader,
     backend: Backend,
     audio: Option<HostAudioControl>,
@@ -79,6 +83,7 @@ impl Player {
             ProfileSystemSave::open(&c.user, &c.root)?
         };
         let user_font_dir = Some(saves.directory().to_owned());
+        let fonts = fonts::Fonts::open(saves.directory(), c.fonts, &font)?;
         let mut session = boot.into_session(
             font,
             SessionConfig {
@@ -140,6 +145,7 @@ impl Player {
         touch.focus(true, session.runtime.input_mut());
         Ok(Self {
             session,
+            fonts,
             reader: Default::default(),
             backend,
             audio,

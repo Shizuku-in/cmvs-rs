@@ -14,6 +14,8 @@ int32_t cmvs_apple_list_profiles(CmvsApple *);
 /* NULL profile and encoding select automatic inspection. */
 int32_t cmvs_apple_inspect_game(CmvsApple *, const char *path, const char *profile, const char *encoding);
 int32_t cmvs_apple_validate_font(CmvsApple *, const char *path, uint32_t face);
+/* Returns JSON face records with index, PostScript name, and CJK coverage. */
+int32_t cmvs_apple_inspect_font(CmvsApple *, const char *path);
 int32_t cmvs_apple_open(CmvsApple *, const char *config_json);
 /* Retain the CAMetalLayer until detach returns. Dimensions are physical pixels. */
 int32_t cmvs_apple_attach_metal_layer(CmvsApple *, void *, uint32_t width, uint32_t height);
@@ -50,8 +52,8 @@ int32_t cmvs_apple_restart_audio(CmvsApple *);
 int32_t cmvs_apple_pause(CmvsApple *, bool paused);
 int32_t cmvs_apple_save_preferences(CmvsApple *);
 int32_t cmvs_apple_comment(CmvsApple *, uint32_t id, const char *text);
-/* Selecting a face returns its engine name in text. NULL cancels. */
-int32_t cmvs_apple_font(CmvsApple *, const char *path, uint32_t face);
+/* Selects an ID from the font catalog passed to open and returns its save reference. NULL cancels. */
+int32_t cmvs_apple_font(CmvsApple *, const char *id);
 int32_t cmvs_apple_message(CmvsApple *, bool accept);
 /* A NULL local_root exports the standalone user save directory. */
 int32_t cmvs_apple_export_saves(CmvsApple *, const char *local_root, const char *user, const char *zip, const char *identity);

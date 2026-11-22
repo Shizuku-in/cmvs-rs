@@ -55,8 +55,9 @@ final class Engine {
     private var scope: URL?
     private var retainedLayer: CAMetalLayer?
     private var size = [0, 0]
-    func open(_ game: Game, font: FontFace, layer: CAMetalLayer, width: UInt32, height: UInt32) throws -> [String: Any]
-    {
+    func open(
+        _ game: Game, font: FontFace, fonts: [FontFace], layer: CAMetalLayer, width: UInt32, height: UInt32
+    ) throws -> [String: Any] {
         let root = try game.resolve()
         if root.startAccessingSecurityScopedResource() { scope = root }
         do {
@@ -66,6 +67,11 @@ final class Engine {
             config["user"] = game.saves.path
             config["font"] = font.url.path
             config["face"] = font.index
+            config["fonts"] = fonts.map { face -> [String: Any] in
+                var entry: [String: Any] = ["id": face.id, "name": face.name, "path": face.url.path, "index": face.index]
+                if let systemName = face.systemName { entry["system"] = systemName }
+                return entry
+            }
             let json = try JSONSerialization.data(withJSONObject: config)
             try bridge.check(cmvs_apple_open(bridge.handle, String(decoding: json, as: UTF8.self)))
             let info = try bridge.object()

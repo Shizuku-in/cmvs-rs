@@ -40,6 +40,8 @@ pub struct FontLibrary {
     /// Faces whose resolution does not depend on the encoding (handles, imported
     /// font names and the built-in default).
     loaded: HashMap<Vec<u8>, Arc<FontVec>>,
+    /// References supplied by the host, including those whose source is unavailable.
+    referenced: HashMap<Vec<u8>, ReferencedFace>,
     /// System fonts found by decoded family name; the same bytes may name another
     /// family in another encoding.
     located: HashMap<TextEncoding, HashMap<Vec<u8>, Arc<FontVec>>>,
@@ -56,12 +58,18 @@ pub struct FontLibrary {
     unicode_directory: Option<PathBuf>,
 }
 
+struct ReferencedFace {
+    name: String,
+    source: Option<(PathBuf, u32)>,
+}
+
 impl FontLibrary {
     pub fn new(default: Arc<FontVec>) -> Self {
         Self {
             default,
             fallbacks: Vec::new(),
             loaded: HashMap::new(),
+            referenced: HashMap::new(),
             located: HashMap::new(),
             missing: HashMap::new(),
             index: None,
@@ -81,6 +89,15 @@ impl FontLibrary {
     fn invalidate_missing(&mut self) {
         self.missing.clear();
         self.missing_unicode.clear();
+    }
+    pub(crate) fn bind_face_reference(
+        &mut self,
+        key: Vec<u8>,
+        name: String,
+        source: Option<(PathBuf, u32)>,
+    ) {
+        self.loaded.remove(&key);
+        self.referenced.insert(key, ReferencedFace { name, source });
     }
     pub fn set_user_directory(&mut self, directory: &Path) {
         let directory = directory.join("font-faces");
@@ -142,6 +159,9 @@ impl FontLibrary {
         face: &[u8],
         encoding: TextEncoding,
     ) -> Result<String, FormatError> {
+        if let Some(reference) = self.referenced.get(face) {
+            return Ok(reference.name.clone());
+        }
         if let Some(name) = self.unicode_names.get(face) {
             return Ok(name.clone());
         }
@@ -197,6 +217,15 @@ impl FontLibrary {
     ) -> Result<Arc<FontVec>, FormatError> {
         if let Some(font) = self.loaded.get(face) {
             return Ok(font.clone());
+        }
+        if let Some(reference) = self.referenced.get(face) {
+            let font = reference
+                .source
+                .as_ref()
+                .and_then(|(path, index)| read_font(path, *index).ok())
+                .unwrap_or_else(|| self.default.clone());
+            self.loaded.insert(face.to_vec(), font.clone());
+            return Ok(font);
         }
         if let Some(font) = self.located.get(&encoding).and_then(|m| m.get(face)) {
             return Ok(font.clone());
@@ -265,17 +294,7 @@ impl FontLibrary {
             remember_missing(self.missing.entry(encoding).or_default(), face);
             return Err(FACE_NOT_FOUND);
         };
-        let mut bytes = Vec::new();
-        File::open(&path)
-            .and_then(|file| file.take(MAX_FONT as u64 + 1).read_to_end(&mut bytes))
-            .map_err(|_| FormatError("located font file cannot be read"))?;
-        if bytes.len() > MAX_FONT {
-            return Err(FormatError("font exceeds 32 MiB research limit"));
-        }
-        let font = Arc::new(
-            FontVec::try_from_vec_and_index(bytes, index)
-                .map_err(|_| FormatError("located font is not a supported outline font"))?,
-        );
+        let font = read_font(&path, index)?;
         self.located
             .entry(encoding)
             .or_default()
@@ -401,6 +420,19 @@ impl FontLibrary {
         };
         Ok(index.get(&key).cloned())
     }
+}
+
+fn read_font(path: &Path, index: u32) -> Result<Arc<FontVec>, FormatError> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| file.take(MAX_FONT as u64 + 1).read_to_end(&mut bytes))
+        .map_err(|_| FormatError("located font file cannot be read"))?;
+    if bytes.len() > MAX_FONT {
+        return Err(FormatError("font exceeds 32 MiB research limit"));
+    }
+    FontVec::try_from_vec_and_index(bytes, index)
+        .map(Arc::new)
+        .map_err(|_| FormatError("located font is not a supported outline font"))
 }
 
 /// Decode a legacy face field. The engine's built-in default face is a fixed Shift-JIS
@@ -559,6 +591,21 @@ fn name_records(table: &[u8]) -> Vec<String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_font_reference_uses_default_and_retains_its_name() {
+        let default = Arc::new(FontVec::try_from_vec(minimal_ttf("Default")).unwrap());
+        let mut library = FontLibrary::with_directories(default.clone(), Vec::new());
+        let key = b"CMVS-R-012345678901234567890123";
+        library.bind_face_reference(key.to_vec(), "Saved face".into(), None);
+        let encoding = TextEncoding::default();
+        assert!(library.contains(key, encoding));
+        assert!(Arc::ptr_eq(
+            &library.for_character(key, encoding, 'A'),
+            &default
+        ));
+        assert_eq!(library.family_name(key, encoding).unwrap(), "Saved face");
+    }
 
     #[test]
     #[ignore = "requires CMVS_FONT_PATH (Japanese) and CMVS_PARTIAL_FONT_PATH (Latin-only)"]

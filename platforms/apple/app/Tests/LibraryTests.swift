@@ -1,9 +1,18 @@
+import CoreTransferable
 import Foundation
 import XCTest
 
 @testable import CMVS
 
 final class LibraryTests: XCTestCase {
+    func testSaveArchiveSuppliesZIPFilenameToExporter() throws {
+        guard #available(iOS 18.2, macOS 15.2, *) else { throw XCTSkip("Requires Transferable.suggestedFilename") }
+        let info = GameInfo(profile: "", family: "CMVS", basis: "", encoding: "gbk", size: [], savedata: false)
+        let game = Game(id: UUID(), name: "Example", info: info, options: Options())
+        let archive = try SaveArchive(game: game)
+        XCTAssertEqual(archive.suggestedFilename, "Example.zip")
+    }
+
     func testUnreadableCatalogIsPreservedUntilRetrySucceeds() throws {
         let fm = FileManager.default
         let directory = fm.temporaryDirectory.appending(path: UUID().uuidString)
@@ -208,6 +217,26 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(library.data.defaults.font, "")
         XCTAssertEqual(library.data.games[0].options.font, "")
         XCTAssertEqual(try library.font(for: library.data.games[0]), fallback)
+    }
+
+    func testSystemFontsCanBeSelectedWithoutImporting() throws {
+        let fm = FileManager.default
+        let directory = fm.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? fm.removeItem(at: directory) }
+        let library = Library(directory: directory)
+        library.systemFonts = Library.scanFonts()
+        let first = try XCTUnwrap(library.systemFonts.first)
+        XCTAssertEqual(library.defaultFont, first)
+        XCTAssertNotNil(first.preview(size: 18))
+        XCTAssertEqual(Set(library.systemFonts.map(\.id)).count, library.systemFonts.count)
+
+        let selected = try XCTUnwrap(library.systemFonts.last)
+        library.data.defaults.font = selected.id
+        library.persist()
+        library.reload()
+        let info = GameInfo(profile: "", family: "CMVS", basis: "", encoding: "gbk", size: [], savedata: false)
+        let game = Game(id: UUID(), name: "Example", info: info, options: Options())
+        XCTAssertEqual(try library.font(for: game), selected)
     }
 
     func testBookmarkedFolderSurvivesCatalogRoundTrip() throws {

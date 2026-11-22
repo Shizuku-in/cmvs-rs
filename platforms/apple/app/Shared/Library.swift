@@ -1,5 +1,6 @@
 import CmvsAppleC
 import CoreText
+import CryptoKit
 import Foundation
 import Observation
 
@@ -113,18 +114,30 @@ struct FontFace: Identifiable, Codable, Hashable {
     var name: String
     var bytes: Int
     var family: String?
-    var id: String { "\(file)#\(index)" }
+    var systemName: String?
+    var id: String {
+        #if os(iOS)
+            if let systemName { return "system:\(systemName)" }
+        #endif
+        return "\(file)#\(index)"
+    }
     var url: URL { url(in: Library.base) }
     func url(in base: URL) -> URL { file.hasPrefix("/") ? URL(fileURLWithPath: file) : base.appending(path: file) }
 
     func preview(size: CGFloat) -> CTFont? {
+        #if os(iOS)
+            if let systemName {
+                let font = CTFontCreateWithName(systemName as CFString, size, nil)
+                return CTFontCopyPostScriptName(font) as String == systemName ? font : nil
+            }
+        #endif
         guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
             descriptors.indices.contains(Int(index))
         else { return nil }
         return CTFontCreateWithFontDescriptor(descriptors[Int(index)], size, nil)
     }
 
-    static func read(_ url: URL, file: String, requireCJK: Bool = false) throws -> [Self] {
+    static func read(_ url: URL, file: String, system: Bool = false) throws -> [Self] {
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size > 0, size <= 32 << 20 else { throw PlayerError("Font must be at most 32 MiB.") }
         guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] else {
@@ -132,12 +145,13 @@ struct FontFace: Identifiable, Codable, Hashable {
         }
         return descriptors.enumerated().compactMap { index, desc in
             let font = CTFontCreateWithFontDescriptor(desc, 16, nil)
-            let set = CTFontCopyCharacterSet(font)
-            if requireCJK && ![0x4e2d, 0x3042].allSatisfy({ CFCharacterSetIsCharacterMember(set, UniChar($0)) }) {
-                return nil
+            if system {
+                let set = CTFontCopyCharacterSet(font)
+                guard [0x4e2d, 0x3042].allSatisfy({ CFCharacterSetIsCharacterMember(set, UniChar($0)) }) else { return nil }
             }
             return Self(file: file, index: UInt32(index), name: CTFontCopyFullName(font) as String,
-                        bytes: size, family: CTFontCopyFamilyName(font) as String)
+                        bytes: size, family: CTFontCopyFamilyName(font) as String,
+                        systemName: system ? CTFontCopyPostScriptName(font) as String : nil)
         }
     }
 }
@@ -416,21 +430,88 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
         }
     }
 
-    static func importFont(_ source: URL) throws -> [FontFace] {
+    static func importFont(_ source: URL, existing: [FontFace]) throws -> [FontFace] {
         try scoped(source) {
-            let file = "Fonts/\(UUID())-\(source.lastPathComponent)"
-            let faces = try FontFace.read(source, file: file)
+            let input = try FileHandle(forReadingFrom: source)
+            defer { try? input.close() }
+            let limit = 32 << 20
+            let data = try input.read(upToCount: limit + 1) ?? Data()
+            guard !data.isEmpty, data.count <= limit else { throw PlayerError("Font must be at most 32 MiB.") }
+            var compared = Set<String>()
+            for face in existing where face.bytes == data.count && compared.insert(face.file).inserted {
+                if (try? Data(contentsOf: face.url)) == data { return existing.filter { $0.file == face.file } }
+            }
+
+            let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            let suffix: String
+            switch String(decoding: data.prefix(4), as: UTF8.self) {
+            case "ttcf": suffix = "ttc"
+            case "OTTO": suffix = "otf"
+            default: suffix = "ttf"
+            }
+            let file = "Fonts/\(hash).\(suffix)"
+            let directory = base.appending(path: "Fonts", directoryHint: .isDirectory)
+            let fm = FileManager.default
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            let staged = directory.appending(path: ".import-\(UUID()).\(suffix)")
+            defer { try? fm.removeItem(at: staged) }
+            try data.write(to: staged)
+            let faces = try FontFace.read(staged, file: file)
             guard let first = faces.first else { throw PlayerError("No readable font faces.") }
             let api = Bridge()
-            for face in faces { try api.check(cmvs_apple_validate_font(api.handle, source.path, face.index)) }
-            try FileManager.default.createDirectory(
-                at: first.url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.copyItem(at: source, to: first.url)
+            for face in faces { try api.check(cmvs_apple_validate_font(api.handle, staged.path, face.index)) }
+            do { try fm.moveItem(at: staged, to: first.url) }
+            catch {
+                guard (try? Data(contentsOf: first.url)) == data else { throw error }
+            }
             return faces
         }
     }
 
-    #if os(macOS)
+    #if os(iOS)
+        private struct SystemFontFace: Decodable {
+            let index: UInt32
+            let name: String
+            let cjk: Int
+        }
+
+        static func scanFonts() -> [FontFace] {
+            let collection = CTFontCollectionCreateFromAvailableFonts(nil)
+            let descriptors = CTFontCollectionCreateMatchingFontDescriptors(collection) as? [CTFontDescriptor] ?? []
+            var byURL = [URL: [String: CTFontDescriptor]]()
+            for descriptor in descriptors {
+                guard let name = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String else { continue }
+                let url = (CTFontDescriptorCopyAttribute(descriptor, kCTFontURLAttribute) as? URL)
+                    ?? (CTFontCopyAttribute(CTFontCreateWithFontDescriptor(descriptor, 16, nil), kCTFontURLAttribute) as? URL)
+                guard let url, url.isFileURL else { continue }
+                byURL[url.standardizedFileURL, default: [:]][name] = descriptor
+            }
+
+            let api = Bridge()
+            let decoder = JSONDecoder()
+            var seen = Set<String>()
+            var faces = [(face: FontFace, cjk: Int)]()
+            for (url, available) in byURL.sorted(by: { $0.key.path < $1.key.path }) {
+                guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                    cmvs_apple_inspect_font(api.handle, url.path) == 0,
+                    let entries = try? decoder.decode([SystemFontFace].self, from: Data(api.text.utf8))
+                else { continue }
+                // Match by name because Core Text descriptors can include named variations.
+                for entry in entries {
+                    guard let descriptor = available[entry.name], seen.insert(entry.name).inserted else { continue }
+                    let font = CTFontCreateWithFontDescriptor(descriptor, 16, nil)
+                    let face = FontFace(
+                        file: url.path, index: entry.index, name: CTFontCopyFullName(font) as String, bytes: size,
+                        family: CTFontCopyFamilyName(font) as String, systemName: entry.name)
+                    faces.append((face, entry.cjk))
+                }
+            }
+            return faces.sorted {
+                if $0.cjk != $1.cjk { return $0.cjk > $1.cjk }
+                return ($0.face.name, $0.face.id) < ($1.face.name, $1.face.id)
+            }.map { $0.face }
+        }
+    #elseif os(macOS)
         static func scanFonts() -> [FontFace] {
             let directories = [
                 "/System/Library/Fonts", "/System/Library/Fonts/Supplemental", "/Library/Fonts",
@@ -440,7 +521,7 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
                 ((try? FileManager.default.contentsOfDirectory(
                     at: URL(fileURLWithPath: dir), includingPropertiesForKeys: nil)) ?? [])
                     .filter { ["ttf", "ttc", "otf"].contains($0.pathExtension.lowercased()) }
-                    .flatMap { (try? FontFace.read($0, file: $0.path, requireCJK: true)) ?? [] }
+                    .flatMap { (try? FontFace.read($0, file: $0.path, system: true)) ?? [] }
             }.sorted { $0.name < $1.name }
         }
     #endif

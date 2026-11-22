@@ -18,7 +18,7 @@ use std::{
     fs::File,
     hash::{Hash, Hasher},
     io::Read,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -124,7 +124,7 @@ impl std::fmt::Debug for PreviewMetrics {
 }
 impl cmvs_core::render::message::GlyphMetrics for PreviewMetrics {
     fn display_face_name(&self, face: &[u8]) -> Option<Vec<u8>> {
-        if !face.starts_with(b"CMVS-U-") {
+        if !face.starts_with(b"CMVS-U-") && !face.starts_with(b"CMVS-R-") {
             return None;
         }
         // Missing mappings and names outside the game's character set still get
@@ -455,6 +455,21 @@ impl FontRenderer {
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))?
             .family_name(face, self.encoding)
+    }
+    /// Binds a save's font reference. An unavailable file uses the default font
+    /// while preserving the reference for a later session.
+    pub fn bind_face_reference(
+        &self,
+        key: Vec<u8>,
+        name: String,
+        source: Option<(PathBuf, u32)>,
+    ) -> Result<(), FormatError> {
+        self.library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?
+            .bind_face_reference(key, name, source);
+        self.library_generation.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
     pub fn select_unicode_face(&self, name: &str) -> Result<Vec<u8>, FormatError> {
         let mut library = self

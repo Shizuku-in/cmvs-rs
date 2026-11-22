@@ -14,7 +14,6 @@ enum FastForwardKey: UInt32 {
 @MainActor @Observable final class Playback: NSObject, Identifiable {
     let game: Game
     let font: FontFace
-    private var selectedFaces = [String: FontFace]()
     private(set) var dialogFont: FontFace?
     let fonts: [FontFace]
     let engine = Engine()
@@ -106,8 +105,9 @@ enum FastForwardKey: UInt32 {
         let engine = engine
         let game = game
         let font = font
+        let fonts = fonts
         engine.queue.async {
-            let result = Result { try engine.open(game, font: font, layer: layer, width: width, height: height) }
+            let result = Result { try engine.open(game, font: font, fonts: fonts, layer: layer, width: width, height: height) }
             DispatchQueue.main.async {
                 guard !self.closed else { return }
                 do {
@@ -331,7 +331,8 @@ enum FastForwardKey: UInt32 {
                 case "cursor": cursor?(e["cursor"] as? [String: Any])
                 case "font":
                     let name = e["face"] as? String
-                    if let name, let selected = selectedFaces[name] { dialogFont = selected }
+                    if let id = e["fontID"] as? String { dialogFont = fonts.first { $0.id == id } }
+                    else if e["fontID"] != nil { dialogFont = nil }
                     else if e["default"] as? Bool == true { dialogFont = font }
                     else if let name { dialogFont = fonts.first { $0.name == name || $0.family == name } }
                     else { dialogFont = nil }
@@ -443,16 +444,10 @@ enum FastForwardKey: UInt32 {
             let id = (e["id"] as? NSNumber)?.uint32Value ?? 0
             invoke { accepted ? cmvs_apple_comment($0, id, draft) : cmvs_apple_comment($0, id, nil) }
         case "font":
-            var key: String?
             invoke { handle in
-                if let face {
-                    let code = cmvs_apple_font(handle, face.url.path, face.index)
-                    if code == 0 { key = String(cString: cmvs_apple_text(handle)) }
-                    return code
-                }
-                return cmvs_apple_font(handle, nil, 0)
+                if accepted, let face { return cmvs_apple_font(handle, face.id) }
+                return cmvs_apple_font(handle, nil)
             }
-            if let key, let face { selectedFaces[key] = face }
         default: invoke { cmvs_apple_message($0, accepted) }
         }
         dialog = nil

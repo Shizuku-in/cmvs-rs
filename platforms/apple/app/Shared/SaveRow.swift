@@ -3,7 +3,7 @@ import CoreTransferable
 import SwiftUI
 import UniformTypeIdentifiers
 
-private final class SaveArchive: Transferable {
+final class SaveArchive: Transferable {
     let url: URL
     init(game: Game) throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -13,6 +13,8 @@ private final class SaveArchive: Transferable {
     deinit { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .zip) { SentTransferredFile($0.url) }
+            // SwiftUI can require a suggested name even when fileExporter has a default filename.
+            .suggestedFileName { $0.url.lastPathComponent }
     }
 }
 

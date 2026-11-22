@@ -210,9 +210,7 @@ private struct Launcher: View {
             }
         #endif
         .task {
-            #if os(macOS)
-                library.systemFonts = await Task.detached { Library.scanFonts() }.value
-            #endif
+            library.systemFonts = await Task.detached { Library.scanFonts() }.value
             let env = ProcessInfo.processInfo.environment
             if let path = env["CMVS_GAME_DIR"], !smokeStarted {
                 smokeStarted = true
@@ -438,8 +436,10 @@ private struct Launcher: View {
     func addFont(_ url: URL) {
         Task {
             do {
-                let faces = try await Task.detached { try Library.importFont(url) }.value
-                library.data.fonts += faces
+                let existing = library.data.fonts
+                let faces = try await Task.detached { try Library.importFont(url, existing: existing) }.value
+                let ids = Set(library.data.fonts.map(\.id))
+                library.data.fonts += faces.filter { !ids.contains($0.id) && FileManager.default.fileExists(atPath: $0.url.path) }
             } catch { library.error = .init("Couldn’t Import Font", error.localizedDescription) }
         }
     }
@@ -571,7 +571,7 @@ private struct OptionsForm: View {
                     Link(destination: URL(string: "https://github.com/Shizuku-in/cmvs-rs")!) {
                         Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
                     }
-                    Button("Open-Source Licenses") { showingLicenses = true }
+                    Button("Open-Source Licenses", systemImage: "doc.text") { showingLicenses = true }
                 }
             }
         }

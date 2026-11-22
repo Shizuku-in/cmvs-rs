@@ -102,6 +102,10 @@ extern "C" fn cmvs_apple_validate_font(h: *mut Handle, path: *const c_char, face
     })
 }
 #[unsafe(no_mangle)]
+extern "C" fn cmvs_apple_inspect_font(h: *mut Handle, path: *const c_char) -> i32 {
+    call(h, |h| h.output(inspect::font(Path::new(&string(path)?))?))
+}
+#[unsafe(no_mangle)]
 extern "C" fn cmvs_apple_open(h: *mut Handle, config: *const c_char) -> i32 {
     call(h, |h| {
         if h.player.is_some() {
@@ -244,7 +248,16 @@ fn tick(h: *mut Handle, delta: u32, trace: Option<&mut TickInput>) -> i32 {
 #[unsafe(no_mangle)]
 extern "C" fn cmvs_apple_next_event(h: *mut Handle) -> i32 {
     call(h, |h| {
-        if let Some(event) = h.player()?.backend.events.pop_front() {
+        let player = h.player()?;
+        if let Some(mut event) = player.backend.events.pop_front() {
+            if event["kind"] == "font"
+                && let Some((name, id)) = event["face"]
+                    .as_str()
+                    .and_then(|face| player.fonts.label(face))
+            {
+                event["face"] = json!(name);
+                event["fontID"] = json!(id);
+            }
             h.output(event)?;
             Ok(1)
         } else {
@@ -381,20 +394,17 @@ extern "C" fn cmvs_apple_comment(h: *mut Handle, id: u32, text: *const c_char) -
     })
 }
 #[unsafe(no_mangle)]
-extern "C" fn cmvs_apple_font(h: *mut Handle, path: *const c_char, face: u32) -> i32 {
+extern "C" fn cmvs_apple_font(h: *mut Handle, id: *const c_char) -> i32 {
     call(h, |h| {
         let p = h.player()?;
-        if path.is_null() {
+        if id.is_null() {
             p.backend.font = Some(FontDialogResult::Cancelled);
             return Ok(0);
         }
-        let key = p
-            .session
-            .font
-            .import_font(Path::new(&string(path)?), face)?;
-        let name = text_codec::decode(p.session.encoding, &key)?;
-        p.backend.font = Some(FontDialogResult::Selected(key));
-        h.text = CString::new(name)?;
+        let key = p.fonts.select(&p.session.font, &string(id)?)?;
+        let text = CString::new(key.as_bytes())?;
+        p.backend.font = Some(FontDialogResult::Selected(key.into_bytes()));
+        h.text = text;
         Ok(0)
     })
 }

@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{Result, fonts};
 use cmvs_core::{
     format::{
         MAX_PAYLOAD,
@@ -67,9 +67,12 @@ fn files(dir: &Path) -> Result<Vec<(String, u64)>> {
             }
             for f in fs::read_dir(entry.path())? {
                 let f = f?;
-                let name = format!("font-faces/{}", f.file_name().to_string_lossy());
-                if allowed(&name) && f.file_type()?.is_file() {
-                    add(name, f.metadata()?.len())?;
+                let name = f.file_name();
+                if let Some(name) = name.to_str().filter(|name| fonts::is_reference(name))
+                    && f.file_type()?.is_file()
+                    && fonts::Reference::read(&f.path()).is_ok()
+                {
+                    add(format!("font-faces/{name}"), f.metadata()?.len())?;
                 }
             }
         } else if let Some(name) = entry.file_name().to_str()
@@ -200,7 +203,7 @@ pub fn import(boot: &GameBootstrap, user: &Path, local: bool, archive: &Path) ->
 impl SaveFormat {
     fn validate(&self, name: &str, path: &Path, size: u64) -> Result<()> {
         if name.starts_with("font-faces/") {
-            return Ok(());
+            return fonts::Reference::read(path).map(|_| ());
         }
         let family = match self {
             Self::Cmvs(_) => SaveFamily::Cmvs,
@@ -263,6 +266,14 @@ fn restore(dir: &Path, path: &Path, identity: &str, format: SaveFormat) -> Resul
             return Err("invalid save entry".into());
         }
         let n = file.size();
+        if let Some(face) = name.strip_prefix("font-faces/") {
+            if !fonts::is_reference(face) {
+                continue;
+            }
+            if n > fonts::MAX_REFERENCE {
+                return Err("font reference is too large".into());
+            }
+        }
         account(&mut total, n)?;
         let dest = staging.path().join(&name);
         fs::create_dir_all(dest.parent().unwrap())?;
@@ -319,14 +330,16 @@ fn restore(dir: &Path, path: &Path, identity: &str, format: SaveFormat) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
     #[test]
-    fn backup_round_trip_preserves_fonts_and_profile_lock() -> Result<()> {
+    fn backup_carries_font_references_and_restores_legacy_archives() -> Result<()> {
         let tmp = tempfile::tempdir()?;
         let game = tmp.path().join("game");
         let user = tmp.path().join("saves");
         let archive = tmp.path().join("save.zip");
         fs::create_dir(&game)?;
-        fs::create_dir_all(user.join("font-faces"))?;
+        fs::create_dir(&user)?;
         use cmvs_core::format::save::HEADER_SIZE;
         let mut header = [0; HEADER_SIZE];
         header[..4].copy_from_slice(b"CSV2");
@@ -334,7 +347,17 @@ mod tests {
         header[16..35].copy_from_slice(b"2026-01-01 00:00:00");
         let slot = Csv2Save::encode(&header, b"snapshot", b"", b"script")?;
         fs::write(user.join("save001.dat"), &slot)?;
-        fs::write(user.join("font-faces/CMVS-F-ab"), b"face")?;
+        let key = fonts::Reference {
+            source: fonts::Source::Imported {
+                hash: "a".repeat(64),
+                index: 2,
+            },
+            name: "Example".into(),
+        }
+        .write(&user.join("font-faces"))?;
+        let reference = user.join("font-faces").join(&key);
+        let legacy_font = "font-faces/CMVS-F-ab";
+        fs::write(user.join(legacy_font), b"face")?;
         let held = ProfileSystemSave::open(&user, &game)?;
         assert!(export(None, &user, &archive, "game").is_err());
         drop(held);
@@ -346,7 +369,20 @@ mod tests {
         assert_eq!(fs::read(user.join("save001.dat"))?, b"updated slot");
         restore(&user, &archive, "game", SaveFormat::Cmvs(Some(0)))?;
         assert_eq!(fs::read(user.join("save001.dat"))?, slot);
-        assert_eq!(fs::read(user.join("font-faces/CMVS-F-ab"))?, b"face");
+        fonts::Reference::read(&reference)?;
+        assert!(!user.join(legacy_font).exists());
+
+        let legacy = tmp.path().join("legacy.zip");
+        let mut zip = ZipWriter::new(File::create(&legacy)?);
+        zip.start_file("save001.dat", SimpleFileOptions::default())?;
+        zip.write_all(&slot)?;
+        zip.start_file(legacy_font, SimpleFileOptions::default())?;
+        zip.write_all(b"face")?;
+        zip.finish()?;
+        fs::write(user.join("save001.dat"), b"updated slot again")?;
+        restore(&user, &legacy, "game", SaveFormat::Cmvs(Some(0)))?;
+        assert_eq!(fs::read(user.join("save001.dat"))?, slot);
+        assert!(!user.join(legacy_font).exists());
         Ok(())
     }
 
@@ -373,7 +409,6 @@ mod tests {
         use cmvs_core::{
             format::system_save::Css1Parameters, host::random::CrtRandom, vm::evaluate::State,
         };
-        use std::io::Write;
         let tmp = tempfile::tempdir()?;
         let dir = tmp.path();
         let archive = dir.join("saves.zip");
@@ -410,7 +445,6 @@ mod tests {
         zip.start_file("system.dat", SimpleFileOptions::default())?;
         zip.finish()?;
         archive.seek(SeekFrom::End(-14))?;
-        use std::io::Write;
         for _ in 0..2 {
             archive.write_all(&(MAX_ENTRIES as u16 + 1).to_le_bytes())?;
         }
