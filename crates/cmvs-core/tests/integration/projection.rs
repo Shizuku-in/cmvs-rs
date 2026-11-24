@@ -460,7 +460,10 @@ fn unverified_projection_paths_fail_explicitly() {
         &[(0x205f, &[0, 1])],
         &[(0x209c, &[0, 1])],
         &[(0x2022, &[1, 0]), (0x2040, &[1])],
-        &[(0x222a, &[12, 1, 100, 50, 1])],
+        &[
+            (0x2044, &[1, u32::MAX, 0, 0, 1, 1]),
+            (0x222a, &[12, 1, 100, 50, 1]),
+        ],
     ];
     for extra in variants {
         let mut code = base.clone();
@@ -514,6 +517,43 @@ fn texture_subtract_affects_projected_scaled_and_rotated_images_but_not_solids()
     command(&mut code, 0x2043, &[1, u32::MAX, 8, 4, 0x123456]);
     command(&mut code, 0x2322, &[1, u32::MAX, 1]);
     assert!(render(&code).iter().all(|p| *p == [0x12, 0x34, 0x56]));
+}
+
+#[test]
+fn projected_mask_transition_follows_the_object_uv_and_detaches() {
+    use scene_render::shader::{ShaderBlend, flags, shader_draw};
+
+    for (rotation, lit, shaded) in [(0, 20, 21), (90, 19, 27)] {
+        let mut code = vec![];
+        camera(&mut code);
+        projected(&mut code, 1, 6, [0.0, 0.0, 10.0], 10.0);
+        command(&mut code, 0x204a, &[1, u32::MAX, rotation]);
+        command(&mut code, 0x2322, &[1, u32::MAX, 1]);
+        command(&mut code, 0x2234, &[12, 1, 100, 50, 1]);
+        let (mut scene, cameras) = build(&code);
+        scene.advance_frame(75);
+        let frame = scene_render::prepare_scene(&scene, Some(&cameras), &[], 8, 4).unwrap();
+        let packed = shader_draw(&frame.commands()[0], [8, 4]);
+        assert_eq!(packed.flags(), flags::MASK);
+        assert_eq!(packed.blend, ShaderBlend::Alpha);
+        assert_eq!(packed.params[3], 1.0);
+        assert_eq!(
+            packed.textures[1],
+            Some(&scene.second_mask().unwrap().mask.pixels)
+        );
+        let image = frame.render_cpu().unwrap();
+        let pixels = image.pixels().as_chunks::<4>().0;
+        assert_eq!(pixels[lit], [255; 4]);
+        assert_eq!(pixels[shaded], [128, 128, 128, 255]);
+
+        scene.advance_frame(25);
+        assert!(scene.second_mask().is_none());
+        let frame = scene_render::prepare_scene(&scene, Some(&cameras), &[], 8, 4).unwrap();
+        assert_eq!(
+            shader_draw(&frame.commands()[0], [8, 4]).flags(),
+            flags::BLACK
+        );
+    }
 }
 
 #[test]

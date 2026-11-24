@@ -47,7 +47,7 @@ pub enum Layer<'a> {
         alpha: u32,
         blend: Blend,
     },
-    /// A logically scaled image with the original texture-space transition mask.
+    /// A projected or logically scaled image with a texture-space transition mask.
     ProjectedMasked {
         image: &'a ObjectImage,
         rect: [i64; 4],
@@ -64,6 +64,7 @@ pub enum Layer<'a> {
         rect: [f32; 4],
         corners: [[f32; 2]; 4],
         alpha: u32,
+        mask: Option<&'a MaskTransition>,
         blend: Blend,
     },
     Solid {
@@ -119,7 +120,9 @@ fn texture_operation(mut layer: Layer<'_>, enabled: bool) -> Layer<'_> {
                 blend, mask: None, ..
             }
             | Layer::Projected { blend, .. }
-            | Layer::Rotated { blend, .. } => *blend = blend.subtract_white(),
+            | Layer::Rotated {
+                blend, mask: None, ..
+            } => *blend = blend.subtract_white(),
             _ => {}
         }
     }
@@ -212,6 +215,23 @@ fn order(words: &[u32; 22]) -> f32 {
     words[10] as i32 as f32
 }
 
+/// The transition samples the second texture at the source image's texel coordinates.
+fn check_mask_rect(
+    image: &ObjectImage,
+    rect: [i64; 4],
+    mask: &MaskTransition,
+) -> Result<(), FormatError> {
+    let [w, h] = [image.pixels.width(), image.pixels.height()];
+    if rect != [0, 0, i64::from(w), i64::from(h)]
+        || [mask.mask.pixels.width(), mask.mask.pixels.height()] != [w, h]
+    {
+        return Err(FormatError(
+            "mask transition on a cropped or differently sized image is not verified",
+        ));
+    }
+    Ok(())
+}
+
 /// Builds an image layer, or None when the object draws nothing (empty rect, zero alpha).
 fn image_layer<'a>(
     image: &'a ObjectImage,
@@ -226,16 +246,8 @@ fn image_layer<'a>(
     if w <= 0 || h <= 0 || alpha <= 0 {
         return Ok(None);
     }
-    let size = [image.pixels.width(), image.pixels.height()].map(i64::from);
-    // The mask is the object's second texture; only the case where it covers the whole,
-    // equally sized image texel for texel is modeled.
     if let Some(mask) = mask {
-        let mask_size = [mask.mask.pixels.width(), mask.mask.pixels.height()].map(i64::from);
-        if [sx, sy, w, h] != [0, 0, size[0], size[1]] || mask_size != size {
-            return Err(FormatError(
-                "mask transition on a cropped or differently sized image is not verified",
-            ));
-        }
+        check_mask_rect(image, [sx, sy, w, h], mask)?;
     }
     let scale = [words[18], words[19]].map(f32::from_bits);
     // 0x140022500 divides the signed hundredths by 100.0f; only a zero angle skips rotation.
@@ -258,6 +270,7 @@ fn image_layer<'a>(
             rect: [sx, sy, w, h].map(|v| v as f32),
             corners,
             alpha: alpha.min(255) as u32,
+            mask: None,
             blend: blend(words, image, alpha, false)?,
         }));
     }
@@ -546,13 +559,12 @@ fn require_unit_projection_scale(factor: f32) -> Result<(), FormatError> {
 /// source rectangle around the origin (0x140024020) and places it at the projected position
 /// and scale (0x1400238a0, device factor 1 on the 1280x720 viewport) minus the device's
 /// half-pixel offset. The object's own angle rotates its local corners before projection
-/// scaling. Inherited attached children reuse the parent projection and origin; masks,
-/// effect targets are not verified. Parent rotation is enabled only for the inspected
-/// HAROUSE build. Camera roll follows
+/// scaling. Inherited attached children reuse the parent projection and origin.
+/// Parent rotation is enabled only for the inspected HAROUSE build. Camera roll follows
 /// KUNADO 0x140061130/0x140036200; +52 also shifts projection horizontally, while
 /// +48 and the copied +52 angle are unused by that vertex transform.
 fn projected_layer<'a>(
-    scene: &SceneHost,
+    scene: &'a SceneHost,
     cameras: Option<&CameraHost>,
     slot: Option<u8>,
     object: &'a SceneObject,
@@ -581,11 +593,6 @@ fn projected_layer<'a>(
         return Ok(None);
     }
     check(words, true)?;
-    if slot.is_some_and(|slot| scene.mask_on(slot).is_some()) {
-        return Err(FormatError(
-            "mask transition on a projected object is not verified",
-        ));
-    }
     if words[0] == 3 && !camera.enabled() {
         return Ok(None);
     }
@@ -650,6 +657,17 @@ fn projected_layer<'a>(
     if scale.iter().any(|v| *v <= 0.0) {
         return Ok(None);
     }
+    let mask = slot.and_then(|slot| scene.mask_on(slot));
+    if let Some(mask) = mask {
+        check_mask_rect(image, [sx, sy, w, h], mask)?;
+    }
+    let blend = blend(words, image, i64::from(alpha), mask.is_some())?;
+    let blend = if mask.is_none() && draw.texture_subtract != 0 {
+        blend.subtract_white()
+    } else {
+        blend
+    };
+    let alpha = alpha.min(255) as u32;
     let offset = [0, 1].map(|i| {
         if let Some(p) = inherited {
             // 0x140020708/0x14002070c: signed 16-bit parent origin minus child position.
@@ -713,19 +731,14 @@ fn projected_layer<'a>(
         if !corners.as_flattened().iter().all(|v| v.is_finite()) {
             return Err(FormatError("projected object has a non-finite extent"));
         }
-        let blend = blend(words, image, i64::from(alpha), false)?;
-        let blend = if draw.texture_subtract != 0 {
-            blend.subtract_white()
-        } else {
-            blend
-        };
         return Ok(Some((
             key,
             Layer::Rotated {
                 image,
                 rect: [sx, sy, w, h].map(|v| v as f32),
                 corners,
-                alpha: alpha.min(255) as u32,
+                alpha,
+                mask,
                 blend,
             },
         )));
@@ -739,22 +752,26 @@ fn projected_layer<'a>(
     if quad.iter().any(|v| !v.is_finite()) {
         return Err(FormatError("projected object has a non-finite extent"));
     }
-    let blend = blend(words, image, i64::from(alpha), false)?;
-    let blend = if draw.texture_subtract != 0 {
-        blend.subtract_white()
+    let rect = [sx, sy, w, h];
+    let layer = if let Some(mask) = mask {
+        Layer::ProjectedMasked {
+            image,
+            rect,
+            quad,
+            alpha,
+            mask,
+            blend,
+        }
     } else {
-        blend
-    };
-    Ok(Some((
-        key,
         Layer::Projected {
             image,
-            rect: [sx, sy, w, h],
+            rect,
             quad,
-            alpha: alpha.min(255) as u32,
+            alpha,
             blend,
-        },
-    )))
+        }
+    };
+    Ok(Some((key, layer)))
 }
 
 /// Moves an image layer by a quake offset.
@@ -816,6 +833,7 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
             rect,
             corners,
             alpha,
+            mask,
             blend,
         } => {
             let [x, y] = by.map(|v| v as f32);
@@ -824,6 +842,7 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
                 rect,
                 corners: corners.map(|[cx, cy]| [cx + x, cy + y]),
                 alpha,
+                mask,
                 blend,
             }
         }
@@ -1531,6 +1550,16 @@ fn put(target: &mut [u8], source: [u8; 3], alpha: u32, blend: Blend) {
     }
 }
 
+fn transition_alpha(mask: &MaskTransition, [tx, ty]: [f32; 2], alpha: u32) -> u32 {
+    // Like the shared GPU shader, point-sample the mask at floor(source UV).
+    let mw = i64::from(mask.mask.pixels.width());
+    let mh = i64::from(mask.mask.pixels.height());
+    let mx = ((tx + 0.5).floor() as i64).clamp(0, mw - 1);
+    let my = ((ty + 0.5).floor() as i64).clamp(0, mh - 1);
+    let green = mask.mask.pixels.pixels()[((my * mw + mx) * 4 + 1) as usize];
+    (alpha as f32 * mask.coverage(green)).round() as u32
+}
+
 /// Bilinear sampling (cmvs.cfg TEXTURE_MIN/MAG_FILTER = 1 selects D3DTEXF_LINEAR in
 /// 0x1400220e0) with clamped addressing over the whole image, modulated by the vertex alpha.
 /// Pixels whose centers lie in [left, right) × [top, bottom) are covered. Texture tiling
@@ -1561,16 +1590,8 @@ fn draw_projected<const WRAP: bool>(
         for x in x0..x1 {
             let tx = sx as f32 + (x as f32 - left) * step[0] - 0.5;
             let texel = bilinear_address::<WRAP>(image, tx, ty);
-            let mut alpha = (u32::from(texel[3]) * opacity + 127) / 255;
-            if let Some(mask) = mask {
-                // The shared mask shader uses point sampling at floor(source UV).
-                let mw = i64::from(mask.mask.pixels.width());
-                let mh = i64::from(mask.mask.pixels.height());
-                let mx = ((tx + 0.5).floor() as i64).clamp(0, mw - 1);
-                let my = ((ty + 0.5).floor() as i64).clamp(0, mh - 1);
-                let green = mask.mask.pixels.pixels()[((my * mw + mx) * 4 + 1) as usize];
-                alpha = (alpha as f32 * mask.coverage(green)).round() as u32;
-            }
+            let alpha = (u32::from(texel[3]) * opacity + 127) / 255;
+            let alpha = mask.map_or(alpha, |mask| transition_alpha(mask, [tx, ty], alpha));
             let dst = ((y * i64::from(width) + x) * 4) as usize;
             put(
                 &mut pixels[dst..dst + 3],
@@ -1620,7 +1641,7 @@ fn draw_rotated(
     [sx, sy, w, h]: [f32; 4],
     corners: [[f32; 2]; 4],
     opacity: u32,
-    blend: Blend,
+    (blend, mask): (Blend, Option<&MaskTransition>),
 ) {
     let [u0, v0, u1, v1] = [sx, sy, sx + w, sy + h].map(f64::from);
     let texture = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
@@ -1672,6 +1693,7 @@ fn draw_rotated(
                 });
                 let texel = bilinear(image, tx, ty);
                 let alpha = (u32::from(texel[3]) * opacity + 127) / 255;
+                let alpha = mask.map_or(alpha, |mask| transition_alpha(mask, [tx, ty], alpha));
                 let dst = ((y * i64::from(width) + x) * 4) as usize;
                 put(
                     &mut pixels[dst..dst + 3],
@@ -1768,6 +1790,7 @@ fn tessellate_world_quad<'a>(
             rect: [x0, y0, x1 - x0, y1 - y0],
             corners: screen,
             alpha: quad.alpha,
+            mask: None,
             blend: quad.blend,
         });
     }
@@ -1903,9 +1926,18 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             rect,
             corners,
             alpha,
+            mask,
             blend,
         } => {
-            draw_rotated(pixels, [width, height], image, rect, corners, alpha, blend);
+            draw_rotated(
+                pixels,
+                [width, height],
+                image,
+                rect,
+                corners,
+                alpha,
+                (blend, mask),
+            );
             return;
         }
         Layer::Solid {

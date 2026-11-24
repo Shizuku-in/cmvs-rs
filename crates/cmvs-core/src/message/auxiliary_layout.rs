@@ -148,16 +148,18 @@ impl AuxiliaryText {
                 }
                 continue;
             }
-            let Some((code, len)) = encoding.wide_at_unchecked(text, i)? else {
-                // 0x14002f7a2 compares with a word the caller never stored (r8's home slot).
-                return Err("half-width auxiliary text advance reads an uninitialized stack word");
-            };
+            let wide = encoding.wide_at_unchecked(text, i)?;
+            let (code, len) = wide.unwrap_or((first as i8 as i16 as u16, 1));
             i += len;
             if self.at_edge(x) && !(no_break && no_break_codes.contains(&code)) {
                 wrap(&mut x, &mut y, &mut line)?;
             }
             let mut position = [truncate(x), truncate(y)];
-            if code == encoding.voiced_mark() {
+            if wide.is_none() {
+                // The legacy output routine's width operand is undefined. Use the
+                // fixed half-cell advance from its companion measurement routine.
+                x += size_f * 0.5 + self.float(52);
+            } else if code == encoding.voiced_mark() {
                 position[0] = (position[0] as u32).wrapping_sub(size / 5) as i32;
                 x += (size_f * 0.5 - size_f / 5.0) + self.float(52);
             } else {

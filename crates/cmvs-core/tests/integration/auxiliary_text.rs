@@ -717,11 +717,40 @@ fn text_layout_wraps_keeps_closing_marks_and_shifts_voiced_marks() {
 }
 
 #[test]
+fn legacy_auxiliary_output_advances_half_cells_in_utf8() {
+    let mut calls = AREA.to_vec();
+    calls.extend([(0x2390, &[7, 1][..]), (0x238b, &[7, 1][..])]);
+    let script = content_script(&calls, "中AB文C字".as_bytes());
+    let mut vm = Machine::new_with_encoding(&script, cmvs_core::TextEncoding::Utf8).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    run_calls(&mut vm, &mut messages, calls.len());
+
+    let group = messages.auxiliary_text(7).unwrap();
+    let placed: Vec<_> = group.glyphs.iter().map(|g| (g.code, g.position)).collect();
+    assert_eq!(
+        placed,
+        [
+            ('中' as u16, [100, 50]),
+            ('A' as u16, [126, 50]),
+            ('B' as u16, [140, 50]),
+            ('文' as u16, [154, 50]),
+            ('C' as u16, [180, 50]),
+            ('字' as u16, [100, 80]),
+        ]
+    );
+    assert_eq!(group.word(176), Some(126.0f32.to_bits()));
+    assert_eq!(
+        [0, 1, 4].map(|i| vm.state().system_integer(i)),
+        [Some(2), Some(7), Some(2)]
+    );
+}
+
+#[test]
 fn text_layout_errors_keep_the_group_pen_and_pending_command() {
     let thirty_three = b"\x82\xa0".repeat(33);
     for (layout, text) in [
-        (&[7, 100, 50, 110, 200][..], &b"\x82\xa0A"[..]), // uninitialized half-width advance
-        (&[7, 100, 50, 110, 200], b"\\x"),                // loops forever in the original
+        (&[7, 100, 50, 110, 200][..], &b"\\x"[..]), // loops forever in the original
         (&[7, 100, 50, 110, 200], b"\\"),
         (&[7, 100, 50, 110, 200], b"\\w"),
         (&[7, 100, 50, 110, 200], b"{\x8a\xbf/\x82\xa9"),
