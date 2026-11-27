@@ -150,6 +150,76 @@ fn is_review_path(path: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(&b))
 }
 
+fn parse_binary(line: usize, words: &[&str]) -> Result<(ResearchBinary, usize), ProfileError> {
+    if words.len() != 2 + BINARY_KEYS.len() {
+        return Err(at(line, "malformed binary line"));
+    }
+    let arch = Arch::parse(words[1]).ok_or_else(|| at(line, "unknown architecture"))?;
+    let v = fields(line, &words[2..], &BINARY_KEYS)?;
+    let linker = v[3]
+        .split_once('.')
+        .and_then(|(major, minor)| Some((major.parse().ok()?, minor.parse().ok()?)))
+        .ok_or_else(|| at(line, "linker must be <major>.<minor>"))?;
+    let cases: usize = v[7]
+        .parse()
+        .ok()
+        .filter(|&n| (1..=0x800).contains(&n))
+        .ok_or_else(|| at(line, "cases must be 1..=2048"))?;
+    if v[0].is_empty() || !v[0].is_ascii() {
+        return Err(at(line, "file name must be ASCII"));
+    }
+    let binary = ResearchBinary {
+        arch,
+        file: v[0].to_owned(),
+        sha256: sha(line, v[1])?,
+        timestamp: hex32(line, v[2])?,
+        linker,
+        image_base: hex_number(line, v[4])?,
+        table_rva: hex32(line, v[5])?,
+        default_rva: hex32(line, v[6])?,
+        cases: Vec::with_capacity(cases),
+    };
+    Ok((binary, cases))
+}
+
+fn relocate_cases(
+    line: usize,
+    original: &ResearchBinary,
+    relocated: &ResearchBinary,
+    cases: usize,
+) -> Result<Vec<Case>, ProfileError> {
+    if original.file != relocated.file
+        || original.linker != relocated.linker
+        || original.image_base != relocated.image_base
+        || original.cases.len() != cases
+    {
+        return Err(at(
+            line,
+            "relocated binary does not match its primary binary",
+        ));
+    }
+    let delta = i64::from(relocated.table_rva) - i64::from(original.table_rva);
+    let relocate = |rva| {
+        u32::try_from(i64::from(rva) + delta)
+            .map_err(|_| at(line, "relocated case address is out of range"))
+    };
+    if relocate(original.default_rva)? != relocated.default_rva {
+        return Err(at(
+            line,
+            "default address does not match the table relocation",
+        ));
+    }
+    original
+        .cases
+        .iter()
+        .map(|case| match *case {
+            Case::Default => Ok(Case::Default),
+            Case::NoOp(rva) => Ok(Case::NoOp(relocate(rva)?)),
+            Case::Handler(rva) => Ok(Case::Handler(relocate(rva)?)),
+        })
+        .collect()
+}
+
 pub(crate) fn parse_profile(text: &str) -> Result<ResearchProfile, ProfileError> {
     let mut lines = Lines::new(text);
     let (line, words) = lines.expect("profile", 1)?;
@@ -167,37 +237,16 @@ pub(crate) fn parse_profile(text: &str) -> Result<ResearchProfile, ProfileError>
     };
     let mut binaries = Vec::new();
     let mut declared = Vec::new();
-    while lines.peek_key() == Some("binary") {
+    let mut relocated = Vec::new();
+    while matches!(lines.peek_key(), Some("binary" | "relocated-binary")) {
         let (line, words) = lines.next().expect("peeked");
-        if words.len() != 2 + BINARY_KEYS.len() {
-            return Err(at(line, "malformed binary line"));
+        let (binary, cases) = parse_binary(line, &words)?;
+        if words[0] == "relocated-binary" {
+            relocated.push((line, binary, cases));
+        } else {
+            declared.push(cases);
+            binaries.push(binary);
         }
-        let arch = Arch::parse(words[1]).ok_or_else(|| at(line, "unknown architecture"))?;
-        let v = fields(line, &words[2..], &BINARY_KEYS)?;
-        let linker = v[3]
-            .split_once('.')
-            .and_then(|(major, minor)| Some((major.parse().ok()?, minor.parse().ok()?)))
-            .ok_or_else(|| at(line, "linker must be <major>.<minor>"))?;
-        let cases: usize = v[7]
-            .parse()
-            .ok()
-            .filter(|&n| (1..=0x800).contains(&n))
-            .ok_or_else(|| at(line, "cases must be 1..=2048"))?;
-        if v[0].is_empty() || !v[0].is_ascii() {
-            return Err(at(line, "file name must be ASCII"));
-        }
-        declared.push(cases);
-        binaries.push(ResearchBinary {
-            arch,
-            file: v[0].to_owned(),
-            sha256: sha(line, v[1])?,
-            timestamp: hex32(line, v[2])?,
-            linker,
-            image_base: hex_number(line, v[4])?,
-            table_rva: hex32(line, v[5])?,
-            default_rva: hex32(line, v[6])?,
-            cases: Vec::with_capacity(cases),
-        });
     }
     // One `compare <arch> base-sha256=` line per proof architecture: every machine proof
     // of that architecture binds this root exe and the profile's own exe of the same arch.
@@ -379,11 +428,28 @@ pub(crate) fn parse_profile(text: &str) -> Result<ResearchProfile, ProfileError>
             "compare line without inherited or presumed commands",
         ));
     }
+    let mut relocated_binaries = Vec::<ResearchBinary>::with_capacity(relocated.len());
+    for (line, mut binary, cases) in relocated {
+        let original = binaries
+            .iter()
+            .find(|original| original.arch == binary.arch)
+            .ok_or_else(|| at(line, "relocated architecture has no primary binary"))?;
+        if binaries
+            .iter()
+            .chain(&relocated_binaries)
+            .any(|known| known.sha256 == binary.sha256)
+        {
+            return Err(at(line, "duplicate relocated binary hash"));
+        }
+        binary.cases = relocate_cases(line, original, &binary, cases)?;
+        relocated_binaries.push(binary);
+    }
     Ok(ResearchProfile {
         id,
         family,
         base,
         binaries,
+        relocated_binaries,
         statuses,
         proofs,
         contracts,
@@ -407,10 +473,15 @@ impl ResearchProfile {
             }
         );
         let _ = writeln!(out, "base {}", self.base.as_deref().unwrap_or("-"));
-        for b in &self.binaries {
+        let binaries = self.binaries.iter().map(|binary| ("binary", binary)).chain(
+            self.relocated_binaries
+                .iter()
+                .map(|binary| ("relocated-binary", binary)),
+        );
+        for (kind, b) in binaries {
             let _ = writeln!(
                 out,
-                "binary {} file={} sha256={} timestamp=0x{:08x} linker={}.{} image-base=0x{:x} table=0x{:x} default=0x{:x} cases={}",
+                "{kind} {} file={} sha256={} timestamp=0x{:08x} linker={}.{} image-base=0x{:x} table=0x{:x} default=0x{:x} cases={}",
                 b.arch.name(),
                 b.file,
                 to_hex(&b.sha256),

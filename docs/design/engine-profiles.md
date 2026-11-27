@@ -11,6 +11,8 @@ cargo run --offline -p cmvs-profile-research --bin cmvs-profile -- generate-play
   --output crates/cmvs-core/src/profile/playback/data.rs
 ```
 
+切换表及全部分派目标按同一偏移移动的已验证更新版可用 `relocated-binary` 登记。档案根据同架构主二进制推导命令地址，`cmvs-profile identify` 用更新版的实际 PE 分派表校验结果。生成的运行表接受更新版精确哈希，原有命令证据仍绑定主二进制。
+
 ## 选择与闸门
 
 默认根据数据哈希和可执行文件身份识别游戏。研究时可用 `--profile <档案ID或游戏别名>` 选档案。别名解析到对应的引擎构建，游戏记录和脚本声明的游戏 ID 仍按输入证据核对。

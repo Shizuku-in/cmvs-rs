@@ -4,6 +4,9 @@ family cmvs
 base cmvs-20160201
 binary x64 file=cmvs64.exe sha256=3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 timestamp=0x5a0ab356 linker=10.0 image-base=0x140000000 table=0x8b9f4 default=0x8905a cases=992
 binary x86 file=cmvs32.exe sha256=b1621c5b504a800344316d72dc4477fbf13a00f15f8308470952429f4013003a timestamp=0x5a0ab312 linker=10.0 image-base=0x400000 table=0x7ba60 default=0x79b42 cases=992
+# Aoitori 1.03 has the same switch with all RVAs shifted by 0x90.
+relocated-binary x64 file=cmvs64.exe sha256=5f949df9b8aaa56c57594f317819b6f657f99393de65494873f08bebddb48b7f timestamp=0x5a1e5b72 linker=10.0 image-base=0x140000000 table=0x8ba84 default=0x890ea cases=992
+relocated-binary x86 file=cmvs32.exe sha256=943a0f9e0a1b7ba420df16c6963d96a4da7be56a2ab504072272214115491631 timestamp=0x5a1e5b29 linker=10.0 image-base=0x400000 table=0x7baf0 default=0x79bd2 cases=992
 compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5
 # command status x64 x86
 0x2000 inherited 0x89026 0x79b16 inherit=x64:15d971bc250894e32f3bd8865ed86d212e5bc94ced2797c41c0095a89d81b67f

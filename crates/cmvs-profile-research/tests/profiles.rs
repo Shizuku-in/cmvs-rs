@@ -287,6 +287,57 @@ fn profile_text_round_trips_and_marks_present_commands_by_profile_kind() {
 }
 
 #[test]
+fn relocated_binary_keeps_primary_command_rows_and_matches_the_updated_addresses() {
+    let root = build("synthetic-root", None, &[0, 1, 2, 0], 1);
+    let original = &root.binaries[1];
+    let sha256 = "03".repeat(32);
+    let table = original.table_rva + 0x90;
+    let default = original.default_rva + 0x90;
+    let line = format!(
+        "relocated-binary x86 file=cmvs32.exe sha256={sha256} timestamp=0x{:08x} linker={}.{} image-base=0x{:x} table=0x{table:x} default=0x{default:x} cases=4",
+        original.timestamp + 10_000,
+        original.linker.0,
+        original.linker.1,
+        original.image_base,
+    );
+    let source = root
+        .to_text()
+        .replace("# command status", &format!("{line}\n# command status"));
+    let registry = Registry::parse(&[&source], "").unwrap();
+    let profile = registry.profile("synthetic-root").unwrap();
+    assert_eq!(profile.binaries, root.binaries);
+    assert_eq!(profile.statuses(), root.statuses());
+    let relocated = profile.binary(&[3; 32]).unwrap();
+    assert_eq!(
+        relocated.cases,
+        [
+            Case::Handler(match original.cases[0] {
+                Case::Handler(rva) => rva + 0x90,
+                case => panic!("expected a handler, got {case:?}"),
+            }),
+            Case::NoOp(match original.cases[1] {
+                Case::NoOp(rva) => rva + 0x90,
+                case => panic!("expected a no-op, got {case:?}"),
+            }),
+            Case::Default,
+            relocated.cases[0],
+        ],
+    );
+    assert!(registry.playback().binary(&[3; 32]).is_some());
+    assert_eq!(
+        Registry::parse(&[&profile.to_text()], "").unwrap(),
+        registry
+    );
+
+    let wrong_default = source.replace(
+        &format!("default=0x{default:x}"),
+        &format!("default=0x{:x}", default + 1),
+    );
+    let error = Registry::parse(&[&wrong_default], "").unwrap_err();
+    assert!(error.to_string().contains("default address"));
+}
+
+#[test]
 fn profile_data_parses_the_same_with_crlf_line_endings() {
     let root = build("synthetic-root", None, &[0, 1, 2, 0], 1).to_text();
     let derived = build(

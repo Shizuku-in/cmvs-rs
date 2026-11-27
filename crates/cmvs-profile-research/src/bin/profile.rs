@@ -244,7 +244,7 @@ fn show(registry: &ResearchRegistry, selector: &str) -> Result<(), Box<dyn Error
         profile.family,
         profile.base.as_deref().unwrap_or("-")
     );
-    for b in &profile.binaries {
+    for b in profile.binaries() {
         println!(
             "binary {} {} sha256={} timestamp=0x{:08x} cases={}",
             b.arch.name(),

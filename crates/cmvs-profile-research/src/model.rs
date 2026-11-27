@@ -45,6 +45,7 @@ pub struct ResearchProfile {
     pub family: Family,
     pub base: Option<String>,
     pub binaries: Vec<ResearchBinary>,
+    pub(super) relocated_binaries: Vec<ResearchBinary>,
     pub(super) statuses: Vec<CommandStatus>,
     pub(super) proofs: Vec<(u16, MachineProof)>,
     pub(super) contracts: Vec<(u16, [u8; 32])>,
@@ -104,8 +105,12 @@ impl ResearchProfile {
     pub fn count(&self, status: CommandStatus) -> usize {
         self.statuses.iter().filter(|&&s| s == status).count()
     }
+    /// Primary executables and verified relocated builds of the same switch.
+    pub fn binaries(&self) -> impl Iterator<Item = &ResearchBinary> {
+        self.binaries.iter().chain(&self.relocated_binaries)
+    }
     pub fn binary(&self, sha256: &[u8; 32]) -> Option<&ResearchBinary> {
-        self.binaries.iter().find(|b| &b.sha256 == sha256)
+        self.binaries().find(|b| &b.sha256 == sha256)
     }
 }
 
