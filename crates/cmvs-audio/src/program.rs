@@ -54,7 +54,7 @@ pub struct AudioProgram {
     pub(crate) bytes: Vec<Arc<[u8]>>,
     reader: AudioReader,
     pub(crate) looped: Arc<AtomicBool>,
-    loop_skip_samples: usize,
+    loop_frames: u32,
     buffer: Vec<f32>,
     at: usize,
     cycle_has_pcm: bool,
@@ -93,6 +93,7 @@ impl AudioProgram {
         }
         Self::from_shared_with_loop(bytes, looped, loop_frames)
     }
+    #[cfg(feature = "mixer")]
     pub(crate) fn from_shared(
         bytes: Vec<Arc<[u8]>>,
         looped: bool,
@@ -132,7 +133,7 @@ impl AudioProgram {
             bytes,
             reader,
             looped: Arc::new(AtomicBool::new(looped)),
-            loop_skip_samples: (loop_frames as usize).saturating_mul(usize::from(channels)),
+            loop_frames,
             buffer: vec![],
             at: 0,
             cycle_has_pcm: false,
@@ -146,7 +147,7 @@ impl AudioProgram {
     /// Prepare playback from the beginning without changing the current decoder.
     /// Compressed data is shared; decoder state and loop control are independent.
     pub fn restarted(&self, looped: bool) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        Self::from_shared(self.bytes.clone(), looped)
+        Self::from_shared_with_loop(self.bytes.clone(), looped, self.loop_frames)
     }
     pub fn set_looped(&self, value: bool) {
         self.looped.store(value, Ordering::Relaxed);
@@ -183,19 +184,19 @@ impl AudioProgram {
         }
         self.buffer.clear();
         self.at = 0;
-        let mut remaining_skip = 0usize;
+        let mut remaining_skip = 0u64;
         let mut empty_packets = 0usize;
-        for _ in 0..65_536 {
+        loop {
             match self.reader.packet()? {
                 Some(samples) if !samples.is_empty() => {
                     empty_packets = 0;
-                    self.cycle_has_pcm = true;
-                    if remaining_skip >= samples.len() {
-                        remaining_skip -= samples.len();
+                    if remaining_skip >= samples.len() as u64 {
+                        remaining_skip -= samples.len() as u64;
                         continue;
                     }
+                    self.cycle_has_pcm = true;
                     self.buffer = if remaining_skip > 0 {
-                        samples[remaining_skip..].to_vec()
+                        samples[remaining_skip as usize..].to_vec()
                     } else {
                         samples
                     };
@@ -209,7 +210,7 @@ impl AudioProgram {
                 }
                 None => {
                     if !self.cycle_has_pcm {
-                        return Err("Vorbis stream contains no PCM samples".into());
+                        return Err("audio stream contains no playable PCM samples".into());
                     }
                     if !self.looped.load(Ordering::Relaxed) {
                         self.finished = true;
@@ -217,12 +218,11 @@ impl AudioProgram {
                     }
                     self.reader = AudioReader::new(self.bytes.last().unwrap().clone())?;
                     self.cycle_has_pcm = false;
-                    remaining_skip = self.loop_skip_samples;
+                    remaining_skip = u64::from(self.loop_frames) * u64::from(self.channels);
                     empty_packets = 0;
                 }
             }
         }
-        Err("Vorbis produced too many skipped packets".into())
     }
     pub fn next_sample(&mut self) -> Result<Option<f32>, Box<dyn Error + Send + Sync>> {
         if self.at == self.buffer.len() {
@@ -318,7 +318,8 @@ mod tests {
     #[test]
     fn cvns_loop_frames_skips_prefix_on_rewind() {
         let track = synthetic_mv2(260, 22050, 1, true);
-        let mut program = AudioProgram::with_loop_frames(track, None, true, 256).unwrap();
+        let saved = AudioProgram::with_loop_frames(track.clone(), None, false, 256).unwrap();
+        let mut program = saved.restarted(true).unwrap();
         let mut out = Vec::new();
         for _ in 0..264 {
             out.push(program.next_sample().unwrap().unwrap());
@@ -326,5 +327,19 @@ mod tests {
         assert!(out[256].abs() > 0.05);
         // Loop skipped initial 256 samples, so sample 260 is immediately the active frame 256.
         assert!(out[260].abs() > 0.05);
+        for offset in [260, 261] {
+            let mut program =
+                AudioProgram::with_loop_frames(track.clone(), None, true, offset).unwrap();
+            for _ in 0..260 {
+                assert!(program.next_sample().unwrap().is_some());
+            }
+            assert!(
+                program
+                    .next_sample()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("no playable PCM")
+            );
+        }
     }
 }

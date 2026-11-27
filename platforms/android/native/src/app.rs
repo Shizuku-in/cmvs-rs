@@ -42,6 +42,7 @@ struct Graphics {
 struct Player {
     audio_control: HostAudioControl,
     graphics: Option<Graphics>,
+    suspended_frame: Option<cmvs_core::render::raster::RgbaImage>,
     startup: Runtime,
     backend: MobileBackend,
     scale_filter: Option<ScaleFilter>,
@@ -73,6 +74,12 @@ impl Player {
         self.audio_control.set_active(false);
         self.touch.focus(false, self.startup.input_mut());
         self.startup.set_focused(false);
+        if let Some(frame) = self.backend.frame.take() {
+            match frame.read() {
+                Ok(image) => self.suspended_frame = Some(image),
+                Err(error) => log::warn!("Could not preserve suspended frame: {error}"),
+            }
+        }
         self.graphics = None;
         log::info!("Surface released");
     }
@@ -93,13 +100,12 @@ impl Player {
         let presenter = Presenter::new(surface, &adapter, &renderer)?;
         // Restore the last completed frame into the new device after suspension.
         let frame = self
-            .backend
-            .frame
+            .suspended_frame
             .as_ref()
-            .map(|frame| -> Result<Arc<GpuFrame>> {
-                Ok(Arc::new(renderer.preview_image(&frame.read()?)?))
-            })
+            .map(|image| renderer.preview_image(image).map(Arc::new))
             .transpose()?;
+        self.suspended_frame = None;
+        self.backend.frame = frame.clone();
         self.graphics = Some(Graphics {
             presenter,
             frame,
@@ -399,6 +405,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     let mut player = Player {
         audio_control,
         graphics: None,
+        suspended_frame: None,
         startup,
         backend,
         scale_filter,

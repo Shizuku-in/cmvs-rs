@@ -13,9 +13,9 @@ export class BrowserFiles {
     if (parts.some(p => p === '.' || p === '..' || p.includes(':'))) throw Error('Invalid virtual path component');
     return '/' + parts.join('/').toLowerCase();
   }
-  parents(path) {
+  parents(path, directories = this.directories) {
     const parts = path.split('/');
-    for (let i = 1; i < parts.length; i++) this.directories.add(parts.slice(0, i).join('/') || '/');
+    for (let i = 1; i < parts.length; i++) directories.add(parts.slice(0, i).join('/') || '/');
   }
   mount(relative, blob) {
     const path = this.path('/game/' + relative);
@@ -56,18 +56,23 @@ export class BrowserFiles {
     path = this.path(path);
     if (op === 'mkdir') {
       if (path !== '/user') this.writable(path);
+      for (let dir = path; dir !== '/user'; dir = dir.slice(0, dir.lastIndexOf('/'))) {
+        if (this.overlay.has(dir)) throw Error('Expected directory');
+      }
       this.parents(path + '/'); this.directories.add(path); return;
     }
     this.writable(path);
     if (op === 'truncate') {
       const parent = path.slice(0, path.lastIndexOf('/'));
-      if (!this.directories.has(parent)) throw Error('Parent directory missing');
+      if (!this.directories.has(parent) || this.directories.has(path)) throw Error('Invalid file destination');
       this.overlay.set(path, new Uint8Array());
     } else if (op === 'remove') {
       if (!this.overlay.delete(path)) throw Error('File not found');
     } else if (op === 'rename') {
       target = this.path(target); this.writable(target);
       if (!this.overlay.has(path)) throw Error('File not found');
+      if (path === target) return;
+      if (!this.directories.has(target.slice(0, target.lastIndexOf('/'))) || this.directories.has(target)) throw Error('Invalid rename destination');
       this.overlay.set(target, this.overlay.get(path)); this.overlay.delete(path);
     } else throw Error('Unsupported filesystem operation');
     this.dirty = true;
@@ -86,7 +91,12 @@ export class BrowserFiles {
       if (restored.has(path)) throw Error('Duplicate save entry');
       restored.set(path, value);
     }
+    const directories = new Set([...this.directories].filter(path => !path.startsWith('/user/')));
+    for (const path of restored.keys()) this.parents(path, directories);
+    for (const path of restored.keys()) {
+      if (directories.has(path)) throw Error('Save file is also a directory');
+    }
+    this.directories = directories;
     this.overlay = restored;
-    for (const path of restored.keys()) this.parents(path);
   }
 }

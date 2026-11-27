@@ -60,6 +60,7 @@ pub struct TouchInput {
     primary: Option<TouchId>,
     pointer: Option<[f64; 2]>,
     pulse: bool,
+    release: Option<[f64; 2]>,
     focused: bool,
     history: CodeInput,
 }
@@ -82,6 +83,7 @@ impl TouchInput {
 
     pub fn reset_contacts(&mut self) {
         self.contacts.clear();
+        self.release = None;
         self.primary = None;
         self.pointer = None;
         self.pulse = false;
@@ -123,15 +125,19 @@ impl TouchInput {
                 if self.primary == Some(event.id) {
                     self.pointer = Some(event.position);
                     self.primary = None;
+                    if !self.pulse {
+                        self.release = self.pointer;
+                    }
                 }
             }
             TouchPhase::Cancelled => {
                 self.contacts.remove(&event.id);
                 if self.primary == Some(event.id) {
                     self.primary = None;
-                    self.pointer = None;
+                    // Cancelling an unsampled new contact still owes the previous release.
+                    self.pointer = self.release;
                     self.pulse = false;
-                    return true;
+                    return self.release.is_none();
                 }
             }
         }
@@ -151,9 +157,20 @@ impl TouchInput {
         input.set_pointer(x, y);
     }
 
+    /// A new contact can remain queued behind the previous contact's release position.
+    pub fn has_pending_press(&self) -> bool {
+        self.pulse
+    }
+
     /// Consume the touch sample when combining touch, keyboard and mouse in one code history.
     pub fn sample_pointer(&mut self, viewport: Viewport) -> (Option<[i32; 2]>, bool) {
+        if let Some(point) = self.release.take() {
+            return (viewport.to_script(point), false);
+        }
         let pressed = self.primary.is_some() || self.pulse;
+        if pressed && self.primary.is_none() {
+            self.release = self.pointer;
+        }
         self.pulse = false;
         (
             self.pointer.and_then(|point| viewport.to_script(point)),

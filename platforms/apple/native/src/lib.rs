@@ -205,11 +205,12 @@ impl Player {
             self.fresh_touch = false;
         }
         s.driver.sample_input(s.runtime.input_mut(), |input| {
-            let touch_position_sampled = self.touching && self.fresh_touch;
+            let touch_position_sampled =
+                self.touching && (self.fresh_touch || self.touch.has_pending_press());
             if self.touching {
                 let (point, pressed) = self.touch.sample_pointer(viewport);
                 let [x, y] = point.unwrap_or([-1, -1]);
-                if self.fresh_touch {
+                if touch_position_sampled {
                     s.input.set_pointer(x, y);
                     self.fresh_touch = false;
                 }

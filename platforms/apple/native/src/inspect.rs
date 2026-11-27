@@ -56,9 +56,6 @@ pub fn font(path: &Path) -> Result<Value> {
                     })
             };
             let cjk = u8::from(draws('中')) + u8::from(draws('あ'));
-            if cjk == 0 && !draws('A') {
-                return None;
-            }
             let name = font
                 .names()
                 .into_iter()
@@ -73,7 +70,7 @@ pub fn font(path: &Path) -> Result<Value> {
                         })
                         .filter(|name| !name.is_empty())
                 })?;
-            Some(json!({"index": index, "name": name, "cjk": cjk}))
+            Some(json!({"index": index, "name": name, "cjk": cjk, "latin": draws('A')}))
         })
         .collect())
 }

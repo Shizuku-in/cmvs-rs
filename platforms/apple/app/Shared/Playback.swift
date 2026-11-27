@@ -94,6 +94,9 @@ enum FastForwardKey: UInt32 {
                     NotificationCenter.default.addObserver(
                         self, selector: #selector(routeChanged), name: AVAudioSession.routeChangeNotification,
                         object: audio)
+                    NotificationCenter.default.addObserver(
+                        self, selector: #selector(mediaServicesReset), name: AVAudioSession.mediaServicesWereResetNotification,
+                        object: nil)
                 }
             } catch {
                 fail(error)
@@ -220,35 +223,46 @@ enum FastForwardKey: UInt32 {
         if ready { invoke { cmvs_apple_pause($0, paused) } }
     }
     #if os(iOS)
-        @objc private func audioInterrupted(_ note: Notification) {
+        @objc nonisolated private func audioInterrupted(_ note: Notification) {
             guard let kind = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt else { return }
-            Task { @MainActor in
-                guard !closed else { return }
+            let flags = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !closed else { return }
                 interruptionOngoing = kind == AVAudioSession.InterruptionType.began.rawValue
                 interrupted = true
                 syncActivity()
-                let flags = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
                 if !interruptionOngoing && !routePaused && AVAudioSession.InterruptionOptions(rawValue: flags).contains(.shouldResume) {
                     resumeAudio()
                 } else if !interruptionOngoing { controls = true }
             }
         }
-        @objc private func routeChanged(_ note: Notification) {
+        @objc nonisolated private func routeChanged(_ note: Notification) {
             guard let reason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
                 reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue
             else { return }
-            Task { @MainActor in
-                guard !closed else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !closed else { return }
                 routePaused = true
                 interrupted = true
                 controls = true
                 syncActivity()
             }
         }
+        @objc nonisolated private func mediaServicesReset(_ note: Notification) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !closed else { return }
+                interruptionOngoing = false
+                interrupted = true
+                syncActivity()
+                if routePaused { controls = true } else { resumeAudio() }
+            }
+        }
         func resumeAudio() {
             guard interrupted, !interruptionOngoing, !closed else { return }
             do {
-                try AVAudioSession.sharedInstance().setActive(true)
+                let audio = AVAudioSession.sharedInstance()
+                try audio.setCategory(.playback)
+                try audio.setActive(true)
                 try engine.queue.sync {
                     if let api = engine.api { try api.check(cmvs_apple_restart_audio(api.handle)) }
                 }

@@ -18,6 +18,7 @@ pub const CVNS_SPRITES: usize = 1536;
 pub const CVNS_ANIM_FRAMES: usize = 64;
 pub const CVNS_PLAYLISTS: usize = 6;
 pub const CVNS_Z_BUCKETS: i32 = 128;
+pub(crate) const CVNS_CURTAIN_TILE_LIMIT: u32 = 65536;
 
 #[inline]
 pub(crate) fn unpack_rgb(color: u32) -> [u8; 3] {
@@ -418,7 +419,7 @@ impl CvnsSprite {
         let rw = if clamp_neg && sw < 0 { dims.0 } else { sw };
         let rh = if clamp_neg && sh < 0 { dims.1 } else { sh };
         self.image_slot = image_slot;
-        self.src_rect = [rx, ry, rx + rw, ry + rh];
+        self.src_rect = [rx, ry, rx.saturating_add(rw), ry.saturating_add(rh)];
         self.w = rw;
         self.h = rh;
         if mark_dirty {
@@ -765,44 +766,44 @@ impl CvnsCurtain {
         band_size: i32,
         delay_step: u32,
         speed: i32,
-    ) -> Self {
-        let sw = sprite.w.max(1);
-        let sh = sprite.h.max(1);
+    ) -> Option<Self> {
+        let sw = sprite.w.max(1) as u32;
+        let sh = sprite.h.max(1) as u32;
         let delete_on_finish = Self::deletes_sprite(mode);
         let (cols, rows, steps) = match mode {
-            764 => (1, sh as u32, 0),
-            765 => (sw as u32, 1, 0),
+            764 => (1, sh, 0),
+            765 => (sw, 1, 0),
             1 | 0x101 => (1, 1, 0),
-            0x118 | 0x119 => (
-                1,
-                sh as u32,
-                delay_step.saturating_mul((sw / 2).max(1) as u32),
-            ),
+            0x118 | 0x119 => (1, sh, delay_step.saturating_mul((sw / 2).max(1))),
             0x132 => {
                 let n = band_size.max(1) as u32;
-                (n, n, n * n)
+                (n, n, n.saturating_mul(n))
             }
             _ => {
-                let b = band_size.max(1);
+                let b = band_size.max(1) as u32;
                 let vertical = matches!(mode & 0xff, 3 | 5 | 7 | 9);
                 let grid = matches!(mode & 0xff, 10..=19);
                 if grid {
-                    let c = ((sw + b - 1) / b) as u32;
-                    let r = ((sh + b - 1) / b) as u32;
+                    let c = sw.div_ceil(b);
+                    let r = sh.div_ceil(b);
                     (c, r, c + r)
                 } else if vertical {
-                    let c = ((sw + b - 1) / b) as u32;
+                    let c = sw.div_ceil(b);
                     let d = delay_step.max(1);
-                    let s = speed.max(1);
-                    (c, 1, c.saturating_sub(1) / d + (b / s) as u32)
+                    let s = speed.max(1) as u32;
+                    (c, 1, c.saturating_sub(1) / d + b / s)
                 } else {
-                    let r = ((sh + b - 1) / b) as u32;
+                    let r = sh.div_ceil(b);
                     let d = delay_step.max(1);
-                    let s = speed.max(1);
-                    (1, r, r.saturating_sub(1) / d + (b / s) as u32)
+                    let s = speed.max(1) as u32;
+                    (1, r, r.saturating_sub(1) / d + b / s)
                 }
             }
         };
+        // update_tiles emits at most one tile per row or column.
+        if cols.max(rows) > CVNS_CURTAIN_TILE_LIMIT {
+            return None;
+        }
         let mut c = Self {
             mode,
             delete_on_finish,
@@ -818,7 +819,7 @@ impl CvnsCurtain {
             tiles: Vec::new(),
         };
         c.update_tiles(sprite);
-        c
+        Some(c)
     }
 
     fn update_tiles(&mut self, sprite: &CvnsSprite) {
@@ -832,7 +833,8 @@ impl CvnsCurtain {
         if self.mode == 764 || self.mode == 765 {
             let amp = self.speed;
             let freq = self.band_size.max(1);
-            let count = if self.mode == 764 { sh } else { sw };
+            let count =
+                (if self.mode == 764 { sh } else { sw }).min(CVNS_CURTAIN_TILE_LIMIT as i32);
             let phase_step = 360 / freq.max(1);
             self.tiles.reserve(count as usize);
             for i in 0..count {
@@ -1948,8 +1950,8 @@ impl CvnsScene {
                 sprite.x = x;
                 sprite.y = y;
                 if cmd == 0x479 {
-                    sprite.w = sprite.src_rect[2] - sprite.src_rect[0];
-                    sprite.h = sprite.src_rect[3] - sprite.src_rect[1];
+                    sprite.w = sprite.src_rect[2].saturating_sub(sprite.src_rect[0]);
+                    sprite.h = sprite.src_rect[3].saturating_sub(sprite.src_rect[1]);
                 }
                 sprite.dirty = true;
             }
@@ -2228,11 +2230,13 @@ impl CvnsScene {
                 let delay = call.argument(20, "delay step")?;
                 let speed = call.argument(24, "speed")? as i32;
                 let sprite = self.require_sprite_mut(call.pc, op, slot)?;
+                let curtain = CvnsCurtain::new(sprite, mode, interval, band, delay, speed)
+                    .ok_or_else(|| error(call.pc, op, "CVNS curtain exceeds tile limit"))?;
                 call.complete(0x4018)?;
                 if mode < 0x100 {
                     sprite.visible = true;
                 }
-                sprite.curtain = Some(CvnsCurtain::new(sprite, mode, interval, band, delay, speed));
+                sprite.curtain = Some(curtain);
             }
             0x58f => {
                 let to_normal = call.argument(4, "to normal")? != 0;
@@ -3532,7 +3536,7 @@ mod tests {
         ] {
             let mut sprite = initial.clone();
             sprite.alpha = 91;
-            sprite.curtain = Some(CvnsCurtain::new(&sprite, mode, 20, 1, 1, 1));
+            sprite.curtain = Some(CvnsCurtain::new(&sprite, mode, 20, 1, 1, 1).unwrap());
             let mut skipped = sprite.clone();
             skipped.finish_curtain();
             sprite.advance(20);

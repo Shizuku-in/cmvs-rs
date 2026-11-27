@@ -461,7 +461,7 @@ fn named_key(face: &[u8]) -> String {
     format!("file-{}", &digest::to_hex(&digest::sha256(face))[..24])
 }
 
-/// First file wins for a name, scanning directories in order and files sorted by path.
+/// Prefer an upright regular face, keeping directory and path order for equal styles.
 fn build_index(directories: &[PathBuf]) -> BTreeMap<String, (PathBuf, u32)> {
     let mut files = Vec::new();
     for directory in directories {
@@ -481,18 +481,24 @@ fn build_index(directories: &[PathBuf]) -> BTreeMap<String, (PathBuf, u32)> {
     }
     let mut index = BTreeMap::new();
     for path in files.into_iter().take(MAX_FONT_FILES) {
-        let Ok(faces) = family_names(&path) else {
+        let Ok(faces) = scan_faces(&path) else {
             continue;
         };
-        for (face, names) in faces {
-            for name in names {
-                index
+        for face in faces {
+            for name in face.names {
+                let entry = index
                     .entry(name.to_lowercase())
-                    .or_insert_with(|| (path.clone(), face));
+                    .or_insert_with(|| (face.rank, (path.clone(), face.index)));
+                if face.rank < entry.0 {
+                    *entry = (face.rank, (path.clone(), face.index));
+                }
             }
         }
     }
     index
+        .into_iter()
+        .map(|(name, (_, source))| (name, source))
+        .collect()
 }
 
 fn read_at(file: &mut File, offset: u64, length: usize) -> std::io::Result<Vec<u8>> {
@@ -511,6 +517,19 @@ fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
 /// Family names (name IDs 1 and 16, Unicode and Windows platforms, every language) of
 /// each face in an OpenType file or collection, read without loading the whole file.
 pub fn family_names(path: &Path) -> std::io::Result<Vec<(u32, Vec<String>)>> {
+    Ok(scan_faces(path)?
+        .into_iter()
+        .map(|face| (face.index, face.names))
+        .collect())
+}
+
+struct FaceInfo {
+    index: u32,
+    names: Vec<String>,
+    rank: (bool, u16),
+}
+
+fn scan_faces(path: &Path) -> std::io::Result<Vec<FaceInfo>> {
     let invalid = || std::io::Error::other("unsupported font header");
     let mut file = File::open(path)?;
     let header = read_at(&mut file, 0, 12)?;
@@ -534,18 +553,40 @@ pub fn family_names(path: &Path) -> std::io::Result<Vec<(u32, Vec<String>)>> {
             return Err(invalid());
         }
         let records = read_at(&mut file, u64::from(offset) + 12, 16 * tables)?;
-        let Some(name) = (0..tables).find(|i| &records[16 * i..16 * i + 4] == b"name") else {
+        let records = records.as_chunks::<16>().0;
+        let Some(name) = records.iter().find(|r| &r[..4] == b"name") else {
             continue;
         };
-        let at = u32_at(&records, 16 * name + 8).ok_or_else(invalid)?;
-        let length = u32_at(&records, 16 * name + 12).ok_or_else(invalid)? as usize;
+        let at = u32_at(name, 8).ok_or_else(invalid)?;
+        let length = u32_at(name, 12).ok_or_else(invalid)? as usize;
         if length > 1 << 20 {
             return Err(invalid());
         }
-        faces.push((
-            face as u32,
-            name_records(&read_at(&mut file, u64::from(at), length)?),
-        ));
+        let names = name_records(&read_at(&mut file, u64::from(at), length)?);
+        let mut rank = (false, 0);
+        if let Some(os2) = records.iter().find(|r| &r[..4] == b"OS/2")
+            && u32_at(os2, 12).is_some_and(|length| length >= 64)
+        {
+            let at = u64::from(u32_at(os2, 8).ok_or_else(invalid)?);
+            let style = read_at(&mut file, at, 64)?;
+            let flags = u16_at(&style, 62).ok_or_else(invalid)?;
+            let weight = u16_at(&style, 4)
+                .filter(|w| (1..=1000).contains(w))
+                .unwrap_or(if flags & 0x20 != 0 { 700 } else { 400 });
+            rank = (flags & 0x201 != 0, weight.abs_diff(400));
+        } else if let Some(head) = records.iter().find(|r| &r[..4] == b"head")
+            && u32_at(head, 12).is_some_and(|length| length >= 46)
+        {
+            // Older TrueType faces can carry their only style flags in head.macStyle.
+            let at = u64::from(u32_at(head, 8).ok_or_else(invalid)?) + 44;
+            let style = u16_at(&read_at(&mut file, at, 2)?, 0).ok_or_else(invalid)?;
+            rank = (style & 2 != 0, if style & 1 != 0 { 300 } else { 0 });
+        }
+        faces.push(FaceInfo {
+            index: face as u32,
+            names,
+            rank,
+        });
     }
     Ok(faces)
 }
@@ -1099,7 +1140,26 @@ pub(crate) mod tests {
                 (1, vec!["Second".to_owned()])
             ]
         );
+        for (name, weight, flags) in [
+            ("bold", 700u16, 0u16),
+            ("italic", 400, 1),
+            ("regular", 400, 0),
+        ] {
+            let mut bytes = minimal_ttf_with_layout(
+                "Shared",
+                65,
+                [0, 0, 500, 700],
+                [800, -200],
+                Some([800, -200]),
+            );
+            assert_eq!(&bytes[12..16], b"OS/2");
+            let os2 = u32_at(&bytes, 20).unwrap() as usize;
+            bytes[os2 + 4..os2 + 6].copy_from_slice(&weight.to_be_bytes());
+            bytes[os2 + 62..os2 + 64].copy_from_slice(&flags.to_be_bytes());
+            std::fs::write(dir.join(format!("{name}.ttf")), bytes).unwrap();
+        }
         let index = build_index(std::slice::from_ref(&dir));
+        assert_eq!(index.get("shared"), Some(&(dir.join("regular.ttf"), 0)));
         assert_eq!(index.get("test face"), Some(&(dir.join("a.ttf"), 0)));
         assert_eq!(index.get("テスト"), Some(&(dir.join("a.ttf"), 0)));
         assert_eq!(index.get("second"), Some(&(dir.join("b.ttc"), 1)));

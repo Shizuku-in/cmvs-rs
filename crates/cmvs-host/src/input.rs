@@ -55,9 +55,17 @@ impl InputState {
     }
 
     pub fn cancel_primary_button(&mut self) {
-        self.held[1] = false;
-        self.pulses[1] = false;
-        self.codes.forget_primary_button();
+        self.cancel_code(1);
+    }
+
+    /// Drop a code's pending press and history without generating a release edge.
+    pub fn cancel_code(&mut self, code: u8) {
+        let index = usize::from(code);
+        if index < self.held.len() {
+            self.held[index] = false;
+            self.pulses[index] = false;
+            self.codes.forget_code(code);
+        }
     }
 
     /// Drop mouse buttons, wheel pulses and the old location when the viewport changes.

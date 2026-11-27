@@ -547,7 +547,6 @@ fn sprite(bytes: &[u8], image_slots: usize) -> Result<CvnsSprite, FormatError> {
     let field = |offset| u32_at(raw, offset) as i32;
     let short = |offset| i16_at(raw, offset);
     let image_slot = short(42);
-    super::check_sprite_dimensions(field(96), field(100))?;
     if image_slot < -1 || image_slot >= image_slots as i16 {
         return Err(FormatError("invalid original CVNS sprite image slot"));
     }

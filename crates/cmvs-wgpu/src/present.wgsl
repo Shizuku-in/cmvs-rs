@@ -131,7 +131,7 @@ fn first_axis() -> vec2<i32> {
     return filter_axis(base, axis, sample_position(pixel + p.intermediate.xy), true);
 }
 
-@fragment fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+fn screen_color(at: vec4<f32>) -> vec4<f32> {
     let pixel = vec2<i32>(at.xy);
     var background = vec3<f32>(0.0);
     if p.source.w != 0 {
@@ -173,4 +173,15 @@ fn first_axis() -> vec2<i32> {
         c = source_sample(vec2<i32>(floor(coord)), true);
     }
     return vec4<f32>(c.rgb + background * (1.0 - c.a), 1.0);
+}
+
+@fragment fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    return screen_color(at);
+}
+
+// The game canvas already contains display-encoded RGB. An sRGB target encodes on store.
+@fragment fn fs_srgb(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let rgb = screen_color(at).rgb;
+    let linear = select(pow((rgb + 0.055) / 1.055, vec3<f32>(2.4)), rgb / 12.92, rgb <= vec3<f32>(0.04045));
+    return vec4<f32>(linear, 1.0);
 }

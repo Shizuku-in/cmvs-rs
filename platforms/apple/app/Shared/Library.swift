@@ -115,6 +115,7 @@ struct FontFace: Identifiable, Codable, Hashable {
     var bytes: Int
     var family: String?
     var systemName: String?
+    var postScriptName: String?
     var id: String {
         #if os(iOS)
             if let systemName { return "system:\(systemName)" }
@@ -131,27 +132,44 @@ struct FontFace: Identifiable, Codable, Hashable {
                 return CTFontCopyPostScriptName(font) as String == systemName ? font : nil
             }
         #endif
-        guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
-            descriptors.indices.contains(Int(index))
+        guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor]
         else { return nil }
-        return CTFontCreateWithFontDescriptor(descriptors[Int(index)], size, nil)
+        let fonts = descriptors.lazy.map { CTFontCreateWithFontDescriptor($0, size, nil) }
+        if let postScriptName = postScriptName ?? systemName {
+            return fonts.first { CTFontCopyPostScriptName($0) as String == postScriptName }
+        }
+        // Older imported catalog entries only saved the full display name.
+        return fonts.first { CTFontCopyFullName($0) as String == name }
     }
 
-    static func read(_ url: URL, file: String, system: Bool = false) throws -> [Self] {
+    struct Inspected: Decodable {
+        let index: UInt32
+        let name: String
+        let cjk: Int
+        let latin: Bool
+
+        static func read(_ url: URL, using api: Bridge) throws -> [Self] {
+            try api.check(cmvs_apple_inspect_font(api.handle, url.path))
+            return try JSONDecoder().decode([Self].self, from: Data(api.text.utf8))
+        }
+    }
+
+    static func read(_ url: URL, file: String, system: Bool = false, using api: Bridge = Bridge()) throws -> [Self] {
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size > 0, size <= 32 << 20 else { throw PlayerError("Font must be at most 32 MiB.") }
-        guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] else {
-            throw PlayerError("Invalid OpenType font.")
+        let entries = try Inspected.read(url, using: api)
+        let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] ?? []
+        var byName = [String: CTFont]()
+        for descriptor in descriptors {
+            let font = CTFontCreateWithFontDescriptor(descriptor, 16, nil)
+            byName[CTFontCopyPostScriptName(font) as String] = font
         }
-        return descriptors.enumerated().compactMap { index, desc in
-            let font = CTFontCreateWithFontDescriptor(desc, 16, nil)
-            if system {
-                let set = CTFontCopyCharacterSet(font)
-                guard [0x4e2d, 0x3042].allSatisfy({ CFCharacterSetIsCharacterMember(set, UniChar($0)) }) else { return nil }
-            }
-            return Self(file: file, index: UInt32(index), name: CTFontCopyFullName(font) as String,
-                        bytes: size, family: CTFontCopyFamilyName(font) as String,
-                        systemName: system ? CTFontCopyPostScriptName(font) as String : nil)
+        return entries.compactMap { entry in
+            let font = byName[entry.name]
+            guard !system || (entry.cjk == 2 && font != nil) else { return nil }
+            return Self(file: file, index: entry.index, name: font.map { CTFontCopyFullName($0) as String } ?? entry.name,
+                        bytes: size, family: font.map { CTFontCopyFamilyName($0) as String },
+                        systemName: system ? entry.name : nil, postScriptName: entry.name)
         }
     }
 }
@@ -456,9 +474,9 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
             let staged = directory.appending(path: ".import-\(UUID()).\(suffix)")
             defer { try? fm.removeItem(at: staged) }
             try data.write(to: staged)
-            let faces = try FontFace.read(staged, file: file)
-            guard let first = faces.first else { throw PlayerError("No readable font faces.") }
             let api = Bridge()
+            let faces = try FontFace.read(staged, file: file, using: api)
+            guard let first = faces.first else { throw PlayerError("No readable font faces.") }
             for face in faces { try api.check(cmvs_apple_validate_font(api.handle, staged.path, face.index)) }
             do { try fm.moveItem(at: staged, to: first.url) }
             catch {
@@ -469,12 +487,6 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
     }
 
     #if os(iOS)
-        private struct SystemFontFace: Decodable {
-            let index: UInt32
-            let name: String
-            let cjk: Int
-        }
-
         static func scanFonts() -> [FontFace] {
             let collection = CTFontCollectionCreateFromAvailableFonts(nil)
             let descriptors = CTFontCollectionCreateMatchingFontDescriptors(collection) as? [CTFontDescriptor] ?? []
@@ -488,16 +500,14 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
             }
 
             let api = Bridge()
-            let decoder = JSONDecoder()
             var seen = Set<String>()
             var faces = [(face: FontFace, cjk: Int)]()
             for (url, available) in byURL.sorted(by: { $0.key.path < $1.key.path }) {
                 guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-                    cmvs_apple_inspect_font(api.handle, url.path) == 0,
-                    let entries = try? decoder.decode([SystemFontFace].self, from: Data(api.text.utf8))
+                    let entries = try? FontFace.Inspected.read(url, using: api)
                 else { continue }
                 // Match by name because Core Text descriptors can include named variations.
-                for entry in entries {
+                for entry in entries where entry.cjk > 0 || entry.latin {
                     guard let descriptor = available[entry.name], seen.insert(entry.name).inserted else { continue }
                     let font = CTFontCreateWithFontDescriptor(descriptor, 16, nil)
                     let face = FontFace(
@@ -517,11 +527,12 @@ func scoped<T>(_ url: URL, _ action: () throws -> T) rethrows -> T {
                 "/System/Library/Fonts", "/System/Library/Fonts/Supplemental", "/Library/Fonts",
                 FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Fonts").path,
             ]
+            let api = Bridge()
             return directories.flatMap { dir in
                 ((try? FileManager.default.contentsOfDirectory(
                     at: URL(fileURLWithPath: dir), includingPropertiesForKeys: nil)) ?? [])
                     .filter { ["ttf", "ttc", "otf"].contains($0.pathExtension.lowercased()) }
-                    .flatMap { (try? FontFace.read($0, file: $0.path, system: true)) ?? [] }
+                    .flatMap { (try? FontFace.read($0, file: $0.path, system: true, using: api)) ?? [] }
             }.sorted { $0.name < $1.name }
         }
     #endif

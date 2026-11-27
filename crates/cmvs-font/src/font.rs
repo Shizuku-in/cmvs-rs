@@ -344,11 +344,11 @@ impl cmvs_core::render::message::GlyphMetrics for PreviewMetrics {
         if !bounds.min.x.is_finite() || !bounds.max.x.is_finite() {
             return Err("nonfinite font metrics");
         }
-        let left = bounds.min.x.max(0.0);
-        let width = (bounds.max.x - bounds.min.x)
-            .max(0.0)
-            .min((size as f32 - left).max(0.0));
-        Ok((left + width) as u32)
+        Ok(if bounds.max.x > bounds.min.x {
+            bounds.max.x.clamp(0.0, size as f32) as u32
+        } else {
+            0
+        })
     }
 }
 
@@ -1190,6 +1190,21 @@ mod tests {
     fn invalid_font_data_or_collection_face_is_an_error() {
         assert!(FontRenderer::from_bytes(vec![], 0).is_err());
         assert!(FontRenderer::from_bytes(b"ttcf".to_vec(), 1).is_err());
+    }
+
+    #[test]
+    fn ink_width_clips_the_right_edge_to_the_glyph_cell() {
+        use crate::font_library::tests::minimal_ttf_with_layout;
+        for (left, right, expected) in [(-250, 500, 16), (-500, -250, 0), (1250, 1500, 32)] {
+            let bytes =
+                minimal_ttf_with_layout("Test", 65, [left, 0, right, 500], [800, -200], None);
+            let renderer = FontRenderer::from_bytes(bytes, 0).unwrap();
+            let glyph = recorded_glyph(65);
+            assert_eq!(
+                renderer.metrics().ink_width(&glyph.face, 65, 32),
+                Ok(expected)
+            );
+        }
     }
 
     #[test]

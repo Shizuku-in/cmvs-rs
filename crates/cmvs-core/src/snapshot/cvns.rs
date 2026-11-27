@@ -26,10 +26,10 @@ use crate::{
     },
     raster::RgbaImage,
     scene::cvns::{
-        CVNS_ANIM_FRAMES, CVNS_IMAGES, CVNS_LAYERS, CVNS_PLAYLISTS, CVNS_SPRITES, CvnsAnimFrame,
-        CvnsCurtain, CvnsCurtainTile, CvnsFade, CvnsImageBuffer, CvnsImageLayer, CvnsMaskLayer,
-        CvnsMaskTransition, CvnsMoveTween, CvnsQuake, CvnsScene, CvnsSprite, CvnsSpriteAnim,
-        CvnsSpriteKind,
+        CVNS_ANIM_FRAMES, CVNS_CURTAIN_TILE_LIMIT, CVNS_IMAGES, CVNS_LAYERS, CVNS_PLAYLISTS,
+        CVNS_SPRITES, CvnsAnimFrame, CvnsCurtain, CvnsCurtainTile, CvnsFade, CvnsImageBuffer,
+        CvnsImageLayer, CvnsMaskLayer, CvnsMaskTransition, CvnsMoveTween, CvnsQuake, CvnsScene,
+        CvnsSprite, CvnsSpriteAnim, CvnsSpriteKind,
     },
     system_save::PersistentStarts,
 };
@@ -39,13 +39,6 @@ use std::{
 };
 
 const MAX_DIM: u32 = 8192;
-
-fn check_sprite_dimensions(w: i32, h: i32) -> Result<(), FormatError> {
-    if !(0..=MAX_DIM as i32).contains(&w) || !(0..=MAX_DIM as i32).contains(&h) {
-        return Err(FormatError("CVNS sprite dimensions out of bounds"));
-    }
-    Ok(())
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CvnsLocalVariables {
@@ -1502,7 +1495,6 @@ fn read_sprite(r: &mut Reader<'_>, image_slots: usize) -> Result<CvnsSprite, For
     let color_strength = read_i16(r)?;
     let color = r.u32()?;
     let alpha = r.u16()?;
-    check_sprite_dimensions(w, h)?;
     if !(-1..image_slots as i16).contains(&image_slot) || alpha > 256 {
         return Err(FormatError("invalid CVNS sprite image slot or alpha"));
     }
@@ -1579,8 +1571,8 @@ fn read_sprite(r: &mut Reader<'_>, image_slots: usize) -> Result<CvnsSprite, For
         let elapsed_ms = r.u32()?;
         let wave_phase = r.u32()?;
         let tile_count = r.u32()? as usize;
-        if !(1..=65536).contains(&cols)
-            || !(1..=65536).contains(&rows)
+        if !(1..=CVNS_CURTAIN_TILE_LIMIT).contains(&cols)
+            || !(1..=CVNS_CURTAIN_TILE_LIMIT).contains(&rows)
             || interval_ms == 0
             || steps == 0
             || band_size < 1
@@ -1590,7 +1582,7 @@ fn read_sprite(r: &mut Reader<'_>, image_slots: usize) -> Result<CvnsSprite, For
         {
             return Err(FormatError("invalid CVNS curtain geometry or timing"));
         }
-        if tile_count > 65536 {
+        if tile_count > CVNS_CURTAIN_TILE_LIMIT as usize {
             return Err(FormatError("CVNS sprite curtain tile count exceeds limit"));
         }
         let mut tile_data = Reader::new(r.take(tile_count * 26)?);
@@ -1917,8 +1909,9 @@ mod tests {
         assert!(read_sprite(&mut Reader::new(&bytes[..bytes.len() - 1]), CVNS_IMAGES).is_err());
         sprite.curtain.as_mut().unwrap().delay_step = 0;
         assert!(read_sprite(&mut Reader::new(&encode(&sprite)), CVNS_IMAGES).is_err());
-        sprite.curtain.as_mut().unwrap().delay_step = 1;
-        sprite.h = i32::MAX;
+        let curtain = sprite.curtain.as_mut().unwrap();
+        curtain.delay_step = 1;
+        curtain.rows = CVNS_CURTAIN_TILE_LIMIT + 1;
         assert!(read_sprite(&mut Reader::new(&encode(&sprite)), CVNS_IMAGES).is_err());
     }
 
@@ -2075,8 +2068,9 @@ mod tests {
             visible: true,
             x: 10,
             y: 20,
-            w: 30,
+            w: 10_000,
             h: 40,
+            src_rect: [0, 0, 10_000, 40],
             z: 5,
             blend_mode: 2,
             alpha: 200,
@@ -2310,6 +2304,8 @@ mod tests {
         assert!(decoded.cg_seen.contains(b"ev_cg01".as_slice()));
         assert_eq!(decoded.quake.unwrap().rng(), 0xdead_beef);
         assert!(decoded.sprites[&7].move_tween.unwrap().active);
+        assert_eq!(decoded.sprites[&7].w, 10_000);
+        assert_eq!(decoded.sprites[&7].src_rect, [0, 0, 10_000, 40]);
         assert_eq!(decoded.sprites[&7].curtain.as_ref().unwrap().tiles.len(), 1);
         assert_eq!(decoded.windows[&0].face, b"TestGothic");
         assert_eq!(decoded.audio, audio.saved_cvns());

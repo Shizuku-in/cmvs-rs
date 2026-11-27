@@ -1014,27 +1014,32 @@ impl AudioBackend for NativeAudio {
             channel.duck_gain = duck;
             Self::set_gain(channel, channel.gain);
         }
+        let mut first_error = None;
         for channel in self
             .se
             .iter_mut()
             .chain(&mut self.voice)
             .chain(&mut self.aux_se)
+            .chain(&mut self.preloaded)
+            .chain(&mut self.bgm)
+            .chain([&mut self.movie])
         {
-            Self::tick_channel(channel)?;
-            if let Some(current) = channel
-                && current.sink.empty()
-            {
+            if let Err(error) = Self::tick_channel(channel) {
                 *channel = None;
+                first_error.get_or_insert(error);
             }
         }
-        for channel in self.preloaded.iter().flatten() {
-            channel.check()?;
-        }
-        for channel in &mut self.bgm {
-            Self::tick_channel(channel)?;
+        for slot in self
+            .se
+            .iter_mut()
+            .chain(&mut self.voice)
+            .chain(&mut self.aux_se)
+        {
+            if slot.as_ref().is_some_and(|channel| channel.sink.empty()) {
+                *slot = None;
+            }
         }
         if let Some(movie) = &self.movie {
-            movie.check()?;
             let position = movie.sink.get_pos().as_millis().min(u128::from(u32::MAX)) as u32;
             if self.last_movie_report_ms != u32::MAX && movie.sink.empty() {
                 println!("# native movie audio ended");
@@ -1046,7 +1051,7 @@ impl AudioBackend for NativeAudio {
                 self.last_movie_report_ms = position;
             }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
     fn se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         let channel = self
@@ -1061,6 +1066,15 @@ impl AudioBackend for NativeAudio {
             .get(usize::from(channel))
             .ok_or("voice channel out of range")?;
         Self::position(channel.as_ref())
+    }
+    fn set_movie_paused(&mut self, paused: bool) {
+        if let Some(movie) = &self.movie {
+            if paused {
+                movie.sink.pause();
+            } else {
+                movie.sink.play();
+            }
+        }
     }
     fn movie_clock(&self) -> Result<Option<MovieAudioClock>, Box<dyn Error + Send + Sync>> {
         let Some(movie) = &self.movie else {
@@ -1259,6 +1273,58 @@ mod output_gate_tests {
             assert!(frames.iter().all(|f| f[0] == 0));
             assert!(frames.iter().any(|f| f[1] != 0));
         }
+    }
+
+    #[test]
+    fn focus_pause_holds_the_movie_audio_clock_until_frames_resume() {
+        use cmvs_core::host::audio::AudioHost;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio");
+        let bytes = std::fs::read(root.join("mono440.ogg")).unwrap();
+        let (mut audio, mut output) = NativeAudio::pull(&root, 48_000, 2).unwrap();
+        let movie = audio.prepare(AudioProgram::new(bytes, None, false).unwrap(), 256, 0);
+        movie.sink.play();
+        audio.movie = Some(movie);
+        let mut host = AudioHost::new(Default::default());
+        host.sync_output_activity(false, &mut audio).unwrap();
+        let mut pcm = [0; 4096];
+        output.fill_i16(&mut pcm);
+        let paused = audio.movie_clock().unwrap();
+        assert!(matches!(paused, Some(MovieAudioClock::Playing { .. })));
+        output.fill_i16(&mut pcm);
+        assert_eq!(audio.movie_clock().unwrap(), paused);
+        host.sync_output_activity(true, &mut audio).unwrap();
+        output.fill_i16(&mut pcm);
+        assert_ne!(audio.movie_clock().unwrap(), paused);
+    }
+
+    #[test]
+    fn decoder_fault_releases_the_slot_and_services_other_channels() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio");
+        let bytes = std::fs::read(root.join("mono440.ogg")).unwrap();
+        let (mut audio, _output) = NativeAudio::pull(&root, 48_000, 2).unwrap();
+        let prepare = || {
+            audio.prepare(
+                AudioProgram::new(bytes.clone(), None, false).unwrap(),
+                256,
+                0,
+            )
+        };
+        let broken = prepare();
+        *broken.fault.lock().unwrap() = Some("decoder stopped".into());
+        let mut fading = prepare();
+        fading.envelope = Some(Envelope::new(1.0, 0.0, 0));
+        fading.release_at_end = true;
+        audio.se[0] = Some(broken);
+        audio.bgm[0] = Some(fading);
+        assert!(
+            audio
+                .update()
+                .unwrap_err()
+                .to_string()
+                .contains("decoder stopped")
+        );
+        assert!(audio.se[0].is_none() && audio.bgm[0].is_none());
+        audio.update().unwrap();
     }
 
     #[test]

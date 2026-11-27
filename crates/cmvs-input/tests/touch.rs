@@ -74,6 +74,36 @@ fn drag_outside_and_back_does_not_generate_an_extra_press() {
 }
 
 #[test]
+fn consecutive_contacts_sample_the_release_before_the_next_press() {
+    let (mut touch, mut input) = focused();
+    event(
+        &mut touch,
+        &mut input,
+        1,
+        TouchPhase::Started,
+        [500.0, 500.0],
+    );
+    touch.frame(&bindings(), viewport(), &mut input);
+    event(&mut touch, &mut input, 1, TouchPhase::Ended, [550.0, 500.0]);
+    event(
+        &mut touch,
+        &mut input,
+        2,
+        TouchPhase::Started,
+        [600.0, 500.0],
+    );
+    event(&mut touch, &mut input, 2, TouchPhase::Ended, [600.0, 500.0]);
+    touch.frame(&bindings(), viewport(), &mut input);
+    assert!(input.released(0));
+    assert_eq!(input.pointer(), [704, 360]);
+    touch.frame(&bindings(), viewport(), &mut input);
+    assert!(input.pressed(0));
+    assert_eq!(input.pointer(), [768, 360]);
+    touch.frame(&bindings(), viewport(), &mut input);
+    assert!(input.released(0));
+}
+
+#[test]
 fn secondary_contacts_never_take_over_even_after_primary_ends() {
     let (mut touch, mut input) = focused();
     event(

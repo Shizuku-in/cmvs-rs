@@ -137,6 +137,7 @@ impl FullscreenMonitor {
 }
 
 pub struct NativeBackend<'a> {
+    pub last_frame: &'a mut std::time::Instant,
     pub fullscreen_monitor: &'a std::cell::RefCell<FullscreenMonitor>,
     pub logical_size: [u32; 2],
     pub window: &'a Window,
@@ -249,7 +250,9 @@ impl PlatformBackend for NativeBackend<'_> {
                 .unwrap_or_else(|_| "ＭＳ ゴシック".to_owned()),
             None => encoding::decode_font_face(self.encoding, current)?,
         };
-        let Some(face) = cmvs_native::choose_font(owner, &current)? else {
+        let result = cmvs_native::choose_font(owner, &current);
+        *self.last_frame = std::time::Instant::now();
+        let Some(face) = result? else {
             println!("# native font dialog cancelled");
             return Ok(None);
         };

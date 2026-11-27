@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 let canvas = $('canvas'), context, logicalSize = [canvas.width, canvas.height];
 let worker, timer, saveKey, audio, audioTimer, commentInput, commentObserver, launch=0;
 let outputObserver;
-const physical = new Map();
+const physical = new Map(), pointers = new Map();
 const keyCodes = {Backspace:20,Tab:21,Enter:22,NumpadEnter:22,ShiftLeft:23,ShiftRight:23,ControlLeft:24,ControlRight:24,Escape:25,Space:26,PageUp:27,PageDown:28,End:29,Home:30,Insert:31,Delete:32,ArrowUp:33,ArrowDown:34,ArrowLeft:35,ArrowRight:36,NumpadMultiply:47,NumpadAdd:48,NumpadSubtract:49,NumpadDecimal:50,NumpadDivide:51,Semicolon:112,Equal:113,Comma:114,Minus:115,Period:116,Slash:117,Backquote:118,BracketLeft:119,Backslash:120,BracketRight:121,Quote:122};
 for (let i=0;i<10;i++) { keyCodes['Numpad'+i]=37+i; keyCodes['Digit'+i]=76+i; }
 for (let i=1;i<=24;i++) keyCodes['F'+i]=51+i;
@@ -16,7 +16,7 @@ function stop(text) {
   outputObserver?.disconnect(); outputObserver = undefined;
   clearTimeout(timer); clearInterval(audioTimer);
   if(audio) {void audio.close(); audio=undefined;}
-  worker?.terminate(); worker = undefined; physical.clear();
+  worker?.terminate(); worker = undefined; physical.clear(); pointers.clear();
   $('start').disabled = false; $('stop').disabled = true; $('export').disabled = true;
   if (text) status(text);
 }
@@ -161,14 +161,34 @@ function editComment(id, initial, [x,y,w,h], maxChars) {
 }
 function bindCanvas() {
   canvas.oncontextmenu = event => event.preventDefault();
-  canvas.onpointermove = event => send({type:'input',pointer:point(event)});
+  // DOM buttons is a bit mask in left, right, middle, back, forward order.
+  const buttons = [1, 3, 2, 6, 7];
+  function heldButtons() {
+    let mask = 0;
+    for (const value of pointers.values()) mask |= value;
+    return mask;
+  }
+  function updatePointer(event, mask, cancel = false) {
+    const before = heldButtons();
+    if (mask) pointers.set(event.pointerId, mask);
+    else pointers.delete(event.pointerId);
+    const after = heldButtons();
+    if (!cancel) send({type:'input',pointer:point(event)});
+    buttons.forEach((key, index) => {
+      const bit = 1 << index;
+      if ((before ^ after) & bit) {
+        const down = Boolean(after & bit);
+        send({type:'input',key,down,pulse:down ? key : undefined,cancel:cancel ? key : undefined});
+      }
+    });
+  }
+  canvas.onpointermove = event => updatePointer(event, pointers.has(event.pointerId) ? event.buttons : 0);
   canvas.onpointerdown = event => {
     event.preventDefault(); void audio?.context.resume(); canvas.focus(); canvas.setPointerCapture(event.pointerId);
-    const key = event.button === 2 ? 3 : 1;
-    send({type:'input',pointer:point(event),key,down:true,pulse:key});
+    updatePointer(event, event.buttons);
   };
-  canvas.onpointerup = event => send({type:'input',pointer:point(event),key:event.button===2?3:1,down:false});
-  canvas.onpointercancel = () => send({type:'input',focused:false});
+  canvas.onpointerup = event => updatePointer(event, event.buttons);
+  canvas.onpointercancel = event => updatePointer(event, 0, true);
   canvas.addEventListener('wheel',event => {event.preventDefault(); send({type:'input',pulse:event.deltaY<0?4:5});},{passive:false});
   canvas.onkeydown = event => {
     const key = keyCodes[event.code]; if (!key) return;
@@ -179,9 +199,11 @@ function bindCanvas() {
   };
   canvas.onblur = () => {
     if (commentInput) {
+      const mouse = buttons.filter((_, i) => heldButtons() & (1 << i));
+      for (const key of mouse) send({type:'input',key,down:false,cancel:key});
       for (const key of new Set(physical.values())) send({type:'input',key,down:false});
     } else send({type:'input',focused:false});
-    physical.clear();
+    pointers.clear(); physical.clear();
   };
   canvas.onfocus = () => send({type:'input',focused:true});
 }
@@ -190,5 +212,5 @@ window.addEventListener('keyup',event => {
   const key = physical.get(event.code); physical.delete(event.code);
   if (key && ![...physical.values()].includes(key)) send({type:'input',key,down:false});
 });
-window.addEventListener('blur',() => {physical.clear();send({type:'input',focused:false});});
+window.addEventListener('blur',() => {physical.clear();pointers.clear();send({type:'input',focused:false});});
 window.addEventListener('focus',() => send({type:'input',focused:document.activeElement===canvas || Boolean(commentInput)}));

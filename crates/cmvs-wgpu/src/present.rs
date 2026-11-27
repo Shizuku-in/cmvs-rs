@@ -221,11 +221,10 @@ fn encode_scale(
 
 /// Window presentation is separate from the logical CMVS canvas.
 pub struct Presenter {
-    surface: wgpu::Surface<'static>,
+    surface: Option<wgpu::Surface<'static>>,
+    pub lost: bool,
     config: wgpu::SurfaceConfiguration,
     scaling: Scaling,
-    format: wgpu::TextureFormat,
-    pub lost: bool,
     configured: bool,
 }
 impl Presenter {
@@ -235,20 +234,23 @@ impl Presenter {
         renderer: &Renderer,
     ) -> Result<Self> {
         let caps = surface.get_capabilities(adapter);
-        let format = *caps.formats.first().ok_or("no GPU surface formats")?;
-        let view_format = format.remove_srgb_suffix();
+        let format = *caps
+            .formats
+            .iter()
+            .find(|f| !f.is_srgb())
+            .or(caps.formats.first())
+            .ok_or("no GPU surface formats")?;
         let mut config = surface
             .get_default_config(adapter, 1, 1)
             .ok_or("no GPU surface configuration")?;
         config.format = format;
-        config.view_formats = vec![view_format];
-        let scaling = Scaling::new(&renderer.device, view_format);
+        config.view_formats.clear();
+        let scaling = Scaling::new(&renderer.device, format);
         Ok(Self {
-            surface,
+            surface: Some(surface),
+            lost: false,
             config,
             scaling,
-            format: view_format,
-            lost: false,
             configured: false,
         })
     }
@@ -272,13 +274,16 @@ impl Presenter {
         {
             return Err("GPU surface exceeds device limits".into());
         }
+        let Some(surface) = &self.surface else {
+            return Ok(false);
+        };
         if !self.configured || self.config.width != size[0] || self.config.height != size[1] {
             self.config.width = size[0];
             self.config.height = size[1];
-            self.surface.configure(&renderer.device, &self.config);
+            surface.configure(&renderer.device, &self.config);
             self.configured = true;
         }
-        let output = match self.surface.get_current_texture() {
+        let output = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 self.configured = false;
@@ -288,6 +293,8 @@ impl Presenter {
                 return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Lost => {
+                // A window can only back one native surface. Release it before the host rebuilds.
+                self.surface = None;
                 self.lost = true;
                 return Ok(false);
             }
@@ -301,10 +308,7 @@ impl Presenter {
             }
         };
         let view = Viewport::new(frame.size, size, aspect_mode)?;
-        let target = output.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(self.format),
-            ..Default::default()
-        });
+        let target = output.texture.create_view(&Default::default());
         self.scaling.draw(
             &renderer.device,
             &renderer.queue,
@@ -396,7 +400,14 @@ fn scaling_pipelines(
 
     (
         layout,
-        pipeline("fs", view_format),
+        pipeline(
+            if view_format.is_srgb() {
+                "fs_srgb"
+            } else {
+                "fs"
+            },
+            view_format,
+        ),
         pipeline("fs_intermediate", wgpu::TextureFormat::Rgba16Float),
     )
 }
@@ -508,6 +519,37 @@ mod tests {
                 ));
             }
         }
+        // Some surfaces only offer an sRGB target and cannot create alternate views.
+        let size = [13, 14];
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let target = Texture::with_format(
+            &gpu.device,
+            size,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            format,
+        );
+        Scaling::new(&gpu.device, format).draw(
+            &gpu.device,
+            &gpu.queue,
+            &source.target,
+            &target.view,
+            ScaleOptions {
+                view: Viewport::new(source.size, size, 1).unwrap(),
+                filter: ScaleFilter::Bilinear,
+                preview: false,
+            },
+        );
+        frames.push((
+            GpuFrame {
+                target,
+                size,
+                device: gpu.device.clone(),
+                queue: gpu.queue.clone(),
+            },
+            &image,
+            1,
+            ScaleFilter::Bilinear,
+        ));
         // Reuse the intermediate with a different original before reading either result.
         let solid = RgbaImage::new(11, 7, [240, 25, 100, 255].repeat(77)).unwrap();
         let filter = ScaleFilter::Lanczos3 { anti_ringing: true };

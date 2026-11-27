@@ -6,13 +6,17 @@ mod fs;
 mod gpu;
 use backend::BrowserBackend;
 use cmvs_core::{
-    MAX_PAYLOAD, host::filesystem::HostFs, profile::Registry, render::raster::ScaleFilter,
-    runtime::FrameBudget, runtime::FrameOutcome, runtime::RuntimeEvent, runtime::SaveStorage,
+    MAX_PAYLOAD,
+    format::{save::Csv2Save, system_save::Css1Save},
+    host::{filesystem::HostFs, settings::Configuration},
+    profile::Registry,
+    render::raster::ScaleFilter,
+    runtime::{FrameBudget, FrameOutcome, RuntimeEvent, SaveStorage, script_control::Startup},
 };
 use cmvs_font::font::FontRenderer;
 use cmvs_host::{EncodingPolicy, GameBootstrap, HostSession, KeyBindingPolicy, SessionConfig};
 use fs::WebFs;
-use std::{error::Error, path::Path, sync::Arc};
+use std::{error::Error, io::Read, path::Path, sync::Arc};
 use wasm_bindgen::prelude::*;
 
 fn js_error(error: impl std::fmt::Display) -> JsValue {
@@ -121,6 +125,7 @@ impl WebRuntime {
         profile: &str,
         skip_auto_resume: bool,
         scale_filter: Option<String>,
+        backup_paths: Option<Vec<String>>,
     ) -> Result<WebRuntime, JsValue> {
         Self::create(
             font,
@@ -128,6 +133,7 @@ impl WebRuntime {
             profile,
             skip_auto_resume,
             scale_filter.as_deref(),
+            backup_paths.as_deref(),
         )
         .map_err(js_error)
     }
@@ -153,6 +159,9 @@ impl WebRuntime {
     }
     pub fn needs_input(&self) -> bool {
         self.session.driver.needs_input()
+    }
+    pub fn cancel_code(&mut self, code: u8) {
+        self.session.input.cancel_code(code);
     }
     pub fn width(&self) -> u32 {
         self.backend.size[0]
@@ -318,6 +327,7 @@ impl WebRuntime {
         profile: &str,
         skip: bool,
         scale_filter: Option<&str>,
+        backup_paths: Option<&[String]>,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let root = Path::new("/game");
         let fs: Arc<dyn HostFs> = Arc::new(WebFs);
@@ -331,6 +341,9 @@ impl WebRuntime {
             return Err(
                 "CVNS games require audio support that is unavailable in the browser player".into(),
             );
+        }
+        if let Some(paths) = backup_paths {
+            validate_backup(&bootstrap, paths)?;
         }
         let font = FontRenderer::from_bytes(font, face)?.with_text_encoding(bootstrap.encoding);
         let mut session = bootstrap.into_session(
@@ -359,6 +372,63 @@ impl WebRuntime {
             output,
         })
     }
+}
+
+fn validate_backup(
+    boot: &GameBootstrap,
+    paths: &[String],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let selection = &boot.game.selection;
+    let expected_id = std::cell::LazyCell::new(|| {
+        let declared = selection.record.map(|r| r.game_id).or_else(|| {
+            Startup::execute(&boot.script, selection.profile)
+                .ok()?
+                .bootstrap
+                .settings()
+                .get(&0x201d)
+                .copied()
+        });
+        selection.profile.css1_game_id(declared)
+    });
+    for path in paths {
+        let validate = || -> Result<(), Box<dyn Error + Send + Sync>> {
+            let Some(name) = path.strip_prefix("/user/") else {
+                return Err("invalid backup path".into());
+            };
+            let path = Path::new(path);
+            if matches!(name, "cmvs.cfg" | "cmvs.cfg.bak") {
+                Configuration::read_with_fs(&*boot.fs, path)?;
+                return Ok(());
+            }
+            let system = matches!(name, "system.dat" | "system.bak");
+            let slot = name
+                .strip_prefix("save")
+                .and_then(|name| name.strip_suffix(".dat"))
+                .is_some_and(|slot| slot.len() >= 3 && slot.bytes().all(|b| b.is_ascii_digit()));
+            if !system && !slot && !matches!(name, "savedel.dat" | "savetemp.dat") {
+                return Ok(());
+            }
+            let mut bytes = Vec::new();
+            boot.fs
+                .open_read(path)?
+                .take(MAX_PAYLOAD as u64 + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > MAX_PAYLOAD {
+                return Err("save exceeds supported size".into());
+            }
+            if system {
+                let id = Css1Save::decode(&bytes)?.layout().game_id;
+                if id != 0 && expected_id.is_some_and(|expected| expected != id) {
+                    return Err("CSS1 game identifier differs from target".into());
+                }
+            } else {
+                Csv2Save::decode(&bytes)?;
+            }
+            Ok(())
+        };
+        validate().map_err(|error| format!("Invalid backup entry {path}: {error}"))?;
+    }
+    Ok(())
 }
 
 /// Stable save namespace derived from the selected profile and input data evidence.

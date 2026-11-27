@@ -13,7 +13,8 @@ export class AudioDevice {
   }
   envelopeAt(channel,time) {
     const fade=channel.fade;
-    if(!fade || time>=fade.end) return fade?.to??1;
+    if(!fade) return channel.frames===0 && channel.fadeMs>0 ? 0 : 1;
+    if(time>=fade.end) return fade.to;
     if(time<=fade.start) return fade.from;
     return fade.from+(fade.to-fade.from)*(time-fade.start)/(fade.end-fade.start);
   }
@@ -54,7 +55,7 @@ export class AudioDevice {
       }
       const source=this.context.createBufferSource();source.buffer=buffer;source.connect(channel.base);
       const start=Math.max(channel.next,now+.02);
-      if(channel.frames===0 && channel.fadeMs>0) this.ramp(channel,0,1,start,start+channel.fadeMs/1000);
+      if(channel.frames===0 && channel.fadeMs>0 && channel.release===null) this.ramp(channel,0,1,start,start+channel.fadeMs/1000);
       const item={source,start,frames,before:channel.frames,end:start+frames/channel.rate};
       channel.items.push(item);channel.frames+=frames;channel.next=item.end;
       source.onended=()=>{

@@ -62,6 +62,11 @@ assert.equal(runtime.tick(16,new Uint8Array(),-1,-1,true),1);
 assert.equal(runtime.tick(16,new Uint8Array(),-1,-1,true),1);
 assert.equal(runtime.width(),64); assert.equal(runtime.height(),48);
 assert.equal(new TextDecoder().decode(fs.read('/user/system.dat',0,4)),'CSS1');
+const savedBytes = fs.read('/user/system.dat',0,fs.size('/user/system.dat'));
+fs.operation('rename','/user/system.dat','/USER/System.DAT');
+assert.throws(() => fs.restore([['/user/a',savedBytes],['/user/a/b',savedBytes]]));
+assert.deepEqual(fs.read('/user/system.dat',0,savedBytes.length),savedBytes);
+assert.throws(() => fs.operation('rename','/user/system.dat','/user/missing/file'));
 const size = fs.size;
 fs.size = () => { throw Error('size unavailable'); };
 assert.throws(() => runtime.save_preferences(), /browser filesystem: .*size unavailable/);
@@ -93,7 +98,7 @@ runtime.free();
 const saves=fs.snapshot();
 assert.ok(saves.some(([path])=>path==='/user/system.dat'));
 fs.restore(saves);
-const resumed=new WebRuntime(new Uint8Array(readFileSync(font)),0,profile,false,'lanczos3-anti-ringing');
+const resumed=new WebRuntime(new Uint8Array(readFileSync(font)),0,profile,false,'lanczos3-anti-ringing',saves.map(([path])=>path));
 assert.equal(resumed.uses_custom_scale_filter(),true);
 resumed.resize_output(137,103);
 assert.equal(resumed.tick(16,new Uint8Array(),-1,-1,true),0);
@@ -149,8 +154,53 @@ editor.submit_comment_input(retry.id, 'Aあ');
 retry.free();
 assert.deepEqual(commentFiles.read('/user/save001.dat',272,3),new Uint8Array(3));
 frame([1],...ok);
+editor.cancel_code(1);
+frame([],...ok);
+assert.deepEqual(commentFiles.read('/user/save001.dat',272,3),new Uint8Array(3));
+frame([1],...ok);
 frame([],...ok);
 frame();
 assert.deepEqual(commentFiles.read('/user/save001.dat',272,4),new Uint8Array([0x41,0x82,0xa0,0]));
 editor.free();
 console.log('Wasm comment editor smoke passed');
+
+// Drive the worker through an import with an existing IndexedDB record.
+globalThis.cmvsFs = fs;
+const saveKey = identify(profile);
+globalThis.FileReaderSync = class { readAsArrayBuffer(bytes) { return bytes; } };
+Object.defineProperty(globalThis.navigator, 'locks', {
+  value: {request: async (_name, _options, run) => run({})},
+});
+let stored = saves;
+globalThis.indexedDB = {
+  open() {
+    const request = {result: {
+      transaction() {
+        const tx = {objectStore: () => ({
+          get: () => ({result: stored}),
+          put: entries => { stored = entries; },
+        })};
+        queueMicrotask(() => tx.oncomplete());
+        return tx;
+      },
+    }};
+    queueMicrotask(() => request.onsuccess());
+    return request;
+  },
+};
+globalThis.onmessage = undefined;
+await import('./worker.mjs');
+const outcome = await new Promise(resolve => {
+  globalThis.postMessage = message => {
+    if (['ready', 'error'].includes(message.type)) resolve(message);
+  };
+  onmessage({data: {
+    type: 'start', profile, face: 0, font: new Blob([readFileSync(font)]),
+    files: [...fs.files].map(([path,file]) => ({path:path.slice('/game/'.length),file})),
+    backup: new Blob([JSON.stringify({version:1,saveKey,entries:[['/user/system.dat',[0]]]})]),
+  }});
+});
+assert.equal(outcome.type, 'error');
+assert.match(outcome.text, /Invalid backup entry \/user\/system\.dat: .*CSS1/);
+assert.equal(stored, saves);
+console.log('Wasm worker import preserved existing saves');

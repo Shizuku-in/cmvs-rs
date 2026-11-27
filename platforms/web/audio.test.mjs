@@ -68,3 +68,14 @@ test('mute keeps consuming while fade-out cancels all remaining queued audio',()
   device.apply({op:'fade',id:9,ms:20});context.currentTime=.11;
   assert.equal(device.clock().positions[0][2],-1);assert.equal(context.sources[0].stopped,true);
 });
+
+test('fade-out before the first PCM block keeps its release envelope',()=>{
+  const context=new Context(),device=new AudioDevice(context);
+  device.apply({...start,fadeMs:100});
+  device.apply({op:'fade',id:9,ms:50});
+  device.apply(chunk);
+  const fade=device.channels.get(9).fade;
+  assert.deepEqual([fade.from,fade.to],[0,0]);
+  context.currentTime=.051;
+  assert.equal(device.clock().positions[0][2],-1);
+});

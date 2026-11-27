@@ -318,6 +318,8 @@ impl App {
                 self.startup.supply_capture(frame.read()?)?;
             }
             self.device_frame = Some(Box::new(frame));
+        } else if gpu.presenter.lost {
+            window.request_redraw();
         }
         Ok(())
     }
@@ -410,6 +412,7 @@ impl App {
             render_mode: &self.render_mode,
             fullscreen_monitor: &self.fullscreen_monitor,
             windowed_size: &self.windowed_size,
+            last_frame: &mut self.last_frame,
             fonts: self.font.as_ref(),
             device_frame: self.device_frame.as_deref(),
             #[cfg(windows)]
@@ -484,6 +487,7 @@ impl ApplicationHandler for App {
                 render_mode: &self.render_mode,
                 fullscreen_monitor: &self.fullscreen_monitor,
                 windowed_size: &self.windowed_size,
+                last_frame: &mut self.last_frame,
                 fonts: self.font.as_ref(),
                 device_frame: self.device_frame.as_deref(),
                 #[cfg(windows)]
@@ -539,6 +543,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(_) => self.window.as_ref().expect("window").request_redraw(),
             WindowEvent::Focused(focus) => {
+                self.last_frame = Instant::now();
                 self.input.push(InputEvent::Focus(focus));
                 self.game_input.focus(focus, self.startup.input_mut());
                 if self.native_input && self.preview_image.is_none() {
@@ -662,6 +667,7 @@ impl ApplicationHandler for App {
             return;
         }
         if !self.halted
+            && self.preview_image.is_none()
             && let Some(window) = &self.window
         {
             let now = Instant::now();
@@ -714,6 +720,7 @@ impl ApplicationHandler for App {
                     render_mode: &self.render_mode,
                     fullscreen_monitor: &self.fullscreen_monitor,
                     windowed_size: &self.windowed_size,
+                    last_frame: &mut self.last_frame,
                     fonts: self.font.as_ref(),
                     device_frame: self.device_frame.as_deref(),
                     #[cfg(windows)]
@@ -820,14 +827,9 @@ impl ApplicationHandler for App {
                     return;
                 }
             }
-            // Keep the core's inactive audio/movie polling policy. Active VM
-            // budget slices, unlike inactivity, must never advance a frame.
             if (yielded || inactive) && !self.halted {
                 let now = Instant::now();
-                let delta = now
-                    .duration_since(self.last_frame)
-                    .as_millis()
-                    .min(u128::from(u32::MAX)) as u32;
+                let delta = now.duration_since(self.last_frame).as_millis().min(250) as u32;
                 self.last_frame = now;
                 let had_fade = self.startup.scene().fade().current().is_some();
                 let advanced = if yielded {
@@ -835,8 +837,7 @@ impl ApplicationHandler for App {
                         .finish_frame(&mut self.startup, delta)
                         .map(|_| ())
                 } else {
-                    // Inactivity still services the existing audio/movie policy.
-                    self.startup.advance_playback(delta)
+                    self.startup.poll_audio_output()
                 };
                 if let Err(error) = advanced {
                     self.fail(el, error);
@@ -870,9 +871,11 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            window.request_redraw();
+            if !inactive {
+                window.request_redraw();
+            }
         }
-        if !self.halted {
+        if !self.halted && self.preview_image.is_none() {
             el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
         } else if let Some(deadline) = self.deadline {
             el.set_control_flow(ControlFlow::WaitUntil(deadline));
@@ -1168,7 +1171,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             "# skip-auto-resume: clear the script's startup auto-load flag after system-save loading; save files unchanged"
         );
     }
-    if native_audio {
+    if native_audio && preview_image.is_none() {
         #[cfg(feature = "audio-output")]
         {
             runtime.set_audio_backend(Box::new(cmvs_audio::NativeAudio::new(&root)?))?;
@@ -1263,17 +1266,18 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     if let Some(error) = app.error {
         return Err(error.into());
     }
-    if app
-        .startup
-        .save_preferences(cmvs_core::host::settings::DisplayPreferences {
-            fullscreen: app
-                .window
-                .as_ref()
-                .is_some_and(|w| w.fullscreen().is_some()),
-            aspect_mode: app.aspect_mode.get(),
-            aspect_scaling: app.aspect_scaling.get(),
-            render_mode: app.render_mode.get() as u32,
-        })?
+    if app.preview_image.is_none()
+        && app
+            .startup
+            .save_preferences(cmvs_core::host::settings::DisplayPreferences {
+                fullscreen: app
+                    .window
+                    .as_ref()
+                    .is_some_and(|w| w.fullscreen().is_some()),
+                aspect_mode: app.aspect_mode.get(),
+                aspect_scaling: app.aspect_scaling.get(),
+                render_mode: app.render_mode.get() as u32,
+            })?
     {
         println!("# user settings saved");
     }

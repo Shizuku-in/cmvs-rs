@@ -12,7 +12,7 @@ const reader = new FileReaderSync();
 const files = new BrowserFiles(blob => new Uint8Array(reader.readAsArrayBuffer(blob)));
 globalThis.cmvsFs = files;
 let runtime, database, saveKey, busy = false, lastFrame = 0, useGpu = false;
-const held = new Set(), pulses = new Set();
+const held = new Set(), pulses = new Set(), cancelled = new Set();
 let pointer = [-1, -1], focused = true;
 function transaction(mode, work) {
   return new Promise((resolve, reject) => {
@@ -60,10 +60,16 @@ async function start(message) {
     });
   }
   files.restore(saved);
-  runtime = new WebRuntime(new Uint8Array(await message.font.arrayBuffer()), message.face, message.profile, message.skip, message.scaleFilter || undefined);
-  runtime.set_random_seed(Date.now() >>> 0);
+  const backupPaths = message.backup ? files.snapshot().map(([path]) => path) : undefined;
+  const candidate = new WebRuntime(new Uint8Array(await message.font.arrayBuffer()), message.face, message.profile, message.skip, message.scaleFilter || undefined, backupPaths);
+  candidate.set_random_seed(Date.now() >>> 0);
   useGpu = Boolean(message.canvas);
-  if (useGpu) await runtime.enable_gpu(message.canvas);
+  if (useGpu) await candidate.enable_gpu(message.canvas);
+  if (message.backup) {
+    files.dirty = true;
+    await persist();
+  }
+  runtime = candidate;
   lastFrame = performance.now();
   postMessage({ type: 'ready', width: runtime.width(), height: runtime.height(), scaleFilter: runtime.uses_custom_scale_filter(), saveKey });
 }
@@ -75,7 +81,11 @@ async function tick() {
     const date = new Date();
     runtime.set_clock(new Uint16Array([date.getFullYear(),date.getMonth()+1,date.getDate(),date.getHours(),date.getMinutes(),date.getSeconds()]));
     const keys = new Uint8Array([...held, ...pulses]);
-    if (runtime.needs_input()) pulses.clear();
+    if (runtime.needs_input()) {
+      for (const key of cancelled) runtime.cancel_code(key);
+      cancelled.clear();
+      pulses.clear();
+    }
     const result = useGpu
       ? await runtime.tick_gpu(Math.round(now - lastFrame), keys, ...pointer, focused)
       : runtime.tick(Math.round(now - lastFrame), keys, ...pointer, focused);
@@ -107,16 +117,24 @@ async function handleMessage(data) {
     else if (data.type === 'input') {
       if (data.key !== undefined) data.down ? held.add(data.key) : held.delete(data.key);
       if (data.pulse !== undefined) pulses.add(data.pulse);
+      if (data.cancel !== undefined) {
+        held.delete(data.cancel);
+        pulses.delete(data.cancel);
+        cancelled.add(data.cancel);
+      }
       if (data.pointer) pointer = data.pointer;
       if (data.focused !== undefined) {
         focused = data.focused;
         if (!focused) { held.clear(); pulses.clear(); pointer = [-1, -1]; }
       }
     } else if (data.type === 'stop') {
-      if (runtime) runtime.save_preferences();
-      await persist();
+      if (runtime) {
+        runtime.save_preferences();
+        await persist();
+      }
       postMessage({type:'stopped'});
     } else if (data.type === 'export') {
+      if (!runtime) return;
       await persist();
       postMessage({ type: 'export', saveKey, entries: files.snapshot() });
     }

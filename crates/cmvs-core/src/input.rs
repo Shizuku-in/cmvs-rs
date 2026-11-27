@@ -215,7 +215,13 @@ impl CodeInput {
         self.previous = *now;
     }
     pub fn forget_primary_button(&mut self) {
-        self.previous[1] = false;
+        self.forget_code(1);
+    }
+
+    pub fn forget_code(&mut self, code: u8) {
+        if let Some(previous) = self.previous.get_mut(usize::from(code)) {
+            *previous = false;
+        }
     }
 
     pub fn forget_pointer(&mut self) {

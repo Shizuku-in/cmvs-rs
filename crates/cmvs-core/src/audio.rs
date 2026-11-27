@@ -378,6 +378,8 @@ pub trait AudioBackend: Send {
     fn update(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
+    /// Pause a device-driven movie clock while the engine's focus policy suspends frames.
+    fn set_movie_paused(&mut self, _paused: bool) {}
     /// None selects the explicit virtual clock; real backends report channel 2 state.
     fn movie_clock(&self) -> Result<Option<MovieAudioClock>, Box<dyn Error + Send + Sync>> {
         Ok(None)
@@ -1069,6 +1071,9 @@ impl AudioHost {
         let enabled = active || self.background_output;
         if enabled != self.output_enabled {
             backend.set_output_enabled(enabled)?;
+        }
+        if self.output_active != active {
+            backend.set_movie_paused(!active);
         }
         self.output_active = active;
         self.output_enabled = enabled;
