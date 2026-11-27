@@ -240,7 +240,7 @@ pub(crate) fn parse_profile(text: &str) -> Result<ResearchProfile, ProfileError>
     let mut relocated = Vec::new();
     while matches!(lines.peek_key(), Some("binary" | "relocated-binary")) {
         let (line, words) = lines.next().expect("peeked");
-        let (binary, cases) = parse_binary(line, &words)?;
+        let (binary, cases) = parse_binary(line, words)?;
         if words[0] == "relocated-binary" {
             relocated.push((line, binary, cases));
         } else {
