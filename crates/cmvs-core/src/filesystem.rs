@@ -2,6 +2,7 @@
 use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 #[cfg(feature = "std-fs")]
@@ -15,15 +16,25 @@ pub trait HostFile: Read + Write + Seek + Send + Sync {
     fn sync_all(&self) -> io::Result<()>;
     /// Acquire a non-blocking exclusive advisory lock on this handle.
     fn try_lock(&self) -> io::Result<()>;
+    /// Release the lock explicitly when closing alone can leave it held.
+    fn unlock(&self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Type-erased file handle returned by [`HostFs`].
-pub struct File(Box<dyn HostFile>);
+pub struct File {
+    inner: Box<dyn HostFile>,
+    locked: AtomicBool,
+}
 
 impl File {
     /// Wrap a host-specific file handle.
     pub fn from_host(file: Box<dyn HostFile>) -> Self {
-        Self(file)
+        Self {
+            inner: file,
+            locked: AtomicBool::new(false),
+        }
     }
 
     /// Open an existing file for reading with [`StdFs`].
@@ -34,39 +45,50 @@ impl File {
 
     /// Query metadata for the opened file.
     pub fn metadata(&self) -> io::Result<Metadata> {
-        self.0.metadata()
+        self.inner.metadata()
     }
 
     /// Flush file contents and metadata to durable storage.
     pub fn sync_all(&self) -> io::Result<()> {
-        self.0.sync_all()
+        self.inner.sync_all()
     }
 
     /// Acquire a non-blocking exclusive advisory lock on this file handle.
     pub fn try_lock(&self) -> io::Result<()> {
-        self.0.try_lock()
+        self.inner.try_lock()?;
+        self.locked.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+impl Drop for File {
+    fn drop(&mut self) {
+        // A concurrent fork can keep an inherited descriptor alive until exec.
+        if *self.locked.get_mut() {
+            let _ = self.inner.unlock();
+        }
     }
 }
 
 impl Read for File {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.read(buf)
+        self.inner.read(buf)
     }
 }
 
 impl Write for File {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.write(buf)
+        self.inner.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.0.flush()
+        self.inner.flush()
     }
 }
 
 impl Seek for File {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.0.seek(pos)
+        self.inner.seek(pos)
     }
 }
 
@@ -279,6 +301,10 @@ impl HostFile for StdFile {
 
     fn try_lock(&self) -> io::Result<()> {
         self.0.try_lock().map_err(io::Error::from)
+    }
+
+    fn unlock(&self) -> io::Result<()> {
+        self.0.unlock()
     }
 }
 
@@ -594,6 +620,27 @@ mod tests {
         fn read_dir_names(&self, dir: &Path) -> io::Result<Option<Vec<std::ffi::OsString>>> {
             StdFs.read_dir_names(dir)
         }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn closing_owner_unlocks_even_with_an_inherited_descriptor() {
+        let path = std::env::temp_dir().join(format!("cmvs-lock-test-{}", std::process::id()));
+        let owner = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let duplicate = owner.try_clone().unwrap();
+        let owner = File::from_host(Box::new(StdFile(owner)));
+        let other = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        owner.try_lock().unwrap();
+        assert!(other.try_lock().is_err());
+        drop(owner);
+        other.try_lock().unwrap();
+        drop(duplicate);
     }
 
     #[test]

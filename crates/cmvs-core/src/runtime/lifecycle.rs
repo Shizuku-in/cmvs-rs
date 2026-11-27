@@ -928,6 +928,13 @@ mod tests {
         );
         assert_eq!(run.save_info.values(), [Some(101), Some(202), Some(303)]);
 
+        assert!(run.thumbnail.take().is_some());
+        assert!(run.save_slot(2).unwrap());
+        run.load_slot(1, &mut backend).unwrap();
+        assert!(run.thumbnail.is_some());
+        run.load_slot(2, &mut backend).unwrap();
+        assert!(run.thumbnail.is_none());
+
         let registered = root.join("data/Saves");
         std::fs::create_dir_all(&registered).unwrap();
         std::fs::copy(user.join("save001.dat"), registered.join("save001.dat")).unwrap();

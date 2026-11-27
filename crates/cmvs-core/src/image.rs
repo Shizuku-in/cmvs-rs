@@ -9,6 +9,7 @@ use crate::{
 use std::{
     collections::{BTreeMap, VecDeque},
     error::Error,
+    fmt,
     path::Path,
     sync::Arc,
 };
@@ -91,11 +92,23 @@ impl DecodeThreads {
     }
 }
 
+#[derive(Debug)]
+struct UnsupportedNextReadCache;
+
+impl fmt::Display for UnsupportedNextReadCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("image source does not implement the next-read cache")
+    }
+}
+
+impl Error for UnsupportedNextReadCache {}
+
 pub trait ImageSource {
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>>;
     /// 0x203f: arm the next image-file read's raw-byte cache lookup/insertion.
+    /// The default reports an unsupported cache. Reference loads can proceed without it.
     fn cache_next_read(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        Err("image source does not implement the next-read cache".into())
+        Err(UnsupportedNextReadCache.into())
     }
     /// Begin a decode read. Sources without caches can use the default implementation.
     fn read_image(
@@ -481,8 +494,11 @@ fn load_inner(
     if chain.len() >= MAX_REFERENCE_DEPTH || chain.contains(&key) {
         return Err("PB3 reference cycle or depth limit exceeded".into());
     }
-    if reference_read {
-        source.cache_next_read()?;
+    if reference_read
+        && let Err(error) = source.cache_next_read()
+        && !error.is::<UnsupportedNextReadCache>()
+    {
+        return Err(error);
     }
     chain.push(key);
     let read = match source.read_image(name)? {

@@ -296,6 +296,26 @@ fn contextual_loader_resolves_nested_references_through_the_same_source() {
 }
 
 #[test]
+fn contextual_loader_resolves_a_reference_without_a_cache() {
+    struct Uncached(Files);
+    impl ImageSource for Uncached {
+        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
+            self.0.read(name)
+        }
+    }
+
+    let mut source = Uncached(Files {
+        files: BTreeMap::from([
+            (b"base.pb3".to_vec(), delta(1, 1, &[[1, 2, 3, 4]])),
+            (b"top.pb3".to_vec(), patch(1, 1, b"base", &[0x80], &[])),
+        ]),
+        ..Files::default()
+    });
+    let got = image::load(&mut source, b"top.pb3").unwrap().unwrap();
+    assert_eq!(got.pixels.pixels(), &[3, 2, 1, 4]);
+}
+
+#[test]
 fn contextual_loader_rejects_cycles_missing_bases_and_deep_chains() {
     let mut source = Files::default();
     source

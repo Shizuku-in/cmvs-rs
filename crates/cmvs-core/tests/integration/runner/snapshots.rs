@@ -937,6 +937,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
 
     // Loading slot 3 first keeps the held image as slot 998, then resumes after 0x22b2
     // with the captured locals, bit 0 included.
+    run.set_random_seed(42);
     run.load_slot(3, &mut backend).unwrap();
     assert_eq!(
         backend.requests().last(),
@@ -958,7 +959,16 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
         );
     }
     if profile.is_some() {
-        assert_eq!(run.scene().particle_effects()[&0].particles.len(), 2);
+        use cmvs_core::{format::system_save::Css1Parameters, host::random::CrtRandom};
+
+        let effect = &run.scene().particle_effects()[&0];
+        assert_eq!(effect.particles.len(), 2);
+        let mut random = CrtRandom::new(42);
+        Css1Parameters::draw(&mut random);
+        let first_x = random.next_value() as f32 / 32767.0 * 120.0
+            + f32::from_bits(effect.parameters[0])
+            - 60.0;
+        assert_eq!(effect.particles[0].words[3], first_x.to_bits());
         assert_eq!(
             run.inspect_snapshot().unwrap().raw_objects[&(0x800, 0)],
             snapshot.raw_objects[&(0x800, 0)]
@@ -1188,6 +1198,88 @@ fn gameplay_saves_need_an_independent_user_directory() {
     let error = run.save_slot(0).unwrap_err();
     assert!(error.to_string().contains("--user-data-dir"), "{error}");
     assert!(!root.0.join("save/save000.dat").exists());
+}
+
+#[test]
+fn slot_loads_validate_before_backup_and_replace_the_thumbnail() {
+    use cmvs_core::format::{
+        save::Csv2Save,
+        snapshot::{EngineSnapshot, SavedImage},
+    };
+
+    let mut code = string_call(0x2160);
+    commands::command(&mut code, 0x201d, &[0x12345678]);
+    commands::command(&mut code, 0x2128, &[]);
+    commands::command(&mut code, 0x2020, &[20]);
+    commands::command(&mut code, 0x22b0, &[8, 8]);
+    commands::command(&mut code, 0x22b8, &[]);
+    let capture_pc = code.len();
+    commands::command(&mut code, 0x22b2, &[]);
+    commands::command(&mut code, 0x2000, &[]);
+    let root = Root::new("load-slot-preflight", &code, b"Synthetic\0");
+    let original_system = auto_resume_save(0x12345678);
+    fs::write(root.0.join("save/system.dat"), &original_system).unwrap();
+    let script = root.script();
+    let game = root.game();
+    let user = crate::support::temp_dir::TempPath::new("load-slot-profile");
+    let mut backend = RecordingBackend::default();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    loop {
+        match run.tick(&mut backend).unwrap() {
+            RuntimeEvent::Progress => {}
+            RuntimeEvent::SnapshotCaptured => break,
+            event => panic!("unexpected {event:?} before the snapshot"),
+        }
+    }
+    assert!(run.save_slot(1).unwrap());
+
+    let raw = fs::read(user.join("save001.dat")).unwrap();
+    let system = fs::read(user.join("system.dat")).unwrap();
+    let save = Csv2Save::decode(&raw).unwrap();
+    let mut snapshot = EngineSnapshot::decode(&save.snapshot).unwrap();
+    snapshot.objects.get_mut(&20).unwrap().image = Some(SavedImage {
+        name: b"absent.pb3".to_vec(),
+        size: [1, 1],
+        filter: None,
+        disabled_filter: [0; 3],
+        surface: None,
+    });
+    let header = raw[..600].try_into().unwrap();
+    let missing =
+        Csv2Save::encode(header, &snapshot.encode().unwrap(), &[], &save.script_image).unwrap();
+    fs::write(user.join("save002.dat"), missing).unwrap();
+    let error = run.load_slot(2, &mut backend).unwrap_err();
+    assert!(error.to_string().contains("absent.pb3"), "{error}");
+    assert_eq!(run.machine().pc(), capture_pc + 2);
+    assert!(!user.join("save998.dat").exists());
+    assert_eq!(fs::read(user.join("system.dat")).unwrap(), system);
+
+    assert!(!save.auxiliary.is_empty());
+    assert_eq!(run.thumbnail(), Some(save.auxiliary.as_slice()));
+    let no_thumbnail = Csv2Save::encode(header, &save.snapshot, &[], &save.script_image).unwrap();
+    fs::write(user.join("save002.dat"), no_thumbnail).unwrap();
+    run.load_slot(2, &mut backend).unwrap();
+    assert!(run.thumbnail().is_none());
+    assert!(run.save_slot(3).unwrap());
+    let rewritten = Csv2Save::decode(&fs::read(user.join("save003.dat")).unwrap()).unwrap();
+    assert!(rewritten.auxiliary.is_empty());
+
+    fs::write(root.0.join("save/save001.dat"), raw).unwrap();
+    let mut read_only = Runtime::new(&script, &root.0, &game, 0).unwrap();
+    while read_only.machine().pc() != capture_pc {
+        assert_eq!(
+            read_only.tick(&mut backend).unwrap(),
+            RuntimeEvent::Progress
+        );
+    }
+    read_only.load_slot(1, &mut backend).unwrap();
+    read_only.load_slot(1, &mut backend).unwrap();
+    assert!(!root.0.join("save/save998.dat").exists());
+    assert_eq!(
+        fs::read(root.0.join("save/system.dat")).unwrap(),
+        original_system
+    );
 }
 
 #[test]

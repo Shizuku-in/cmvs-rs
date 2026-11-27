@@ -17,6 +17,7 @@ use crate::{
         CapturedSave, CvnsLocalVariables, CvnsSnapshot, EngineSnapshot, LocalVariables, SaveImage,
         SavedScene, SavedWindow, SnapshotLayout, cvns::native,
     },
+    system_save::Css1Parameters,
 };
 use std::{collections::BTreeMap, error::Error, io::Write, path::Path, sync::Arc};
 
@@ -631,6 +632,12 @@ impl Runtime {
         }
     }
 
+    fn should_backup_before_load(&self, slot: u16) -> bool {
+        slot < 950
+            && matches!(self.save_image, SaveImage::Captured(_))
+            && matches!(self.system_output, Some(SystemOutput::Profile(_)))
+    }
+
     /// 0x140080b20 without its native overwrite dialog. Returns false when no snapshot was
     /// ever taken, which the original also treats as nothing to write. After a write the
     /// original enters callback 30 (0x140068770) when registered; this title never registers
@@ -795,7 +802,8 @@ impl Runtime {
 
     /// The load 0x22b5 performs, from any point between VM steps: the slot replaces the VM
     /// and every saved host, so where the script stood before does not matter. Slots below
-    /// 950 first save the current snapshot to slot 998 when one exists (0x1400818e0).
+    /// 950 back up the current snapshot to slot 998 if both exist and the profile is writable
+    /// (0x1400818e0).
     pub fn load_slot(
         &mut self,
         slot: u16,
@@ -947,10 +955,7 @@ impl Runtime {
         history.restore(&snapshot.history)?;
         self.platform
             .restored_title(&snapshot.scene_title, self.machine.text_encoding())?;
-        if slot < 950
-            && matches!(self.save_image, SaveImage::Captured(_))
-            && matches!(self.system_output, Some(SystemOutput::Profile(_)))
-        {
+        if self.should_backup_before_load(slot) {
             self.write_slot(LOAD_BACKUP_SLOT, true)?;
         }
         self.machine.install_restore(vm);
@@ -979,9 +984,7 @@ impl Runtime {
         self.messages.restore_cvns(texts, cvns_msg_host);
         let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
         self.save_info.restore([word(528), word(532), word(536)]);
-        if !save.auxiliary.is_empty() {
-            self.thumbnail = Some(save.auxiliary.clone());
-        }
+        self.thumbnail = (!save.auxiliary.is_empty()).then(|| save.auxiliary.clone());
         self.save_image = SaveImage::Captured(Box::new(CapturedSave {
             header: header.try_into().expect("600-byte header"),
             snapshot: save.snapshot.clone(),
@@ -1072,9 +1075,7 @@ impl Runtime {
         };
         let mut vm = self.machine.prepare_restore(&image, callback)?;
         snapshot.variables.apply_to_state(&mut vm.state)?;
-        if slot < 950 && matches!(self.save_image, SaveImage::Captured(_)) {
-            self.write_slot(LOAD_BACKUP_SLOT, true)?;
-        }
+        let backup = self.should_backup_before_load(slot);
         // Candidate hosts first: images, windows and texts must all rebuild.
         let mut budget = crate::snapshot::RESTORE_PIXELS;
         let mut images = self.images.with_paths(self.bootstrap.paths());
@@ -1091,6 +1092,11 @@ impl Runtime {
             return Err("saved particle record layout is not implemented for this profile".into());
         }
         let mut restored_random = self.random.clone();
+        if backup {
+            // Particle restoration consumes RNG after the backup's CSS1 writer.
+            // Reserve the same draws on the candidate without writing the backup yet.
+            Css1Parameters::draw(&mut restored_random);
+        }
         let mut objects = BTreeMap::new();
         for (&slot, saved) in &snapshot.objects {
             objects.insert(slot, saved.load(&mut images, &mut budget)?);
@@ -1179,6 +1185,9 @@ impl Runtime {
         }
         self.platform
             .restored_title(&snapshot.scene_title, self.machine.text_encoding())?;
+        if backup {
+            self.write_slot(LOAD_BACKUP_SLOT, true)?;
+        }
         self.machine.install_restore(vm);
         // Commit the hosts.
         self.discard_dialog(backend);
@@ -1218,9 +1227,7 @@ impl Runtime {
         self.messages.restore(texts, windows);
         let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
         self.save_info.restore([word(528), 0, word(536)]);
-        if !save.auxiliary.is_empty() {
-            self.thumbnail = Some(save.auxiliary.clone());
-        }
+        self.thumbnail = (!save.auxiliary.is_empty()).then(|| save.auxiliary.clone());
         self.save_image = SaveImage::Captured(Box::new(CapturedSave {
             header: header.try_into().expect("600-byte header"),
             snapshot: save.snapshot.clone(),

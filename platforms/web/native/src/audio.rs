@@ -102,6 +102,27 @@ impl Channel {
         compression.at += 1;
         Ok(Some(sample))
     }
+    fn prepare_restart(
+        &self,
+        looped: bool,
+    ) -> Result<(Self, Vec<f32>), Box<dyn Error + Send + Sync>> {
+        let mut candidate = Self::new(self.program.restarted(looped)?, 0);
+        candidate.volume = self.volume;
+        let frames = candidate.program.sample_rate() / 4;
+        let count = frames as usize * usize::from(candidate.program.channels());
+        let mut pcm = Vec::with_capacity(count);
+        for _ in 0..count {
+            match candidate.next()? {
+                Some(sample) => pcm.push(f32::from(sample) / 32768.0),
+                None => {
+                    candidate.drained = true;
+                    break;
+                }
+            }
+        }
+        candidate.sent = pcm.len() as u64;
+        Ok((candidate, pcm))
+    }
     fn pump(&mut self, id: usize) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !self.started || self.drained {
             return Ok(());
@@ -349,24 +370,9 @@ impl AudioBackend for BrowserAudio {
         let Some(current) = &self.slots[id] else {
             return Ok(());
         };
-        let mut candidate = Channel::new(current.program.restarted(looped)?, 0);
-        candidate.volume = current.volume;
         // Decode the initial queue before releasing the old channel, so failures
         // leave its playback and clock intact. No fallible work follows install.
-        let count = candidate.program.sample_rate() as usize
-            * usize::from(candidate.program.channels())
-            / 4;
-        let mut pcm = Vec::with_capacity(count);
-        for _ in 0..count {
-            match candidate.next()? {
-                Some(sample) => pcm.push(f32::from(sample) / 32768.0),
-                None => {
-                    candidate.drained = true;
-                    break;
-                }
-            }
-        }
-        candidate.sent = pcm.len() as u64;
+        let (candidate, pcm) = current.prepare_restart(looped)?;
         self.install(id, Some(candidate), false, 0)?;
         let channel = self.slots[id].as_mut().unwrap();
         begin(
@@ -582,5 +588,39 @@ impl Drop for BrowserAudio {
                 stop(id as u32);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn se_restart_prefills_complete_stereo_frames() {
+        let rate = 22_050u32;
+        let data_len = rate * 4;
+        let mut wave = b"RIFF".to_vec();
+        wave.extend((36 + data_len).to_le_bytes());
+        wave.extend(b"WAVEfmt ");
+        wave.extend(16u32.to_le_bytes());
+        wave.extend(1u16.to_le_bytes()); // PCM
+        wave.extend(2u16.to_le_bytes()); // Stereo
+        wave.extend(rate.to_le_bytes());
+        wave.extend((rate * 4).to_le_bytes());
+        wave.extend(4u16.to_le_bytes()); // Bytes per frame
+        wave.extend(16u16.to_le_bytes()); // Bits per sample
+        wave.extend(b"data");
+        wave.extend(data_len.to_le_bytes());
+        for _ in 0..rate {
+            wave.extend(8192i16.to_le_bytes());
+            wave.extend((-8192i16).to_le_bytes());
+        }
+
+        let current = Channel::new(AudioProgram::new(wave, None, false).unwrap(), 256);
+        let (mut restarted, pcm) = current.prepare_restart(false).unwrap();
+        assert_eq!(pcm.len(), 11_024);
+        assert_eq!(restarted.sent, pcm.len() as u64);
+        assert_eq!(&pcm[pcm.len() - 2..], &[0.25, -0.25]);
+        assert_eq!(restarted.next().unwrap(), Some(8192));
     }
 }

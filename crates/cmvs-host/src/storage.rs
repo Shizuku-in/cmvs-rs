@@ -3,7 +3,7 @@
 use cmvs_core::{format::system_save::ProfileSystemSave, host::filesystem::HostFs};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -59,6 +59,9 @@ mod android_fs {
                 rustix::fs::FlockOperation::NonBlockingLockExclusive,
             )
             .map_err(io::Error::from)
+        }
+        fn unlock(&self) -> io::Result<()> {
+            rustix::fs::flock(&self.0, rustix::fs::FlockOperation::Unlock).map_err(io::Error::from)
         }
     }
 
@@ -146,7 +149,13 @@ pub fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSystemSave
         Err(error) => return Err(error),
     };
     let target = profile.directory();
-    if regular_file(&target.join(IMPORTED))? || !legacy.try_exists()? {
+    let marker = target.join(IMPORTED);
+    if regular_file(&marker)? {
+        // The migrated profile can open while a font backfill waits for a retry.
+        let _ = backfill_font_references(root, legacy, &profile, &marker);
+        return Ok(profile);
+    }
+    if !legacy.try_exists()? {
         return Ok(profile);
     }
     // Hold both locks throughout migration. An active legacy session must not
@@ -158,10 +167,41 @@ pub fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSystemSave
     )?;
     // A deleted local slot must not be resurrected from the old profile at the
     // next launch. Partial failed imports are retried without replacing files.
-    let mut staged = Staged::new(target)?;
-    staged.file.write_all(b"1\n")?;
-    staged.commit(&target.join(IMPORTED))?;
+    mark_imported(target, &marker)?;
     Ok(profile)
+}
+
+fn backfill_font_references(
+    root: &Path,
+    legacy: &Path,
+    profile: &ProfileSystemSave,
+    marker: &Path,
+) -> io::Result<()> {
+    let mut version = Vec::new();
+    File::open(marker)?.take(3).read_to_end(&mut version)?;
+    if version != b"1\n" {
+        return Ok(());
+    }
+
+    let fs = profile.fs().as_ref();
+    let source = fs.canonicalize(legacy)?;
+    if source.starts_with(fs.canonicalize(root)?) {
+        return Err(io::Error::other(
+            "legacy save directory is inside game root",
+        ));
+    }
+    let _lock = ProfileSystemSave::lock_for_export_with_fs(&source, fs)?;
+    let fonts = source.join("font-faces");
+    if fonts.try_exists()? {
+        import_fonts(&fonts, &profile.directory().join("font-faces"), true)?;
+    }
+    mark_imported(profile.directory(), marker)
+}
+
+fn mark_imported(target: &Path, marker: &Path) -> io::Result<()> {
+    let mut staged = Staged::new(target)?;
+    staged.file.write_all(b"2\n")?;
+    staged.commit(marker)
 }
 
 fn import_entries(mut entries: Vec<fs::DirEntry>, target: &Path) -> io::Result<()> {
@@ -177,27 +217,31 @@ fn import_entries(mut entries: Vec<fs::DirEntry>, target: &Path) -> io::Result<(
         if save_file(&name) {
             copy_missing(&entry.path(), &target.join(name.as_ref()))?;
         } else if name == "font-faces" {
-            real_directory(&entry.path())?;
-            let fonts = target.join("font-faces");
-            fs::create_dir_all(&fonts)?;
-            real_directory(&fonts)?;
-            for font in fs::read_dir(entry.path())? {
-                let font = font?;
-                let name = font.file_name();
-                let text = name.to_string_lossy();
-                let hash = if text.len() == 31
-                    && (text.starts_with("CMVS-U-") || text.starts_with("CMVS-F-"))
-                {
-                    Some(&text.as_bytes()[7..])
-                } else if text.len() == 29 && text.starts_with("file-") {
-                    Some(&text.as_bytes()[5..])
-                } else {
-                    None
-                };
-                if hash.is_some_and(|hash| hash.iter().all(u8::is_ascii_hexdigit)) {
-                    copy_missing(&font.path(), &fonts.join(name))?;
-                }
+            import_fonts(&entry.path(), &target.join("font-faces"), false)?;
+        }
+    }
+    Ok(())
+}
+
+fn import_fonts(source: &Path, target: &Path, portable_only: bool) -> io::Result<()> {
+    real_directory(source)?;
+    fs::create_dir_all(target)?;
+    real_directory(target)?;
+    for font in fs::read_dir(source)? {
+        let font = font?;
+        let name = font.file_name();
+        let text = name.to_string_lossy();
+        let hash = text.strip_prefix("CMVS-R-").or_else(|| {
+            if portable_only {
+                return None;
             }
+            ["CMVS-U-", "CMVS-F-", "file-"]
+                .into_iter()
+                .find_map(|prefix| text.strip_prefix(prefix))
+        });
+        if hash.is_some_and(|hash| hash.len() == 24 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            copy_missing(&font.path(), &target.join(name))?;
         }
     }
     Ok(())
@@ -326,7 +370,7 @@ mod tests {
         fs::write(root.savedata().join("save001.dat"), b"new local slot").unwrap();
         let fonts = root.legacy().join("font-faces");
         fs::create_dir(&fonts).unwrap();
-        for prefix in ["CMVS-U-", "CMVS-F-", "file-"] {
+        for prefix in ["CMVS-U-", "CMVS-F-", "CMVS-R-", "file-"] {
             fs::write(
                 fonts.join(format!("{prefix}0123456789abcdef01234567")),
                 b"font mapping",
@@ -356,12 +400,57 @@ mod tests {
             fs::read_dir(root.savedata().join("font-faces"))
                 .unwrap()
                 .count(),
-            3
+            4
         );
         drop(profile);
         fs::remove_file(root.savedata().join("save002.dat")).unwrap();
         let _reopened = game_savedata(&root.game(), &root.legacy()).unwrap();
         assert!(!root.savedata().join("save002.dat").exists());
+    }
+
+    #[test]
+    fn old_migration_backfills_only_missing_portable_font_references() {
+        let root = Fixture::new();
+        let legacy_fonts = root.legacy().join("font-faces");
+        let local_fonts = root.savedata().join("font-faces");
+        fs::create_dir_all(&legacy_fonts).unwrap();
+        fs::create_dir_all(&local_fonts).unwrap();
+        let marker = root.savedata().join(IMPORTED);
+        fs::write(&marker, b"1\n").unwrap();
+        fs::write(root.legacy().join("save002.dat"), b"deleted slot").unwrap();
+        let missing = "CMVS-R-0123456789abcdef01234567";
+        let existing = "CMVS-R-0123456789abcdef76543210";
+        let old_font = "CMVS-F-0123456789abcdef01234567";
+        for name in [missing, existing, old_font] {
+            fs::write(legacy_fonts.join(name), b"legacy font entry").unwrap();
+        }
+        fs::write(local_fonts.join(existing), b"local reference").unwrap();
+
+        let locked = ProfileSystemSave::open(&root.legacy(), &root.game()).unwrap();
+        drop(game_savedata(&root.game(), &root.legacy()).unwrap());
+        assert_eq!(fs::read(&marker).unwrap(), b"1\n");
+        drop(locked);
+
+        fs::write(root.legacy().join("system.bak"), b"orphaned backup").unwrap();
+        let blocked = local_fonts.join(missing);
+        fs::create_dir(&blocked).unwrap();
+        drop(game_savedata(&root.game(), &root.legacy()).unwrap());
+        assert_eq!(fs::read(&marker).unwrap(), b"1\n");
+        fs::remove_dir(blocked).unwrap();
+
+        let _profile = game_savedata(&root.game(), &root.legacy()).unwrap();
+        assert_eq!(fs::read(marker).unwrap(), b"2\n");
+        assert_eq!(
+            fs::read(local_fonts.join(missing)).unwrap(),
+            b"legacy font entry"
+        );
+        assert_eq!(
+            fs::read(local_fonts.join(existing)).unwrap(),
+            b"local reference"
+        );
+        assert!(!local_fonts.join(old_font).exists());
+        assert!(!root.savedata().join("save002.dat").exists());
+        assert!(!root.savedata().join("system.bak").exists());
     }
 
     #[test]

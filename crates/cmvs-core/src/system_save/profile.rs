@@ -159,11 +159,15 @@ impl ProfileSystemSave {
     /// Lock an existing application-owned save directory for a read-only export.
     #[cfg(feature = "std-fs")]
     pub fn lock_for_export(directory: &Path) -> io::Result<File> {
-        let fs = crate::filesystem::default_fs();
+        Self::lock_for_export_with_fs(directory, &*crate::filesystem::default_fs())
+    }
+
+    /// Lock an existing save directory for export without validating its save files.
+    pub fn lock_for_export_with_fs(directory: &Path, fs: &dyn HostFs) -> io::Result<File> {
         if !fs.symlink_metadata(directory)?.is_dir() {
             return Err(io::Error::other("expected a save directory"));
         }
-        Self::lock_directory(directory, &*fs)
+        Self::lock_directory(directory, fs)
     }
 
     fn lock_directory(directory: &Path, fs: &dyn HostFs) -> io::Result<File> {
