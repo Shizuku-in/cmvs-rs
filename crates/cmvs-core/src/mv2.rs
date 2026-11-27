@@ -72,6 +72,12 @@ impl Decoder {
     pub fn new(bytes: Arc<[u8]>) -> Result<Self, FormatError> {
         let header = Header::parse(&bytes)?;
         let channels = usize::from(header.channels);
+        // Each encoded channel starts with a 10-bit count and a 9-bit quantizer.
+        if u64::from(header.frame_count) * channels as u64 * 19
+            > (bytes.len() - HEADER_SIZE) as u64 * 8
+        {
+            return Err(FormatError("truncated MV2X frame headers"));
+        }
         Ok(Self {
             bytes,
             header,
@@ -90,7 +96,9 @@ impl Decoder {
 
     /// Decodes the next frame (up to 320 interleaved sample frames), or `None` at EOF.
     pub fn next_frame(&mut self) -> Result<Option<Vec<i16>>, FormatError> {
-        if self.frame_index >= self.header.frame_count {
+        let produced = u64::from(self.frame_index) * SAMPLES_PER_FRAME as u64;
+        let remaining = u64::from(self.header.samples_per_channel).saturating_sub(produced);
+        if remaining == 0 {
             return Ok(None);
         }
         let channels = usize::from(self.header.channels);
@@ -132,12 +140,7 @@ impl Decoder {
                 );
             }
         }
-        let produced = self.frame_index * (SAMPLES_PER_FRAME as u32);
-        let take = self
-            .header
-            .samples_per_channel
-            .saturating_sub(produced)
-            .min(SAMPLES_PER_FRAME as u32) as usize;
+        let take = remaining.min(SAMPLES_PER_FRAME as u64) as usize;
         self.frame_index += 1;
 
         let shift = 6 - self.header.shift_param;
@@ -161,7 +164,7 @@ impl Decoder {
             buf[..avail].copy_from_slice(&self.bytes[self.cursor..self.cursor + avail]);
             self.cursor += avail;
             self.bit_buf = u32::from_le_bytes(buf);
-            self.bits_left = 32;
+            self.bits_left = (avail * 8) as u8;
         }
         let bit = self.bit_buf & 1;
         self.bit_buf >>= 1;
@@ -193,8 +196,7 @@ impl Decoder {
 pub fn decode(bytes: Arc<[u8]>) -> Result<(Header, Vec<i16>), FormatError> {
     let mut decoder = Decoder::new(bytes)?;
     let header = decoder.header().clone();
-    let total = (header.samples_per_channel as usize) * usize::from(header.channels);
-    let mut pcm = Vec::with_capacity(total);
+    let mut pcm = Vec::new();
     while let Some(frame) = decoder.next_frame()? {
         pcm.extend_from_slice(&frame);
     }
@@ -506,7 +508,16 @@ mod tests {
         assert!(Header::parse(&header(10, 4000, 1, 2, 1)).is_err());
         assert!(Header::parse(&header(10, 22050, 1, 7, 1)).is_err());
         assert!(Header::parse(&header(400, 22050, 1, 2, 1)).is_err());
-        // Valid header with empty payload fails while reading frame bitstream.
-        assert!(decode(Arc::from(header(10, 22050, 1, 2, 1))).is_err());
+        // The header alone is valid, but cannot supply the advertised frame.
+        assert!(Decoder::new(Arc::from(header(10, 22050, 1, 2, 1))).is_err());
+    }
+
+    #[test]
+    fn trailing_encoded_frames_do_not_emit_empty_pcm() {
+        let mut raw = header(1, 22050, 1, 2, 2);
+        raw.extend([0; 5]);
+        let mut decoder = Decoder::new(raw.into()).unwrap();
+        assert_eq!(decoder.next_frame().unwrap().unwrap(), [0]);
+        assert!(decoder.next_frame().unwrap().is_none());
     }
 }

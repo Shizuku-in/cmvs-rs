@@ -517,10 +517,10 @@ fn record_binding(body: &[u8]) -> Result<(u8, [u32; 2]), &'static str> {
                 .unwrap(),
         ))
     };
-    if u16::from_le_bytes([body[0], body[1]]) > 255 || body.get(2..4) != Some(&[2, 0]) {
+    let [object, 0, 2, 0, ..] = *body else {
         return Err("unsupported button record object or version");
-    }
-    Ok((body[0], [word(4)?, word(8)?]))
+    };
+    Ok((object, [word(4)?, word(8)?]))
 }
 
 impl ButtonHost {
@@ -714,6 +714,15 @@ fn argument_names(command: u16) -> &'static [&'static str] {
 #[cfg(test)]
 mod pointer_scale_tests {
     use super::*;
+
+    #[test]
+    fn truncated_binding_fails_for_groups_and_lists() {
+        let mut host = ButtonHost::default();
+        for body in [&[][..], &[0]] {
+            assert!(host.restore(&[(0, body)], &[]).is_err());
+            assert!(host.restore(&[], &[(0, body)]).is_err());
+        }
+    }
 
     fn group(pointer_scale: Option<[u32; 4]>) -> ButtonGroup {
         let button = |id, rect| Button {

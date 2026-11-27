@@ -8,7 +8,7 @@ use crate::{
     dispatch::RuntimeCall,
     evaluate::error,
     message::{MESSAGE_WINDOWS, TEXT_OBJECTS},
-    platform::PlatformBackend,
+    platform::{MAX_THUMBNAIL_DIMENSION, PlatformBackend},
     raster::RgbaImage,
     save::{Csv2Save, HEADER_SIZE},
     save_menu::{SaveFamily, SaveHeader},
@@ -76,8 +76,14 @@ fn label_time(time: SaveTime) -> String {
 
 /// 0x14006b4a0: a 24-bit bottom-up BMP of `width` x `height`. Each pixel averages the
 /// integer box `(source << 10) / target >> 10` from the 10-bit fixed-point source position,
-/// skipping samples past the source edge; channels divide as integers.
+/// skipping samples past the source edge; channels divide as integers. An enlarged axis
+/// uses nearest-neighbor sampling. Disabled or unsupported sizes produce no BMP.
 pub fn thumbnail_bmp(frame: &RgbaImage, width: u32, height: u32) -> Vec<u8> {
+    if !(1..=MAX_THUMBNAIL_DIMENSION).contains(&width)
+        || !(1..=MAX_THUMBNAIL_DIMENSION).contains(&height)
+    {
+        return Vec::new();
+    }
     let (src_w, src_h) = (frame.width(), frame.height());
     let row = ((3 * width + 3) & !3) as usize;
     let size = 54 + row * height as usize;
@@ -91,15 +97,22 @@ pub fn thumbnail_bmp(frame: &RgbaImage, width: u32, height: u32) -> Vec<u8> {
     out[26..28].copy_from_slice(&1u16.to_le_bytes());
     out[28..30].copy_from_slice(&24u16.to_le_bytes());
     out[34..38].copy_from_slice(&((row * height as usize) as u32).to_le_bytes());
-    let step_x = (src_w << 10) / width.max(1);
-    let step_y = (src_h << 10) / height.max(1);
-    let (box_w, box_h) = (step_x >> 10, step_y >> 10);
+    let step_x = (u64::from(src_w) << 10) / u64::from(width);
+    let step_y = (u64::from(src_h) << 10) / u64::from(height);
+    let (box_w, box_h) = ((src_w / width).max(1), (src_h / height).max(1));
+    let source = |i, step: u64, src, dst| {
+        if src < dst {
+            (u64::from(i) * u64::from(src) / u64::from(dst)) as u32
+        } else {
+            ((u64::from(i) * step) >> 10) as u32
+        }
+    };
     let pixels = frame.pixels();
     for y in 0..height {
-        let source_y = (y * step_y) >> 10;
+        let source_y = source(y, step_y, src_h, height);
         let line = 54 + row * (height - 1 - y) as usize;
         for x in 0..width {
-            let source_x = (x * step_x) >> 10;
+            let source_x = source(x, step_x, src_w, width);
             let (mut sum, mut count) = ([0u32; 3], 0u32);
             for dy in 0..box_h {
                 for dx in 0..box_w {
@@ -139,12 +152,17 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
         return Err("thumbnail is not an uncompressed 24-bit BMP");
     }
     let (offset, width, height) = (word(10)? as usize, word(18)?, word(22)?);
-    if width == 0 || height == 0 || width > 4096 || height > 4096 {
+    if width == 0
+        || height == 0
+        || width > MAX_THUMBNAIL_DIMENSION
+        || height > MAX_THUMBNAIL_DIMENSION
+    {
         return Err("thumbnail BMP size is out of range");
     }
     let row = ((3 * width + 3) & !3) as usize;
     let data = bytes
-        .get(offset..offset + row * height as usize)
+        .get(offset..)
+        .and_then(|data| data.get(..row * height as usize))
         .ok_or("truncated BMP pixels")?;
     let mut rgba = Vec::with_capacity(4 * (width * height) as usize);
     for y in 0..height as usize {
@@ -1167,7 +1185,12 @@ impl Runtime {
             }
         }
         let mut history = self.history.clone();
-        history.restore(&snapshot.raw_objects[&(0x540, 0)])?;
+        history.restore(
+            snapshot
+                .raw_objects
+                .get(&(0x540, 0))
+                .ok_or("missing history snapshot record")?,
+        )?;
         let mut sequence = self.sequence.clone();
         if layout.old_tables() {
             sequence = crate::sequence::SequenceHost::default();
@@ -1253,6 +1276,11 @@ impl Runtime {
             .platform
             .thumbnail()
             .ok_or("thumbnail size (0x22b0) was never configured")?;
+        if !config.enabled {
+            request.complete(&mut self.machine, 0x4000)?;
+            self.thumbnail = None;
+            return Ok(());
+        }
         let frame = match self.capture.image() {
             Some(image) => image.clone(),
             None => self.render_frame()?,
@@ -1561,6 +1589,22 @@ fn replace_file(
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn enlarged_thumbnail_samples_each_source_pixel() {
+        let frame = RgbaImage::new(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]).unwrap();
+        let bmp = thumbnail_bmp(&frame, 4, 2);
+        let decoded = decode_bmp(&bmp).unwrap();
+        for row in decoded.pixels().as_chunks::<16>().0 {
+            assert_eq!(
+                *row,
+                [
+                    255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255
+                ]
+            );
+        }
+        assert!(thumbnail_bmp(&frame, MAX_THUMBNAIL_DIMENSION + 1, 1).is_empty());
+    }
 
     #[test]
     fn unix_seconds_map_to_utc_civil_fields() {

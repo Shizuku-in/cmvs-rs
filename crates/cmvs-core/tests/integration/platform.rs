@@ -1244,30 +1244,9 @@ fn thumbnail_argument_order_is_retained_and_gesture_commands_are_not_platform() 
     );
     assert_eq!(host.thumbnail(), None);
     let mut code = vec![];
-    for value in [108u32, 192] {
-        code.extend(0x442u16.to_le_bytes());
-        code.extend(4u16.to_le_bytes());
-        code.extend(value.to_le_bytes());
-    }
-    code.extend(0x22b0u16.to_le_bytes());
-    let mut raw = b"PS2A".to_vec();
-    for v in [
-        48u32,
-        0,
-        0,
-        0,
-        code.len() as u32,
-        0,
-        0,
-        0,
-        0,
-        code.len() as u32,
-        0,
-    ] {
-        raw.extend(v.to_le_bytes());
-    }
-    raw.extend(code.into_iter().map(|b| b.rotate_left(1).wrapping_add(124)));
-    let image = Script::decode(&raw).unwrap();
+    bytecode::command(&mut code, 0x22b0, &[192, 108]);
+    bytecode::command(&mut code, 0x22b0, &[1, 4097]);
+    let image = bytecode::script(&code);
     let mut vm = Machine::new(&image).unwrap();
     pending(&mut vm);
     host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
@@ -1281,6 +1260,14 @@ fn thumbnail_argument_order_is_retained_and_gesture_commands_are_not_platform() 
         })
     );
     assert_eq!(vm.stack().len_bytes(), 0);
+    let config = host.thumbnail();
+    pending(&mut vm);
+    assert!(
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
+            .is_err()
+    );
+    assert_eq!(host.thumbnail(), config);
+    assert_eq!(vm.stack().len_bytes(), 8);
     assert!(backend.requests().is_empty());
     let gesture = script(&[(0x2350, 1)], b"");
     let mut vm = Machine::new(&gesture).unwrap();

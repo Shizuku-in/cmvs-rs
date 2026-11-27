@@ -234,7 +234,7 @@ fn pb3_types2_and3_crop_padded_rows_and_fill_alpha() {
             }
         }
         // 32 bits: alpha runs of 0xff/0x00 with counts and stand-alone literals.
-        let mut alpha = vec![0xff, 150, 0x40, 0x00, 48, 0x80];
+        let mut alpha = vec![0xff, 150, 0x40, 0x00, 48, 0xff, 0, 0x80];
         let decoded = image::decode(&pb3_file(kind, 20, 10, 32, &jbp, &alpha))
             .unwrap()
             .unwrap();
@@ -258,6 +258,12 @@ fn pb3_types2_and3_crop_padded_rows_and_fill_alpha() {
 fn malformed_streams_are_rejected() {
     let good = stream(16, 16, &mcu([0; 6]), FLAGS);
     assert!(jbp1::decode(&good).is_ok());
+    let mut oversized = good.clone();
+    oversized[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(
+        jbp1::decode(&oversized).unwrap_err().0,
+        "unsupported JBP1 dimensions or bit depth"
+    );
     // Unverified flags (here 4:4:4, mode 0).
     assert!(jbp1::decode(&stream(16, 16, &mcu([0; 6]), 0x48c0_0002)).is_err());
     // Luma level 400 indexes 784, past the 768-byte clamp table.

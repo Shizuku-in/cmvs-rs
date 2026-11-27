@@ -317,6 +317,9 @@ fn cvns_sprintf(
         let mut width = 0usize;
         while let Some(&digit @ b'0'..=b'9') = pattern.get(i) {
             width = width * 10 + usize::from(digit - b'0');
+            if width >= 1024 || (fullwidth && width >= 512) {
+                return Err("format width exceeds the string slot");
+            }
             i += 1;
         }
         let mut formatted = Vec::new();
@@ -368,6 +371,7 @@ fn cvns_sprintf(
                 };
                 formatted.extend_from_slice(s.as_bytes());
             }
+            b'c' if value as u8 == 0 => return Err("cannot store a NUL in a string slot"),
             b'c' => formatted.push(value as u8),
             b's' => {
                 let s = resolve_str(value).map_err(|_| "failed to resolve %s string argument")?;

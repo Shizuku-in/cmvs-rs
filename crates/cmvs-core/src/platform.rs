@@ -621,6 +621,7 @@ pub struct ThumbnailConfig {
     pub height: u32,
     pub enabled: bool,
 }
+pub(crate) const MAX_THUMBNAIL_DIMENSION: u32 = 4096;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformEvent {
     Yield,
@@ -1006,6 +1007,9 @@ impl PlatformHost {
         let arg = call.argument(4, argument_names(command)[0])?;
         if command == 0x2b0 {
             let height = call.argument(8, argument_names(command)[1])?;
+            if arg > MAX_THUMBNAIL_DIMENSION || height > MAX_THUMBNAIL_DIMENSION {
+                return Err(error(pc, 0x22b0, "thumbnail dimensions exceed BMP limit").into());
+            }
             call.complete(0x4008)?;
             self.thumbnail = Some(ThumbnailConfig {
                 width: arg,

@@ -406,6 +406,7 @@ pub(crate) fn apply_jbp1_alpha(
     let mut at = 0;
     let mut pixel = 0;
     let total = width * height;
+    let pixels = pixels.as_chunks_mut::<4>().0;
     while pixel < total {
         let value = *stream
             .get(at)
@@ -423,11 +424,8 @@ pub(crate) fn apply_jbp1_alpha(
         if count > total - pixel {
             return Err(FormatError("PB3 JBP1 alpha run passes the last pixel"));
         }
-        for alpha in pixels[pixel * 4 + 3..(pixel + count) * 4]
-            .iter_mut()
-            .step_by(4)
-        {
-            *alpha = value;
+        for rgba in &mut pixels[pixel..pixel + count] {
+            rgba[3] = value;
         }
         pixel += count;
     }

@@ -456,8 +456,8 @@ fn draw_sprite<'a>(
             sy: sprite.src_rect[1],
             ex: sprite.src_rect[2],
             ey: sprite.src_rect[3],
-            dx: sprite.x - sprite.origin_x,
-            dy: sprite.y - sprite.origin_y,
+            dx: sprite.x.saturating_sub(sprite.origin_x),
+            dy: sprite.y.saturating_sub(sprite.origin_y),
             alpha: sprite.alpha,
         };
         draw_image_tile(
@@ -478,24 +478,26 @@ fn draw_solid_rect(
     shade: ShadeParams,
 ) {
     let rgb = unpack_rgb(color);
-    let sw = sprite.src_rect[2] - sprite.src_rect[0];
-    let sh = sprite.src_rect[3] - sprite.src_rect[1];
+    let [sx, sy, ex, ey] = sprite.src_rect.map(i64::from);
+    let (sw, sh) = (ex - sx, ey - sy);
     if sw <= 0 || sh <= 0 || sprite.scale_x == 0 || sprite.scale_y == 0 {
         return;
     }
-    let dx0 = qoff[0] + (sprite.x - sprite.origin_x * sprite.scale_x / 1000);
-    let dy0 = qoff[1] + (sprite.y - sprite.origin_y * sprite.scale_y / 1000);
-    let dw = sw * sprite.scale_x / 1000;
-    let dh = sh * sprite.scale_y / 1000;
+    let dx0 = i64::from(qoff[0]) + i64::from(sprite.x)
+        - i64::from(sprite.origin_x) * i64::from(sprite.scale_x) / 1000;
+    let dy0 = i64::from(qoff[1]) + i64::from(sprite.y)
+        - i64::from(sprite.origin_y) * i64::from(sprite.scale_y) / 1000;
+    let dw = sw * i64::from(sprite.scale_x) / 1000;
+    let dh = sh * i64::from(sprite.scale_y) / 1000;
     let x0 = dx0.max(0);
     let y0 = dy0.max(0);
-    let x1 = (dx0 + dw).min(fb_w);
-    let y1 = (dy0 + dh).min(fb_h);
+    let x1 = (dx0 + dw).min(i64::from(fb_w));
+    let y1 = (dy0 + dh).min(i64::from(fb_h));
     if x1 <= x0 || y1 <= y0 {
         return;
     }
     queue.push(Layer::Cvns(Draw {
-        bounds: [x0, y0, x1, y1],
+        bounds: [x0, y0, x1, y1].map(|v| v as i32),
         shade,
         source: Source::Solid(rgb),
     }));
@@ -546,57 +548,40 @@ fn draw_rgba_tile<'a>(
     trans_mask: Option<&'a CvnsMaskTransition>,
     slot_mask: Option<&'a RgbaImage>,
 ) {
-    let iw = img.width() as i32;
-    let ih = img.height() as i32;
-    let mut sx0 = tile.sx;
-    let mut sy0 = tile.sy;
-    let mut sx1 = tile.ex;
-    let mut sy1 = tile.ey;
-    let mut dx0 = qoff[0] + tile.dx;
-    let mut dy0 = qoff[1] + tile.dy;
-    let mut dx1 = dx0 + (sx1 - sx0);
-    let mut dy1 = dy0 + (sy1 - sy0);
-
-    if sx0 < 0 {
-        dx0 -= sx0;
-        sx0 = 0;
-    }
-    if sy0 < 0 {
-        dy0 -= sy0;
-        sy0 = 0;
-    }
-    if sx1 > iw {
-        dx1 -= sx1 - iw;
-        sx1 = iw;
-    }
-    if sy1 > ih {
-        dy1 -= sy1 - ih;
-        sy1 = ih;
-    }
-    if dx0 < 0 {
-        sx0 -= dx0;
-        dx0 = 0;
-    }
-    if dy0 < 0 {
-        sy0 -= dy0;
-        dy0 = 0;
-    }
-    if dx1 > fb_w {
-        sx1 -= dx1 - fb_w;
-        dx1 = fb_w;
-    }
-    if dy1 > fb_h {
-        sy1 -= dy1 - fb_h;
-        dy1 = fb_h;
-    }
-    let cw = (sx1 - sx0).min(dx1 - dx0);
-    let ch = (sy1 - sy0).min(dy1 - dy0);
-    if cw <= 0 || ch <= 0 {
+    // Intersect both rectangles at the same offset, before narrowing pixel coordinates.
+    let clip = |start: i32, end: i32, dest: i64, image: u32, screen: i32| {
+        let start = i64::from(start);
+        let first = 0.max(-start).max(-dest);
+        let last = (i64::from(end).min(i64::from(image)) - start).min(i64::from(screen) - dest);
+        (first < last).then(|| {
+            (
+                (start + first) as i32,
+                (dest + first) as i32,
+                (dest + last) as i32,
+            )
+        })
+    };
+    let Some((sx0, dx0, dx1)) = clip(
+        tile.sx,
+        tile.ex,
+        i64::from(tile.dx) + i64::from(qoff[0]),
+        img.width(),
+        fb_w,
+    ) else {
         return;
-    }
+    };
+    let Some((sy0, dy0, dy1)) = clip(
+        tile.sy,
+        tile.ey,
+        i64::from(tile.dy) + i64::from(qoff[1]),
+        img.height(),
+        fb_h,
+    ) else {
+        return;
+    };
     if shade.alpha != 0 || trans_mask.is_some() {
         queue.push(Layer::Cvns(Draw {
-            bounds: [dx0, dy0, dx0 + cw, dy0 + ch],
+            bounds: [dx0, dy0, dx1, dy1],
             shade,
             source: Source::Tile {
                 image: img,
@@ -659,22 +644,7 @@ fn render_tile(
                 let mx = sx.min(mt.width.saturating_sub(1) as usize);
                 let my = sy.min(mt.height.saturating_sub(1) as usize);
                 let m_val = mt.mask[my * mt.width as usize + mx];
-                let thresh = mt.thresholds[usize::from(m_val)];
-                let mask_alpha = if mt.reveal {
-                    if mt.elapsed_ms < thresh {
-                        0
-                    } else if mt.ramp_ms > 0 && mt.elapsed_ms < mt.ramp_ms + thresh {
-                        (((mt.elapsed_ms - thresh) << 8) / mt.ramp_ms).min(256) as u16
-                    } else {
-                        256
-                    }
-                } else if mt.elapsed_ms < thresh {
-                    256
-                } else if mt.ramp_ms > 0 && mt.elapsed_ms < mt.ramp_ms + thresh {
-                    (255u32.saturating_sub(255 * (mt.elapsed_ms - thresh) / mt.ramp_ms)) as u16
-                } else {
-                    0
-                };
+                let mask_alpha = mt.alpha_at(m_val);
                 if mask_alpha != 0 {
                     let mut m_shade = shade;
                     m_shade.alpha = mask_alpha;
@@ -788,8 +758,8 @@ fn draw_rgba_transformed<'a>(
     let mut base_u: i64;
     let mut base_v: i64;
     if rotation == 0 {
-        dst_left = qoff[0] + (piv_x - scale_x * origin_x / 1000);
-        dst_top = qoff[1] + (piv_y - scale_y * origin_y / 1000);
+        dst_left = qoff[0].saturating_add(piv_x - scale_x * origin_x / 1000);
+        dst_top = qoff[1].saturating_add(piv_y - scale_y * origin_y / 1000);
         dst_w = sw * scale_x / 1000;
         dst_h = sh * scale_y / 1000;
         step_xx = (1_024_000 / scale_x.max(1)) as i64;
@@ -845,24 +815,24 @@ fn draw_rgba_transformed<'a>(
             (i64::from(sw / 2) << 10) + cos_r * i64::from(-(bw / 2)) - sin_r * i64::from(-(bh / 2));
         base_v =
             (i64::from(sh / 2) << 10) + cos_r * i64::from(-(bh / 2)) + sin_r * i64::from(-(bw / 2));
-        dst_left = qoff[0] + piv_x - avg_scale * (piv_x - min_x) / 1000;
-        dst_top = qoff[1] + piv_y - avg_scale * (piv_y - min_y) / 1000;
+        dst_left = qoff[0].saturating_add(piv_x - avg_scale * (piv_x - min_x) / 1000);
+        dst_top = qoff[1].saturating_add(piv_y - avg_scale * (piv_y - min_y) / 1000);
         dst_w = avg_scale * bw / 1000 + 1;
         dst_h = avg_scale * bh / 1000 + 1;
     }
 
     let mut x0 = dst_left;
     let mut y0 = dst_top;
-    let x1 = (dst_left + dst_w).min(fb_w);
-    let y1 = (dst_top + dst_h).min(fb_h);
+    let x1 = dst_left.saturating_add(dst_w).min(fb_w);
+    let y1 = dst_top.saturating_add(dst_h).min(fb_h);
     let mut clip_x = 0i64;
     let mut clip_y = 0i64;
     if x0 < 0 {
-        clip_x = i64::from(-x0);
+        clip_x = -i64::from(x0);
         x0 = 0;
     }
     if y0 < 0 {
-        clip_y = i64::from(-y0);
+        clip_y = -i64::from(y0);
         y0 = 0;
     }
     if x1 <= x0 || y1 <= y0 {

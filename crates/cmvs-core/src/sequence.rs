@@ -581,7 +581,7 @@ impl SequenceHost {
                     duration: at(76),
                     pc: 0,
                 }),
-                (3, 0) => Some(SequenceEntry::ReplaceImage {
+                (3, 0) if name.len() < 64 => Some(SequenceEntry::ReplaceImage {
                     slot: at(8),
                     name: name.to_vec(),
                     duration: at(76),
@@ -604,6 +604,9 @@ impl SequenceHost {
                 _ => return Err("saved sequence entry type is not modeled"),
             };
         }
+        if entries[..header.count as usize].iter().any(Option::is_none) {
+            return Err("missing entry in saved sequence");
+        }
         if header.active != 0 && header.count != 0 {
             header.start = self.clock.wrapping_sub(header.waited);
         }
@@ -616,6 +619,16 @@ impl SequenceHost {
 #[cfg(test)]
 mod motion_snapshot_tests {
     use super::*;
+    #[test]
+    fn restore_requires_a_complete_sequence_prefix() {
+        let mut host = SequenceHost::default();
+        host.header.count = 1;
+        let mut record = host.saved().unwrap();
+        assert!(SequenceHost::default().restore(&record).is_err());
+        record[22..26].copy_from_slice(&3u32.to_le_bytes());
+        record[34..98].fill(b'a');
+        assert!(SequenceHost::default().restore(&record).is_err());
+    }
     #[test]
     fn window_sequence_defers_io_retries_failures_and_finishes_without_a_transition() {
         use crate::{

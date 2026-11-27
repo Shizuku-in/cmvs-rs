@@ -133,7 +133,9 @@ pub fn decode(data: &[u8]) -> Result<Jbp1, FormatError> {
     let padded_height = usize::from(height).next_multiple_of(16);
     if width == 0
         || height == 0
-        || padded_width * padded_height > MAX_PAYLOAD / 4
+        || padded_width
+            .checked_mul(padded_height)
+            .is_none_or(|n| n > MAX_PAYLOAD / 4)
         || word(data, 20)? != 24
     {
         return Err(FormatError("unsupported JBP1 dimensions or bit depth"));

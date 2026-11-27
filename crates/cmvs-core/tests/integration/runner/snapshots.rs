@@ -1238,6 +1238,19 @@ fn slot_loads_validate_before_backup_and_replace_the_thumbnail() {
     let system = fs::read(user.join("system.dat")).unwrap();
     let save = Csv2Save::decode(&raw).unwrap();
     let mut snapshot = EngineSnapshot::decode(&save.snapshot).unwrap();
+    let header = raw[..600].try_into().unwrap();
+    let history = snapshot.raw_objects.remove(&(0x540, 0)).unwrap();
+    let incomplete =
+        Csv2Save::encode(header, &snapshot.encode().unwrap(), &[], &save.script_image).unwrap();
+    fs::write(user.join("save002.dat"), incomplete).unwrap();
+    assert!(
+        run.load_slot(2, &mut backend)
+            .unwrap_err()
+            .to_string()
+            .contains("missing history")
+    );
+    assert_eq!(run.machine().pc(), capture_pc + 2);
+    snapshot.raw_objects.insert((0x540, 0), history);
     snapshot.objects.get_mut(&20).unwrap().image = Some(SavedImage {
         name: b"absent.pb3".to_vec(),
         size: [1, 1],
@@ -1245,7 +1258,6 @@ fn slot_loads_validate_before_backup_and_replace_the_thumbnail() {
         disabled_filter: [0; 3],
         surface: None,
     });
-    let header = raw[..600].try_into().unwrap();
     let missing =
         Csv2Save::encode(header, &snapshot.encode().unwrap(), &[], &save.script_image).unwrap();
     fs::write(user.join("save002.dat"), missing).unwrap();

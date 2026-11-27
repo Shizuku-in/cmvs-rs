@@ -912,6 +912,10 @@ impl CameraSnapshotFormat {
         if words.len() != expected {
             return Err("camera record length disagrees with its mode");
         }
+        // The low three bytes select linear (0) or eased (1) motion for each axis.
+        if body == 31 && words[18] != 0 && words[19] & 0x00fe_fefe != 0 {
+            return Err("unsupported saved camera interpolation mode");
+        }
         let camera = &mut camera.words;
         camera[37..40].copy_from_slice(&words[..3]);
         if body != 0 {
@@ -972,6 +976,25 @@ fn argument_names(command: u16) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v3_restore_rejects_unknown_axis_modes_before_replacing_camera() {
+        let mut source = Camera::default();
+        source.words[39] = 1;
+        source.words[MOVING] = 1;
+        let mut target = Camera::default();
+        let original = target.words;
+        for shift in [0, 8, 16] {
+            source.words[22] = 2 << shift;
+            let record = CameraSnapshotFormat::V3.encode(&source);
+            assert!(
+                CameraSnapshotFormat::V3
+                    .restore(&mut target, &record)
+                    .is_err()
+            );
+            assert_eq!(target.words, original);
+        }
+    }
 
     #[test]
     fn puriring_projects_type_one_and_saves_native_v1_camera() {

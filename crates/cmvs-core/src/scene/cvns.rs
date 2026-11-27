@@ -827,8 +827,8 @@ impl CvnsCurtain {
         let sy0 = sprite.src_rect[1];
         let sw = sprite.w.max(0);
         let sh = sprite.h.max(0);
-        let dx0 = sprite.x - sprite.origin_x;
-        let dy0 = sprite.y - sprite.origin_y;
+        let dx0 = sprite.x.saturating_sub(sprite.origin_x);
+        let dy0 = sprite.y.saturating_sub(sprite.origin_y);
         if self.mode == 764 || self.mode == 765 {
             let amp = self.speed;
             let freq = self.band_size.max(1);
@@ -842,21 +842,21 @@ impl CvnsCurtain {
                 let tile = if self.mode == 764 {
                     CvnsCurtainTile {
                         sx: sx0,
-                        sy: sy0 + i,
-                        ex: sx0 + sw,
-                        ey: sy0 + i + 1,
-                        dx: dx0 + off,
-                        dy: dy0 + i,
+                        sy: sy0.saturating_add(i),
+                        ex: sx0.saturating_add(sw),
+                        ey: sy0.saturating_add(i + 1),
+                        dx: dx0.saturating_add(off),
+                        dy: dy0.saturating_add(i),
                         alpha: sprite.alpha,
                     }
                 } else {
                     CvnsCurtainTile {
-                        sx: sx0 + i,
+                        sx: sx0.saturating_add(i),
                         sy: sy0,
-                        ex: sx0 + i + 1,
-                        ey: sy0 + sh,
-                        dx: dx0 + i,
-                        dy: dy0 + off,
+                        ex: sx0.saturating_add(i + 1),
+                        ey: sy0.saturating_add(sh),
+                        dx: dx0.saturating_add(i),
+                        dy: dy0.saturating_add(off),
                         alpha: sprite.alpha,
                     }
                 };
@@ -872,16 +872,21 @@ impl CvnsCurtain {
             self.tiles.push(CvnsCurtainTile {
                 sx: sx0,
                 sy: sy0,
-                ex: sx0 + sw,
-                ey: sy0 + sh,
+                ex: sx0.saturating_add(sw),
+                ey: sy0.saturating_add(sh),
                 dx: dx0,
                 dy: dy0,
-                alpha: ((u32::from(sprite.alpha) * prog) / dur) as u16,
+                alpha: (u64::from(sprite.alpha) * u64::from(prog) / u64::from(dur)) as u16,
             });
             return;
         }
         let b = self.band_size.max(1);
-        let step_num = (self.steps * t / dur) as i32;
+        let step_num = (u64::from(self.steps) * u64::from(t) / u64::from(dur)) as i64;
+        let band_extent = |idx: i32| {
+            let delayed = step_num - i64::from(idx) / i64::from(self.delay_step);
+            let extent = (delayed * i64::from(self.speed)).clamp(0, i64::from(b)) as i32;
+            if hide { b - extent } else { extent }
+        };
         if self.rows == 1 {
             for col in 0..self.cols as i32 {
                 let idx = if matches!(self.mode & 0xff, 3 | 7) {
@@ -889,20 +894,15 @@ impl CvnsCurtain {
                 } else {
                     self.cols as i32 - 1 - col
                 };
-                let mut w = (step_num - idx / self.delay_step as i32) * self.speed;
-                w = w.clamp(0, b);
-                if hide {
-                    w = (b - w).max(0);
-                }
-                let x = (col * b).min(sw);
-                let ex = (x + w).min(sw);
+                let x = col.saturating_mul(b).min(sw);
+                let ex = x.saturating_add(band_extent(idx)).min(sw);
                 if ex > x {
                     self.tiles.push(CvnsCurtainTile {
-                        sx: sx0 + x,
+                        sx: sx0.saturating_add(x),
                         sy: sy0,
-                        ex: sx0 + ex,
-                        ey: sy0 + sh,
-                        dx: dx0 + x,
+                        ex: sx0.saturating_add(ex),
+                        ey: sy0.saturating_add(sh),
+                        dx: dx0.saturating_add(x),
                         dy: dy0,
                         alpha: sprite.alpha,
                     });
@@ -915,21 +915,16 @@ impl CvnsCurtain {
                 } else {
                     self.rows as i32 - 1 - row
                 };
-                let mut h = (step_num - idx / self.delay_step as i32) * self.speed;
-                h = h.clamp(0, b);
-                if hide {
-                    h = (b - h).max(0);
-                }
-                let y = (row * b).min(sh);
-                let ey = (y + h).min(sh);
+                let y = row.saturating_mul(b).min(sh);
+                let ey = y.saturating_add(band_extent(idx)).min(sh);
                 if ey > y {
                     self.tiles.push(CvnsCurtainTile {
                         sx: sx0,
-                        sy: sy0 + y,
-                        ex: sx0 + sw,
-                        ey: sy0 + ey,
+                        sy: sy0.saturating_add(y),
+                        ex: sx0.saturating_add(sw),
+                        ey: sy0.saturating_add(ey),
                         dx: dx0,
-                        dy: dy0 + y,
+                        dy: dy0.saturating_add(y),
                         alpha: sprite.alpha,
                     });
                 }
@@ -941,7 +936,7 @@ impl CvnsCurtain {
         self.elapsed_ms = self.elapsed_ms.saturating_add(delta_ms);
         if self.mode == 764 || self.mode == 765 {
             if self.elapsed_ms >= self.interval_ms {
-                self.wave_phase = (self.wave_phase + self.delay_step) % 720;
+                self.wave_phase = (self.wave_phase + self.delay_step % 720) % 720;
                 self.elapsed_ms = 0;
             }
             self.update_tiles(sprite);
@@ -1026,13 +1021,32 @@ impl CvnsMaskTransition {
     pub(crate) fn compute_thresholds(duration_ms: u32) -> [u32; 256] {
         let mut thresholds = [0u32; 256];
         for (i, slot) in thresholds.iter_mut().enumerate() {
-            *slot = (i as u32 * duration_ms) / 255;
+            *slot = (i as u64 * u64::from(duration_ms) / 255) as u32;
         }
         thresholds
     }
 
     pub fn total_ms(&self) -> u32 {
         self.duration_ms.saturating_add(self.ramp_ms)
+    }
+
+    pub(crate) fn alpha_at(&self, mask: u8) -> u16 {
+        let Some(elapsed) = self
+            .elapsed_ms
+            .checked_sub(self.thresholds[usize::from(mask)])
+        else {
+            return if self.reveal { 0 } else { 256 };
+        };
+        if elapsed >= self.ramp_ms {
+            return if self.reveal { 256 } else { 0 };
+        }
+        let elapsed = u64::from(elapsed);
+        let ramp = u64::from(self.ramp_ms);
+        if self.reveal {
+            (256 * elapsed / ramp) as u16
+        } else {
+            255 - (255 * elapsed / ramp) as u16
+        }
     }
 
     pub fn remaining(&self) -> u32 {
@@ -1132,31 +1146,28 @@ impl CvnsQuake {
         if self.paused {
             return false;
         }
-        self.elapsed_ms = self.elapsed_ms.saturating_add(delta_ms);
         let interval = self.interval_ms.max(1);
+        let elapsed = u64::from(self.elapsed_ms) + u64::from(delta_ms);
+        let steps = (elapsed / u64::from(interval)) as i64;
+        self.elapsed_ms = (elapsed % u64::from(interval)) as u32;
+        let next_step = i64::from(self.step_count) + steps;
+        if steps != 0 && self.count != -1 && next_step > i64::from(self.count.saturating_add(1)) {
+            return true;
+        }
+        self.step_count = next_step.min(i64::from(i32::MAX)) as i32;
         let amp = self.amplitude;
-        let mut finished = false;
         if (self.kind & 0xf00) != 0 {
-            while self.elapsed_ms >= interval {
-                if self.count != -1 && self.count < self.step_count {
-                    finished = true;
-                }
-                self.elapsed_ms -= interval;
-                self.phase = (self.phase + 1) % 2;
-                self.step_count += 1;
-            }
-            let pos = if amp != 0 {
-                (self.elapsed_ms as i32 * 2 * amp) / interval as i32
-            } else {
-                0
-            };
+            self.phase ^= (steps & 1) as u32;
+            let pos =
+                (i128::from(self.elapsed_ms) * 2 * i128::from(amp) / i128::from(interval)) as i64;
+            let amp = i64::from(amp);
             let v = if self.phase != 0 {
                 if pos >= amp { amp - (pos - amp) } else { pos }
             } else if pos >= amp {
                 pos - amp - amp
             } else {
                 -pos
-            };
+            } as i32;
             if (self.kind & 0xf0) == 0 {
                 self.offset_x = v;
                 self.offset_y = 0;
@@ -1165,19 +1176,18 @@ impl CvnsQuake {
                 self.offset_x = 0;
             }
         } else {
-            while self.elapsed_ms >= interval {
-                self.elapsed_ms -= interval;
+            for _ in 0..steps {
                 match self.kind & 0xf0 {
                     0 => {
                         self.offset_x = if self.offset_x != 0 {
-                            -self.offset_x
+                            self.offset_x.wrapping_neg()
                         } else {
                             amp
                         };
                     }
                     0x10 => {
                         self.offset_y = if self.offset_y != 0 {
-                            -self.offset_y
+                            self.offset_y.wrapping_neg()
                         } else {
                             amp
                         };
@@ -1191,13 +1201,9 @@ impl CvnsQuake {
                     }
                     _ => {}
                 }
-                if self.count != -1 && self.count < self.step_count {
-                    finished = true;
-                }
-                self.step_count += 1;
             }
         }
-        finished
+        false
     }
 }
 
@@ -2278,7 +2284,7 @@ impl CvnsScene {
                     if q.count == -1 {
                         -1
                     } else {
-                        q.count - q.step_count
+                        q.count.saturating_sub(q.step_count)
                     }
                 });
                 call.vm
@@ -2775,6 +2781,28 @@ mod tests {
     use crate::machine::{Machine, Step};
     use crate::ps3::Script;
     use std::collections::HashMap;
+
+    #[test]
+    fn mask_progress_and_quake_use_the_full_timer_range() {
+        let image = RgbaImage::new(1, 1, vec![255; 4]).unwrap();
+        let mut mask = CvnsMaskTransition::new(0, true, u32::MAX, 1 << 30, &image);
+        assert_eq!(mask.thresholds[255], mask.duration_ms);
+        mask.elapsed_ms = mask.duration_ms + mask.ramp_ms / 2;
+        assert_eq!(mask.alpha_at(255), 128);
+        mask.reveal = false;
+        assert_eq!(mask.alpha_at(255), 128);
+
+        let mut quake = CvnsQuake::new(0x100, 100, u32::MAX, -1);
+        quake.advance(1 << 31);
+        assert_eq!(quake.offset_x, -100);
+        let mut alternating = CvnsQuake::new(0, i32::MIN, 1, -1);
+        alternating.step_count = i32::MAX;
+        alternating.advance(2);
+        assert_eq!(
+            (alternating.offset_x, alternating.step_count),
+            (i32::MIN, i32::MAX)
+        );
+    }
 
     #[derive(Clone, Copy)]
     enum TestArg {

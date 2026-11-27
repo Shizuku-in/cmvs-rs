@@ -261,6 +261,24 @@ fn format_call(code: &mut Vec<u8>, value: u32, pattern: u32, target: u32) {
 }
 
 #[test]
+fn cvns_format_rejects_unstorable_output_before_completing_the_call() {
+    for pattern in [b"%c\0".as_slice(), b"%z1024\0", b"%Z512\0"] {
+        let mut code = vec![];
+        for arg in [256, 0, 0x8000_0031] {
+            push(&mut code, arg);
+        }
+        word(&mut code, 0x24fb);
+        let script = script(&code, &[0], pattern);
+        let mut vm = Machine::new(&script).unwrap();
+        run_to_system(&mut vm);
+        let err = crate::support::shared_state::shared_strings(&mut vm).unwrap_err();
+        assert!(err.to_string().contains("string slot"), "{err}");
+        assert_eq!(vm.stack().len_bytes(), 12);
+        assert_eq!(vm.state().string(49), None);
+    }
+}
+
+#[test]
 fn format_0x20fc_writes_zero_padded_low_digits_into_a_string_slot() {
     let text = b"mask%z3a.pb3\0%z+12/100%%\0";
     let mut code = vec![];

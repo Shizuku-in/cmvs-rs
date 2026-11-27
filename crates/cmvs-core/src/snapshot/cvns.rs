@@ -40,6 +40,13 @@ use std::{
 
 const MAX_DIM: u32 = 8192;
 
+fn check_sprite_dimensions(w: i32, h: i32) -> Result<(), FormatError> {
+    if !(0..=MAX_DIM as i32).contains(&w) || !(0..=MAX_DIM as i32).contains(&h) {
+        return Err(FormatError("CVNS sprite dimensions out of bounds"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CvnsLocalVariables {
     pub starts: PersistentStarts,
@@ -746,7 +753,7 @@ impl CvnsSnapshot {
                 0xa03 => {
                     let slot = require_slot(record, CVNS_SPRITES)?;
                     let mut r = Reader::new(body);
-                    let sp = read_sprite(&mut r)?;
+                    let sp = read_sprite(&mut r, CVNS_IMAGES)?;
                     r.finish()?;
                     insert_unique(&mut sprites, slot, sp)?;
                 }
@@ -1115,7 +1122,7 @@ fn decode_scene_meta(bytes: &[u8]) -> Result<DecodedSceneMeta, FormatError> {
         if usize::from(sprite_slot) >= CVNS_SPRITES {
             return Err(FormatError("CVNS mask transition sprite out of range"));
         }
-        Some(SavedCvnsMaskTransition {
+        let transition = SavedCvnsMaskTransition {
             sprite_slot,
             reveal: read_bool(&mut r)?,
             duration_ms: r.u32()?,
@@ -1124,12 +1131,20 @@ fn decode_scene_meta(bytes: &[u8]) -> Result<DecodedSceneMeta, FormatError> {
             width: r.u32()?,
             height: r.u32()?,
             mask_packed: read_bytes(&mut r, 0x30_0000)?,
-        })
+        };
+        if transition
+            .duration_ms
+            .checked_add(transition.ramp_ms)
+            .is_none()
+        {
+            return Err(FormatError("CVNS mask transition duration exceeds range"));
+        }
+        Some(transition)
     } else {
         None
     };
     let quake = if read_bool(&mut r)? {
-        Some(CvnsQuake::from_saved(
+        let quake = CvnsQuake::from_saved(
             r.u32()?,
             read_i32(&mut r)?,
             r.u32()?,
@@ -1141,7 +1156,11 @@ fn decode_scene_meta(bytes: &[u8]) -> Result<DecodedSceneMeta, FormatError> {
             read_i32(&mut r)?,
             read_i32(&mut r)?,
             r.u32()?,
-        ))
+        );
+        if quake.phase > 1 || quake.step_count < 0 || quake.elapsed_ms >= quake.interval_ms.max(1) {
+            return Err(FormatError("invalid CVNS quake progress"));
+        }
+        Some(quake)
     } else {
         None
     };
@@ -1454,7 +1473,7 @@ fn write_sprite(out: &mut Vec<u8>, sp: &CvnsSprite) {
     }
 }
 
-fn read_sprite(r: &mut Reader<'_>) -> Result<CvnsSprite, FormatError> {
+fn read_sprite(r: &mut Reader<'_>, image_slots: usize) -> Result<CvnsSprite, FormatError> {
     let kind = match read_byte(r)? {
         0 => CvnsSpriteKind::Image,
         1 => CvnsSpriteKind::Video,
@@ -1483,6 +1502,10 @@ fn read_sprite(r: &mut Reader<'_>) -> Result<CvnsSprite, FormatError> {
     let color_strength = read_i16(r)?;
     let color = r.u32()?;
     let alpha = r.u16()?;
+    check_sprite_dimensions(w, h)?;
+    if !(-1..image_slots as i16).contains(&image_slot) || alpha > 256 {
+        return Err(FormatError("invalid CVNS sprite image slot or alpha"));
+    }
     let flags = r.u32()?;
     let mask_mode = read_i16(r)?;
     let anim = if read_bool(r)? {
@@ -1556,19 +1579,36 @@ fn read_sprite(r: &mut Reader<'_>) -> Result<CvnsSprite, FormatError> {
         let elapsed_ms = r.u32()?;
         let wave_phase = r.u32()?;
         let tile_count = r.u32()? as usize;
+        if !(1..=65536).contains(&cols)
+            || !(1..=65536).contains(&rows)
+            || interval_ms == 0
+            || steps == 0
+            || band_size < 1
+            || delay_step == 0
+            || speed < 1
+            || wave_phase >= 720
+        {
+            return Err(FormatError("invalid CVNS curtain geometry or timing"));
+        }
         if tile_count > 65536 {
             return Err(FormatError("CVNS sprite curtain tile count exceeds limit"));
         }
+        let mut tile_data = Reader::new(r.take(tile_count * 26)?);
         let mut tiles = Vec::with_capacity(tile_count);
         for _ in 0..tile_count {
+            let [sx, sy, ex, ey, dx, dy] = tile_data.words()?.map(|v| v as i32);
+            let alpha = tile_data.u16()?;
+            if alpha > 256 {
+                return Err(FormatError("invalid CVNS curtain tile alpha"));
+            }
             tiles.push(CvnsCurtainTile {
-                sx: read_i32(r)?,
-                sy: read_i32(r)?,
-                ex: read_i32(r)?,
-                ey: read_i32(r)?,
-                dx: read_i32(r)?,
-                dy: read_i32(r)?,
-                alpha: r.u16()?,
+                sx,
+                sy,
+                ex,
+                ey,
+                dx,
+                dy,
+                alpha,
             });
         }
         Some(CvnsCurtain {
@@ -1781,7 +1821,7 @@ fn decode_message(bytes: &[u8]) -> Result<SavedCvnsMessage, FormatError> {
         if local_sprites[usize::from(idx)].is_some() {
             return Err(FormatError("duplicate CVNS local sprite index"));
         }
-        local_sprites[usize::from(idx)] = Some(read_sprite(&mut r)?);
+        local_sprites[usize::from(idx)] = Some(read_sprite(&mut r, CVNS_LOCAL_IMAGES)?);
     }
     let mut buttons = [CvnsInlineButton::default(); CVNS_INLINE_BUTTONS];
     for b in &mut buttons {
@@ -1834,6 +1874,53 @@ mod tests {
     use std::sync::Arc;
 
     struct TestImages(BTreeMap<Vec<u8>, Vec<u8>>);
+
+    fn saved_curtain() -> CvnsCurtain {
+        CvnsCurtain {
+            mode: 1,
+            delete_on_finish: true,
+            cols: 2,
+            rows: 1,
+            interval_ms: 30,
+            steps: 4,
+            band_size: 2,
+            delay_step: 5,
+            speed: 10,
+            elapsed_ms: 15,
+            wave_phase: 3,
+            tiles: vec![CvnsCurtainTile {
+                sx: 0,
+                sy: 0,
+                ex: 8,
+                ey: 8,
+                dx: 1,
+                dy: 2,
+                alpha: 180,
+            }],
+        }
+    }
+
+    #[test]
+    fn saved_curtain_requires_valid_geometry_and_complete_tiles() {
+        let mut sprite = CvnsSprite {
+            w: 1,
+            h: 1,
+            curtain: Some(saved_curtain()),
+            ..Default::default()
+        };
+        let encode = |sp: &CvnsSprite| {
+            let mut bytes = Vec::new();
+            write_sprite(&mut bytes, sp);
+            bytes
+        };
+        let bytes = encode(&sprite);
+        assert!(read_sprite(&mut Reader::new(&bytes[..bytes.len() - 1]), CVNS_IMAGES).is_err());
+        sprite.curtain.as_mut().unwrap().delay_step = 0;
+        assert!(read_sprite(&mut Reader::new(&encode(&sprite)), CVNS_IMAGES).is_err());
+        sprite.curtain.as_mut().unwrap().delay_step = 1;
+        sprite.h = i32::MAX;
+        assert!(read_sprite(&mut Reader::new(&encode(&sprite)), CVNS_IMAGES).is_err());
+    }
 
     impl ImageSource for TestImages {
         fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
@@ -2013,28 +2100,7 @@ mod tests {
                 elapsed_ms: 120,
                 delay_ms: 10,
             }),
-            curtain: Some(CvnsCurtain {
-                mode: 1,
-                delete_on_finish: true,
-                cols: 2,
-                rows: 1,
-                interval_ms: 30,
-                steps: 4,
-                band_size: 2,
-                delay_step: 5,
-                speed: 10,
-                elapsed_ms: 15,
-                wave_phase: 3,
-                tiles: vec![CvnsCurtainTile {
-                    sx: 0,
-                    sy: 0,
-                    ex: 8,
-                    ey: 8,
-                    dx: 1,
-                    dy: 2,
-                    alpha: 180,
-                }],
-            }),
+            curtain: Some(saved_curtain()),
             ..Default::default()
         };
         sp.set_anim_frame(3, 4, 80, 0, 1, 2, 3, 4, 5, 6, 1);
