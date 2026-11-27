@@ -2367,7 +2367,8 @@ mod tests {
             }
         }
         let saved_audio = SavedCvnsAudio::decode(&raw_audio).unwrap();
-        audio.restore_cvns(saved_audio, &mut rec).unwrap();
+        audio.restore_cvns(saved_audio);
+        audio.sync_restored(&mut rec).unwrap();
         assert!(rec.requests().iter().any(|r| matches!(
             r,
             AudioRequest::PlayBgmLoopFrom { primary, loop_sample: 44100, .. }

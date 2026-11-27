@@ -288,6 +288,7 @@ fn wait_yields_while_shaking_or_stops_at_once_without_input() {
 #[test]
 fn invalid_quakes_fail_and_fade_overlays_follow_slot_offsets() {
     for code in [
+        quake_code(0, 3, 0, 1),
         quake_code(0x20, 3, 10, 1),
         quake_code(0x100, 3, 10, 1),
         quake_code(0x300, 3, 10, 1),

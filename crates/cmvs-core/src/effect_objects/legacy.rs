@@ -112,7 +112,7 @@ impl MeshScene {
                 uv: mesh.uv,
                 corners: mesh.world(),
                 position: mesh.position,
-                alpha: mesh.alpha,
+                alpha: mesh.alpha.min(255),
                 blend: match (mesh.blended || mesh.alpha < 255, mesh.additive) {
                     (false, _) => Blend::Replace,
                     (true, false) => Blend::Alpha,
@@ -662,16 +662,26 @@ impl SceneHost {
             || self.legacy_effects.contains_key(&slot)
     }
 
+    /// Release the old scene's device resources before installing a save. Keep the
+    /// slots intact until every release succeeds so a failed load can retry.
+    pub(crate) fn release_legacy_audio(
+        &self,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for &slot in self.legacy_effects.keys() {
+            self.release_legacy(slot, Some(backend))?;
+        }
+        Ok(())
+    }
+
     /// Destroy every legacy effect with its destructor, for a RESET or a load that
     /// discards the scene's legacy slots.
     pub(crate) fn release_legacy_effects(
         &mut self,
         backend: &mut dyn AudioBackend,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        while let Some(&slot) = self.legacy_effects.keys().next() {
-            self.release_legacy(slot, Some(&mut *backend))?;
-            self.legacy_effects.remove(&slot);
-        }
+        self.release_legacy_audio(backend)?;
+        self.legacy_effects.clear();
         Ok(())
     }
 

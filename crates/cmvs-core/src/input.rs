@@ -225,8 +225,14 @@ impl CodeInput {
     /// Focus loss cancels state without turning it into a click on release.
     pub fn clear(&mut self, input: &mut ActionInput) {
         self.previous.fill(false);
-        *input = ActionInput::default();
-        input.set_pointer(-1, -1);
+        *input = ActionInput {
+            pointer: [-1, -1],
+            last_pointer: [-1, -1],
+            function_keys: input.function_keys,
+            hit_rects: std::mem::take(&mut input.hit_rects),
+            warp: input.warp,
+            ..Default::default()
+        };
     }
 }
 
@@ -742,6 +748,29 @@ fn try_handle_cvns(
 mod tests {
     use super::*;
     use crate::machine::Machine;
+
+    #[test]
+    fn focus_loss_cancels_physical_input_and_keeps_script_state() {
+        let mut input = ActionInput {
+            function_keys: true,
+            ..Default::default()
+        };
+        input.hit_rects.push([1, 2, 3, 4]);
+        input.warp_pointer(8, 9);
+        let mut codes = CodeInput::default();
+        let mut now = [false; 128];
+        now[1] = true;
+        now[52] = true;
+        codes.update(&KeyBindings::default(), &now, &mut input);
+        codes.clear(&mut input);
+        assert_eq!(input.mouse(0), [false; 3]);
+        assert_eq!(input.function_key, 0);
+        assert_eq!(input.pointer(), [-1, -1]);
+        assert_eq!(input.take_warp(), Some([8, 9]));
+        assert_eq!(input.hit_rects(), &[[1, 2, 3, 4]]);
+        codes.update(&KeyBindings::default(), &now, &mut input);
+        assert_eq!(input.function_key, 1);
+    }
 
     fn vm_pending(command: u16, args: &[u32]) -> (Machine, usize) {
         let mut code = Vec::new();

@@ -1532,6 +1532,7 @@ fn append_modal<'a>(commands: &mut Vec<Layer<'a>>, scene: &'a SceneHost, width: 
 
 /// One target pixel under the device blend state, with straight 8-bit source values.
 fn put(target: &mut [u8], source: [u8; 3], alpha: u32, blend: Blend) {
+    let alpha = alpha.min(255);
     let source = if matches!(
         blend,
         Blend::BlackReplace | Blend::BlackAlpha | Blend::BlackAdditive

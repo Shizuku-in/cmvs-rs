@@ -789,6 +789,8 @@ mod tests {
         call(&mut code, 0x210b, &[16]);
         call(&mut code, 0x210c, &[8]);
         call(&mut code, 0x210d, &[3]);
+        call(&mut code, 0x201c, &[]);
+        let after_clock_pc = code.len();
         call(&mut code, 0x2178, &[0x8000_0000 | 6]); // base window title +340
         call(&mut code, 0x21a6, &[2, 2]); // 0x22b0 thumbnail 2x2
         call(&mut code, 0x200a, &[0x223344]);
@@ -867,6 +869,13 @@ mod tests {
         run.thumbnail = Some(bmp);
 
         let mut backend = RecordingBackend::default();
+        run.set_save_clock(Box::new(|| [2024, 2, 29, 13, 24, 56]));
+        while run.machine.pc() != after_clock_pc {
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+        }
+        for (index, value) in [(4, 20240229), (5, 132456), (6, 4)] {
+            assert_eq!(run.machine.state().system_integer(index), Some(value));
+        }
         while run.machine.pc() != after_capture_pc {
             let ev = run.tick(&mut backend).unwrap();
             assert!(matches!(
@@ -917,7 +926,26 @@ mod tests {
             .state_mut()
             .set_string(3, b"persist_new")
             .unwrap();
-        run.load_slot(1, &mut backend).unwrap();
+        struct OfflineAudio;
+        impl crate::audio::AudioBackend for OfflineAudio {
+            fn play(
+                &mut self,
+                _: &crate::audio::AudioRequest,
+            ) -> Result<bool, Box<dyn Error + Send + Sync>> {
+                Err("audio offline".into())
+            }
+            fn stop_bgm(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+                Err("audio offline".into())
+            }
+        }
+        run.platform.set_restored_scene_title(b"changed");
+        let device = std::mem::replace(&mut run.audio_backend, Box::new(OfflineAudio));
+        assert_eq!(
+            run.load_slot(1, &mut backend).unwrap_err().to_string(),
+            "audio offline"
+        );
+        assert!(run.platform.scene_title().is_empty());
+        run.audio_backend = device;
         assert_eq!(run.machine.pc(), after_capture_pc);
         assert_eq!(run.machine.state().integer(2), Some(123));
         assert_eq!(run.machine.state().integer(8), Some(888));

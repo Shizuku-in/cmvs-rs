@@ -753,14 +753,12 @@ impl MovieHost {
     }
     /// Loader 0x140081960 destroys the full-screen player (+4472) and the scene players,
     /// then installs the players its records rebuilt.
-    pub(crate) fn restore(&mut self, players: [Option<SceneMovie>; MOVIE_SLOTS]) -> bool {
-        let had_player = self.has_player();
+    pub(crate) fn restore(&mut self, players: [Option<SceneMovie>; MOVIE_SLOTS]) {
         self.player = None;
         self.cmv_reader = None;
         self.player_modal = false;
         self.mgv_player = None;
         self.slots = players;
-        had_player
     }
 }
 

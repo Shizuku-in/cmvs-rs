@@ -480,7 +480,7 @@ pub struct Runtime {
     auto_resume_checked: bool,
     /// Engine +11192: the 0x22b8 thumbnail BMP.
     thumbnail: Option<Vec<u8>>,
-    save_clock: Box<dyn FnMut() -> SaveTime + Send>,
+    save_clock: Option<Box<dyn FnMut() -> SaveTime + Send>>,
     auto_resume_skipped: bool,
 }
 impl Runtime {
@@ -690,7 +690,7 @@ impl Runtime {
             auto_resume_checked: false,
             thumbnail: None,
             // A fixed research time keeps runs repeatable; hosts supply a wall clock.
-            save_clock: Box::new(|| [2000, 1, 1, 0, 0, 0]),
+            save_clock: None,
             auto_resume_skipped: false,
         })
     }
@@ -1739,6 +1739,10 @@ impl Runtime {
             buttons: Some(&mut self.buttons),
             list_input: true,
             timers: Some(&mut self.timers),
+            wall_clock: self
+                .save_clock
+                .as_deref_mut()
+                .map(|c| c as &mut dyn FnMut() -> SaveTime),
             flags: Some(&mut self.message_flags),
             random: Some(&mut self.random),
             settings: Some(&mut self.settings),

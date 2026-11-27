@@ -8,7 +8,7 @@ use crate::{
     dispatch::RuntimeCall,
     evaluate::error,
     message::{MESSAGE_WINDOWS, TEXT_OBJECTS},
-    platform::{MAX_THUMBNAIL_DIMENSION, PlatformBackend},
+    platform::{MAX_THUMBNAIL_DIMENSION, PlatformBackend, PlatformRequest},
     raster::RgbaImage,
     save::{Csv2Save, HEADER_SIZE},
     save_menu::{SaveFamily, SaveHeader},
@@ -47,13 +47,15 @@ pub fn save_time_from_unix(seconds: u64) -> SaveTime {
 }
 
 /// Host save clock in UTC: the standard library has no local time zone without platform
-/// calls, so every host labels saves identically. A clock before 1970 reads as the epoch.
+/// calls. A clock before 1970 or an unavailable OS clock reads as the Unix epoch.
 pub fn utc_save_time() -> SaveTime {
-    save_time_from_unix(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-    )
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    let seconds = 0;
+    save_time_from_unix(seconds)
 }
 
 /// Constructor value of +12080, written to header offset 8; only an unimplemented
@@ -398,9 +400,14 @@ impl Runtime {
             .into()
         })
     }
-    /// Wall-clock source for labels; the default is a fixed research time so runs repeat.
+    /// Wall-clock source for save labels and the CVNS date query.
     pub fn set_save_clock(&mut self, clock: Box<dyn FnMut() -> SaveTime + Send>) {
-        self.save_clock = clock;
+        self.save_clock = Some(clock);
+    }
+    fn save_time(&mut self) -> SaveTime {
+        self.save_clock
+            .as_mut()
+            .map_or([2000, 1, 1, 0, 0, 0], |clock| clock())
     }
     /// Research inspection: the snapshot the writer would build from the current hosts,
     /// without the live bit-0 change or replacing the held image.
@@ -548,7 +555,7 @@ impl Runtime {
         header[..4].copy_from_slice(&signature);
         header[4..8].copy_from_slice(&(HEADER_SIZE as u32).to_le_bytes());
         header[8..12].copy_from_slice(&word8.to_le_bytes());
-        let time = (self.save_clock)();
+        let time = self.save_time();
         let mut label = format!("{} ", label_time(time)).into_bytes();
         label.extend(self.save_title.bytes());
         if label.len() >= 256 {
@@ -690,7 +697,7 @@ impl Runtime {
         }
         let (directory, slot_fs) = self.slot_target()?;
         let mut header = captured.header;
-        let now = label_time((self.save_clock)()).into_bytes();
+        let now = label_time(self.save_time()).into_bytes();
         for i in [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18] {
             header[16 + i] = now[i];
         }
@@ -811,11 +818,7 @@ impl Runtime {
             request.complete(&mut self.machine, 0x4004)?;
             return Ok(());
         }
-        self.load_slot(slot as u16, backend)?;
-        let repeat = self.machine.repeat_count();
-        self.machine
-            .set_repeat_count(if repeat != 0 { repeat + 1 } else { 0 });
-        Ok(())
+        self.load_slot_inner(slot as u16, backend, true)
     }
 
     /// The load 0x22b5 performs, from any point between VM steps: the slot replaces the VM
@@ -826,6 +829,15 @@ impl Runtime {
         &mut self,
         slot: u16,
         backend: &mut impl PlatformBackend,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.load_slot_inner(slot, backend, false)
+    }
+
+    fn load_slot_inner(
+        &mut self,
+        slot: u16,
+        backend: &mut impl PlatformBackend,
+        script_command: bool,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let layout = self.require_snapshot_layout()?;
         if self.scene.has_effect_pools()
@@ -842,7 +854,7 @@ impl Runtime {
             .ok_or("save slot to load does not exist")?;
         let family = self.save_family();
         let save = Csv2Save::decode_family(&bytes, family)?;
-        if layout == SnapshotLayout::CvnsCsp1 {
+        let title = if layout == SnapshotLayout::CvnsCsp1 {
             let snapshot = if save.snapshot.starts_with(&0x100u16.to_le_bytes()) {
                 if self.gate.profile().inspected_build()
                     != Some(crate::profile::InspectedBuild::Cvns20090203)
@@ -869,34 +881,64 @@ impl Runtime {
             } else {
                 CvnsSnapshot::decode(&save.snapshot)?
             };
-            return self.restore_cvns_snapshot(
-                slot,
-                &save,
-                &bytes[..HEADER_SIZE],
-                &snapshot,
-                backend,
-            );
+            self.restore_cvns_snapshot(slot, &save, &snapshot, backend)?
+        } else {
+            let snapshot = EngineSnapshot::decode_with_layout(&save.snapshot, layout)?;
+            self.validate_build_snapshot(&snapshot, layout)?;
+            self.restore_snapshot(slot, &save, &snapshot, layout, backend)?
+        };
+        let header: [u8; HEADER_SIZE] = bytes[..HEADER_SIZE].try_into().expect("decoded header");
+        let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
+        let second = if family == SaveFamily::Cvns {
+            word(532)
+        } else {
+            0
+        };
+        self.save_info.restore([word(528), second, word(536)]);
+        self.thumbnail = (!save.auxiliary.is_empty()).then_some(save.auxiliary);
+        self.save_image = SaveImage::Captured(Box::new(CapturedSave {
+            header,
+            snapshot: save.snapshot,
+            script_image: save.script_image,
+        }));
+        if script_command && self.machine.repeat_count() != 0 {
+            self.machine
+                .set_repeat_count(self.machine.repeat_count().wrapping_add(1));
         }
-        let snapshot = EngineSnapshot::decode_with_layout(&save.snapshot, layout)?;
-        self.validate_build_snapshot(&snapshot, layout)?;
-        self.restore_snapshot(
-            slot,
-            &save,
-            &bytes[..HEADER_SIZE],
-            &snapshot,
-            layout,
-            backend,
-        )
+
+        // The scene, VM and logical audio state now all belong to the loaded slot.
+        let audio = self.audio.sync_restored(self.audio_backend.as_mut());
+        audio.and(backend.apply(&title))
+    }
+
+    fn begin_slot_restore(
+        &mut self,
+        slot: u16,
+        scene_title: &[u8],
+    ) -> Result<PlatformRequest, Box<dyn Error + Send + Sync>> {
+        let title = self
+            .platform
+            .restored_title(scene_title, self.machine.text_encoding())?;
+        if self.should_backup_before_load(slot) {
+            self.write_slot(LOAD_BACKUP_SLOT, true)?;
+        }
+        // Keep ownership of the old players and preloads until their devices release them.
+        if self.movies.has_player() {
+            self.audio_backend.stop_movie_audio()?;
+        }
+        self.scene
+            .release_legacy_audio(self.audio_backend.as_mut())?;
+        self.platform.set_restored_scene_title(scene_title);
+        Ok(PlatformRequest::Title(title))
     }
 
     fn restore_cvns_snapshot(
         &mut self,
         slot: u16,
         save: &Csv2Save,
-        header: &[u8],
         snapshot: &CvnsSnapshot,
         backend: &mut impl PlatformBackend,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<PlatformRequest, Box<dyn Error + Send + Sync>> {
         let audio = SavedCvnsAudio::decode(&snapshot.audio)?;
         let mut control = self.control.clone();
         control.restore_callbacks(&snapshot.callbacks)?;
@@ -971,11 +1013,7 @@ impl Runtime {
         }
         let mut history = self.history.clone();
         history.restore(&snapshot.history)?;
-        self.platform
-            .restored_title(&snapshot.scene_title, self.machine.text_encoding())?;
-        if self.should_backup_before_load(slot) {
-            self.write_slot(LOAD_BACKUP_SLOT, true)?;
-        }
+        let title = self.begin_slot_restore(slot, &snapshot.scene_title)?;
         self.machine.install_restore(vm);
         self.discard_dialog(backend);
         self.history = history;
@@ -987,9 +1025,7 @@ impl Runtime {
         self.save_menu.restore_flags(snapshot.popup);
         self.message_flags.clear_for_load();
         self.buttons = Default::default();
-        if self.movies.restore(Default::default()) {
-            self.audio_backend.stop_movie_audio()?;
-        }
+        self.movies.restore(Default::default());
         self.scene.restore_cvns(
             ClearState {
                 color: snapshot.clear_color,
@@ -1000,36 +1036,21 @@ impl Runtime {
             cvns_scene,
         );
         self.messages.restore_cvns(texts, cvns_msg_host);
-        let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
-        self.save_info.restore([word(528), word(532), word(536)]);
-        self.thumbnail = (!save.auxiliary.is_empty()).then(|| save.auxiliary.clone());
-        self.save_image = SaveImage::Captured(Box::new(CapturedSave {
-            header: header.try_into().expect("600-byte header"),
-            snapshot: save.snapshot.clone(),
-            script_image: save.script_image.clone(),
-        }));
-        self.audio
-            .restore_cvns(audio, self.audio_backend.as_mut())?;
-        self.platform.restore_scene_title(
-            snapshot.scene_title.clone(),
-            self.machine.text_encoding(),
-            backend,
-        )?;
-        Ok(())
+        self.audio.restore_cvns(audio);
+        Ok(title)
     }
 
     /// Loader 0x140081960 and reader 0x140069fd0 over the Rust hosts. Everything fallible
     /// that does not touch a device (decoding, script layout, images) runs before the first
-    /// host changes; audio and window-title requests then go to the backends.
+    /// host changes. Old device resources are released before installing the restored hosts.
     fn restore_snapshot(
         &mut self,
         slot: u16,
         save: &Csv2Save,
-        header: &[u8],
         snapshot: &EngineSnapshot,
         layout: SnapshotLayout,
         backend: &mut impl PlatformBackend,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<PlatformRequest, Box<dyn Error + Send + Sync>> {
         if snapshot.word_11144 != 1 {
             return Err("saved +11144 value is not modeled".into());
         }
@@ -1206,11 +1227,7 @@ impl Runtime {
         if layout != SnapshotLayout::TextV1SceneLegacy {
             camera_host.restore_view(1, &snapshot.cameras[3])?;
         }
-        self.platform
-            .restored_title(&snapshot.scene_title, self.machine.text_encoding())?;
-        if backup {
-            self.write_slot(LOAD_BACKUP_SLOT, true)?;
-        }
+        let title = self.begin_slot_restore(slot, &snapshot.scene_title)?;
         self.machine.install_restore(vm);
         // Commit the hosts.
         self.discard_dialog(backend);
@@ -1223,9 +1240,7 @@ impl Runtime {
         self.save_menu.restore_flags(snapshot.word_12092);
         self.message_flags.clear_for_load();
         self.buttons = buttons;
-        if self.movies.restore(players) {
-            self.audio_backend.stop_movie_audio()?;
-        }
+        self.movies.restore(players);
         self.scene.restore(
             ClearState {
                 color: snapshot.clear_color,
@@ -1242,27 +1257,10 @@ impl Runtime {
         self.scene.falling_effects = effects.falling_effects;
         self.scene.particle_effects = effects.particle_effects;
         self.scene.collision_effects = effects.collision_effects;
-        // Legacy slots are never saved (saving them is rejected), so a load destroys
-        // them, releasing their prepared sounds.
-        self.scene
-            .release_legacy_effects(self.audio_backend.as_mut())?;
         self.random = restored_random;
         self.messages.restore(texts, windows);
-        let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
-        self.save_info.restore([word(528), 0, word(536)]);
-        self.thumbnail = (!save.auxiliary.is_empty()).then(|| save.auxiliary.clone());
-        self.save_image = SaveImage::Captured(Box::new(CapturedSave {
-            header: header.try_into().expect("600-byte header"),
-            snapshot: save.snapshot.clone(),
-            script_image: save.script_image.clone(),
-        }));
-        self.audio.restore(audio, self.audio_backend.as_mut())?;
-        self.platform.restore_scene_title(
-            snapshot.scene_title.clone(),
-            self.machine.text_encoding(),
-            backend,
-        )?;
-        Ok(())
+        self.audio.restore(audio);
+        Ok(title)
     }
 
     /// 0x22b8: 0x14006b4a0 builds the thumbnail from the screen capture when one exists,

@@ -152,14 +152,21 @@ pub(in super::super) fn cvns_timers(
                 .expect("slot 0 exists");
         }
         0x41c => {
-            let secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs());
-            let [year, month, day, hour, minute, second] =
-                crate::runtime::save_time_from_unix(secs);
+            let [year, month, day, hour, minute, second] = hosts
+                .wall_clock
+                .as_mut()
+                .map_or_else(crate::runtime::utc_save_time, |clock| clock());
             let date = u32::from(year) * 10_000 + u32::from(month) * 100 + u32::from(day);
             let time = u32::from(hour) * 10_000 + u32::from(minute) * 100 + u32::from(second);
-            let weekday = ((secs / 86_400 + 4) % 7) as u32;
+            // Gregorian day number with March as month zero. Sunday is weekday zero.
+            let y = i32::from(year) - i32::from(month <= 2);
+            let m = (i32::from(month) + 9) % 12;
+            let weekday = (y + y.div_euclid(4) - y.div_euclid(100)
+                + y.div_euclid(400)
+                + (153 * m + 2) / 5
+                + i32::from(day)
+                + 2)
+            .rem_euclid(7) as u32;
             call.complete(0x4000)?;
             let state = call.vm.state_mut();
             state.set_system_integer(4, date).expect("slot 4 exists");

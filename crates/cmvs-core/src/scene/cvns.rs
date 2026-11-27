@@ -523,13 +523,7 @@ impl CvnsSprite {
         let Some(c) = self.curtain.take() else {
             return;
         };
-        if c.delete_on_finish {
-            self.visible = true;
-        }
-        if !c.tiles.is_empty() && c.mode >= 256 {
-            self.alpha = 256;
-        }
-        self.dirty = true;
+        c.finish(self);
     }
 
     pub(crate) fn advance(&mut self, delta_ms: u32) {
@@ -539,8 +533,8 @@ impl CvnsSprite {
         }
         if let Some(mut curtain) = self.curtain.take() {
             if curtain.advance(self, delta_ms) {
-                if curtain.delete_on_finish {
-                    self.finished_delete = true;
+                curtain.finish(self);
+                if self.finished_delete {
                     return;
                 }
             } else {
@@ -651,6 +645,7 @@ impl CvnsMoveTween {
         }
         let elapsed = self.elapsed_ms;
         let dur = self.duration_ms;
+        let angle = (9000 * u64::from(elapsed) / u64::from(dur)) as i32;
         if (self.flags & 0x0100_0000) == 0 {
             if self.dst_x != self.start_x || self.dst_y != self.start_y {
                 let mode = (self.flags & 0xff) as u8;
@@ -658,13 +653,13 @@ impl CvnsMoveTween {
                     1 => {
                         let (ang, dist) =
                             polar_offset(self.start_x, self.start_y, self.dst_x, self.dst_y);
-                        let (_, r) = sin_cos_scale(((9000 * elapsed) / dur) as i32, dist);
+                        let (_, r) = sin_cos_scale(angle, dist);
                         sin_cos_scale(ang, r)
                     }
                     2 => {
                         let (ang, dist) =
                             polar_offset(self.start_x, self.start_y, self.dst_x, self.dst_y);
-                        let (_, r) = sin_cos_scale(9000 - ((9000 * elapsed) / dur) as i32, dist);
+                        let (_, r) = sin_cos_scale(9000 - angle, dist);
                         sin_cos_scale(ang, dist - r)
                     }
                     3..=5 => {
@@ -675,10 +670,8 @@ impl CvnsMoveTween {
                         let a = a1 + ((elapsed as i64 * i64::from(a2 - a1)) / dur as i64) as i32;
                         let r = match mode {
                             3 => ((elapsed as i64 * i64::from(dist)) / dur as i64) as i32,
-                            4 => sin_cos_scale(((9000 * elapsed) / dur) as i32, dist).1,
-                            _ => {
-                                dist - sin_cos_scale(9000 - ((9000 * elapsed) / dur) as i32, dist).1
-                            }
+                            4 => sin_cos_scale(angle, dist).1,
+                            _ => dist - sin_cos_scale(9000 - angle, dist).1,
                         };
                         sin_cos_scale(a, r)
                     }
@@ -701,21 +694,21 @@ impl CvnsMoveTween {
             let raw_dist = ((elapsed as i64 * i64::from(total)) / dur as i64) as i32;
             let mode = (self.flags & 0xff) as u8;
             let pos_along = match mode {
-                1 => sin_cos_scale(((9000 * elapsed) / dur) as i32, raw_dist).1,
+                1 => sin_cos_scale(angle, raw_dist).1,
                 2 => {
-                    let (_, s) = sin_cos_scale(9000 - ((9000 * elapsed) / dur) as i32, raw_dist);
+                    let (_, s) = sin_cos_scale(9000 - angle, raw_dist);
                     raw_dist - s
                 }
                 _ => raw_dist,
             };
             let (ox, oy, dx, dy) = if mode == 2 {
                 if raw_dist >= d1 {
-                    let (_, s) = sin_cos_scale(9000 - ((9000 * elapsed) / dur) as i32, raw_dist);
+                    let (_, s) = sin_cos_scale(9000 - angle, raw_dist);
                     let rem = d2 - (raw_dist - d1) + s - raw_dist;
                     let (ux, uy) = sin_cos_scale(a2, rem);
                     (self.ctrl_x, self.ctrl_y, ux, uy)
                 } else {
-                    let (_, s) = sin_cos_scale(9000 - ((9000 * elapsed) / dur) as i32, raw_dist);
+                    let (_, s) = sin_cos_scale(9000 - angle, raw_dist);
                     let (ux, uy) = sin_cos_scale(a1, d1 - s);
                     (self.start_x, self.start_y, ux, uy)
                 }
@@ -734,12 +727,11 @@ impl CvnsMoveTween {
             let alpha_mode = ((self.flags >> 8) & 0xff) as u8;
             let step = match alpha_mode {
                 1 => {
-                    let s = sin_cos_scale(((9000 * elapsed) / dur) as i32, da.abs()).1;
+                    let s = sin_cos_scale(angle, da.abs()).1;
                     if da < 0 { -s } else { s }
                 }
                 2 => {
-                    let s = da.abs()
-                        - sin_cos_scale(9000 - ((9000 * elapsed) / dur) as i32, da.abs()).1;
+                    let s = da.abs() - sin_cos_scale(9000 - angle, da.abs()).1;
                     if da < 0 { -s } else { s }
                 }
                 _ => ((elapsed as i64 * i64::from(da)) / dur as i64) as i32,
@@ -752,6 +744,20 @@ impl CvnsMoveTween {
 }
 
 impl CvnsCurtain {
+    fn deletes_sprite(mode: u32) -> bool {
+        mode >= 0x100 && !matches!(mode, 764 | 765) && !matches!(mode & 0xff, 2 | 4)
+    }
+
+    fn finish(&self, sprite: &mut CvnsSprite) {
+        // The two continuous wave effects end only when explicitly stopped.
+        if !matches!(self.mode, 764 | 765) {
+            sprite.visible = self.mode < 0x100;
+            // Older snapshots also set the delete flag on retained hide modes.
+            sprite.finished_delete = self.delete_on_finish && Self::deletes_sprite(self.mode);
+        }
+        sprite.dirty = true;
+    }
+
     fn new(
         sprite: &CvnsSprite,
         mode: u32,
@@ -762,12 +768,7 @@ impl CvnsCurtain {
     ) -> Self {
         let sw = sprite.w.max(1);
         let sh = sprite.h.max(1);
-        let reveal = mode < 0x100;
-        let delete_on_finish = if mode < 0x100 {
-            false
-        } else {
-            !matches!(mode, 2 | 4)
-        };
+        let delete_on_finish = Self::deletes_sprite(mode);
         let (cols, rows, steps) = match mode {
             764 => (1, sh as u32, 0),
             765 => (sw as u32, 1, 0),
@@ -802,7 +803,6 @@ impl CvnsCurtain {
                 }
             }
         };
-        let _ = reveal;
         let mut c = Self {
             mode,
             delete_on_finish,
@@ -2229,7 +2229,9 @@ impl CvnsScene {
                 let speed = call.argument(24, "speed")? as i32;
                 let sprite = self.require_sprite_mut(call.pc, op, slot)?;
                 call.complete(0x4018)?;
-                sprite.finish_curtain();
+                if mode < 0x100 {
+                    sprite.visible = true;
+                }
                 sprite.curtain = Some(CvnsCurtain::new(sprite, mode, interval, band, delay, speed));
             }
             0x58f => {
@@ -3391,6 +3393,37 @@ mod tests {
     }
 
     #[test]
+    fn long_move_tweens_match_short_moves_at_the_same_fraction() {
+        for flags in [0x101, 0x202, 4, 5, 0x0100_0101, 0x0100_0202] {
+            let mut tween = CvnsMoveTween {
+                active: true,
+                start_x: 0,
+                start_y: 0,
+                start_alpha: 256,
+                dst_x: 80,
+                dst_y: 24,
+                ctrl_x: 16,
+                ctrl_y: 40,
+                dst_alpha: 32,
+                flags,
+                duration_ms: 4,
+                elapsed_ms: 0,
+                delay_ms: 0,
+            };
+            let mut long = tween;
+            long.duration_ms = 2_000_000;
+            let mut short_sprite = CvnsSprite::default();
+            let mut long_sprite = CvnsSprite::default();
+            assert!(!tween.advance(&mut short_sprite, 2));
+            assert!(!long.advance(&mut long_sprite, 1_000_000));
+            assert_eq!(
+                (long_sprite.x, long_sprite.y, long_sprite.alpha),
+                (short_sprite.x, short_sprite.y, short_sprite.alpha)
+            );
+        }
+    }
+
+    #[test]
     fn mask_capture_and_curtain_wait_interrupt_work() {
         let mut images = MemImages(HashMap::new());
         let mut cvns = CvnsScene::default();
@@ -3449,6 +3482,7 @@ mod tests {
         assert!(cvns.sprites[0].is_none() && cvns.images[0].is_none());
 
         // Curtain + wait interrupt via virtual WaitInterrupt key (code 1 = left click / skip).
+        let initial = cvns.sprites[1].clone().unwrap();
         exec_scene(
             &mut cvns,
             &mut fc,
@@ -3456,7 +3490,7 @@ mod tests {
             0x58d,
             &[
                 TestArg::Int(1),
-                TestArg::Int(0),
+                TestArg::Int(0x101),
                 TestArg::Int(10),
                 TestArg::Int(2),
                 TestArg::Int(5),
@@ -3487,6 +3521,28 @@ mod tests {
         );
         assert_eq!(flow, Flow::Yield);
         assert_eq!(vm.state().system_integer(0), Some(1));
-        assert!(cvns.sprites[1].as_ref().unwrap().curtain.is_none());
+        cvns.advance_frame(0, &mut fc, &mut fl);
+        assert!(cvns.sprites[1].is_none());
+        assert!(cvns.images[1].is_some());
+        for (mode, visible, deleted) in [
+            (1, true, false),
+            (0x101, false, true),
+            (0x102, false, false),
+            (0x104, false, false),
+        ] {
+            let mut sprite = initial.clone();
+            sprite.alpha = 91;
+            sprite.curtain = Some(CvnsCurtain::new(&sprite, mode, 20, 1, 1, 1));
+            let mut skipped = sprite.clone();
+            skipped.finish_curtain();
+            sprite.advance(20);
+            for s in [skipped, sprite] {
+                assert_eq!(
+                    (s.visible, s.finished_delete, s.alpha),
+                    (visible, deleted, 91)
+                );
+                assert!(s.curtain.is_none());
+            }
+        }
     }
 }

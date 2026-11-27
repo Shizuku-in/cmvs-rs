@@ -2580,75 +2580,31 @@ impl AudioHost {
     /// BGM without fade and with looping (0x14008a240), and replay each named SE channel
     /// (0x140088390 on channel + 9, starting at once only when looped and flagged). SE_USE
     /// is not consulted by the loader.
-    pub(crate) fn restore(
-        &mut self,
-        saved: SavedAudio<'_>,
-        backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let SavedAudio {
-            bgm,
-            channels,
-            played,
-        } = saved;
-        let enabled = self.settings.bgm_enabled;
-        if enabled {
-            backend.stop_bgm()?;
-        }
-        for channel in 0..SE_CHANNELS as u8 {
-            backend.stop(channel)?;
-        }
-        for channel in 0..VOICE_CHANNELS as u8 {
-            backend.stop_voice(channel)?;
-        }
-        backend.stop_channel15()?;
-        let mut current = if enabled { 0 } else { self.bgm.channel };
-        self.bgm = BgmState {
-            channel: current,
-            ..BgmState::default()
+    pub(crate) fn restore(&mut self, saved: SavedAudio<'_>) {
+        self.restore_bgm(saved.bgm.clone());
+        self.channels = saved.channels;
+        self.played = saved.played;
+    }
+
+    fn restore_bgm(&mut self, [primary, secondary]: [Vec<u8>; 2]) {
+        let previous = if self.settings.bgm_enabled {
+            0
+        } else {
+            self.bgm.channel
         };
-        if !bgm[0].is_empty() {
-            let channel = current.wrapping_sub(1) & 1;
-            if enabled {
-                backend.play_bgm(&AudioRequest::PlayBgm {
-                    channel,
-                    previous: current,
-                    primary: bgm[0].clone(),
-                    secondary: bgm[1].clone(),
-                    volume: self.settings.master.wrapping_mul(self.settings.bgm) >> 8,
-                    fade_ms: 0,
-                    looped: true,
-                    flag_1576: self.settings.bgm_flag_1576,
-                })?;
+        self.bgm = if primary.is_empty() {
+            BgmState {
+                channel: previous,
+                ..Default::default()
             }
-            current = channel;
-            self.bgm = BgmState {
-                primary: bgm[0].clone(),
-                secondary: bgm[1].clone(),
-                channel: current,
-                playing: enabled,
-            };
-        }
-        for (i, channel) in channels.iter().enumerate() {
-            let Some(c) = channel.as_ref().filter(|c| !c.name.is_empty()) else {
-                continue;
-            };
-            let mut volume = self.settings.master.wrapping_mul(self.settings.se) >> 8;
-            if c.volume > 0 {
-                volume = (c.volume as u32).wrapping_mul(volume) >> 8;
+        } else {
+            BgmState {
+                primary,
+                secondary,
+                channel: previous.wrapping_sub(1) & 1,
+                playing: self.settings.bgm_enabled,
             }
-            let start = c.looped && c.flag;
-            backend.play(&AudioRequest::PlaySe {
-                channel: i as u8,
-                name: c.name.clone(),
-                volume,
-                looped: c.looped,
-                flag: start,
-                fade_in_ms: 0,
-            })?;
-        }
-        self.channels = channels;
-        self.played = played;
-        Ok(())
+        };
     }
 
     /// Serializes CVNS BGM (+ loop sample), 48 SE channels (+ gain/pan), and 4 aux SE slots (+ gain).
@@ -2687,85 +2643,96 @@ impl AudioHost {
         out
     }
 
-    pub(crate) fn restore_cvns(
-        &mut self,
-        saved: SavedCvnsAudio,
+    pub(crate) fn restore_cvns(&mut self, saved: SavedCvnsAudio) {
+        self.enable_cvns();
+        self.restore_bgm(saved.bgm);
+        self.cvns.bgm_loop_sample = saved.bgm_loop_sample;
+        for (i, channel) in saved.channels.into_iter().enumerate() {
+            *self.cvns_se_slot_mut(i) = channel;
+        }
+        self.cvns.gains.copy_from_slice(&saved.gains);
+        self.cvns.pans.copy_from_slice(&saved.pans);
+        self.cvns.aux_channels = saved.aux_channels;
+        self.cvns.aux_gains = saved.aux_gains;
+        self.cvns.voice_gains = [100; VOICE_CHANNELS];
+        self.cvns.voice_pans = [0; VOICE_CHANNELS];
+        self.played = [0; SE_CHANNELS];
+    }
+
+    /// Apply the installed snapshot to the device. An error leaves the logical audio state intact.
+    pub(crate) fn sync_restored(
+        &self,
         backend: &mut dyn AudioBackend,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.enable_cvns();
-        let enabled = self.settings.bgm_enabled;
-        if enabled {
+        let cvns = self.cvns.enabled;
+        let channels = if cvns { CVNS_SE_CHANNELS } else { SE_CHANNELS };
+        if self.settings.bgm_enabled {
             backend.stop_bgm()?;
         }
-        for channel in 0..CVNS_SE_CHANNELS as u8 {
+        for channel in 0..channels as u8 {
             backend.stop(channel)?;
         }
         for channel in 0..VOICE_CHANNELS as u8 {
             backend.stop_voice(channel)?;
         }
-        for channel in 0..AUX_SE_CHANNELS as u8 {
-            backend.stop_aux_se(channel)?;
-        }
-        let mut current = if enabled { 0 } else { self.bgm.channel };
-        self.bgm = BgmState {
-            channel: current,
-            ..BgmState::default()
-        };
-        if !saved.bgm[0].is_empty() {
-            let channel = current.wrapping_sub(1) & 1;
-            if enabled {
-                let req = AudioRequest::PlayBgm {
-                    channel,
-                    previous: current,
-                    primary: saved.bgm[0].clone(),
-                    secondary: saved.bgm[1].clone(),
-                    volume: Self::cvns_bgm_volume_for(&self.cvns_volumes),
-                    fade_ms: 0,
-                    looped: true,
-                    flag_1576: self.settings.bgm_flag_1576,
-                };
-                backend.play_bgm_loop_from(&req, saved.bgm_loop_sample)?;
+        if cvns {
+            for channel in 0..AUX_SE_CHANNELS as u8 {
+                backend.stop_aux_se(channel)?;
             }
-            current = channel;
-            let [primary, secondary] = saved.bgm;
-            self.bgm = BgmState {
-                primary,
-                secondary,
-                channel: current,
-                playing: enabled,
+        } else {
+            backend.stop_channel15()?;
+        }
+        if self.bgm.playing {
+            let req = AudioRequest::PlayBgm {
+                channel: self.bgm.channel,
+                previous: self.bgm.channel ^ 1,
+                primary: self.bgm.primary.clone(),
+                secondary: self.bgm.secondary.clone(),
+                volume: if cvns {
+                    Self::cvns_bgm_volume_for(&self.cvns_volumes)
+                } else {
+                    self.settings.master.wrapping_mul(self.settings.bgm) >> 8
+                },
+                fade_ms: 0,
+                looped: true,
+                flag_1576: self.settings.bgm_flag_1576,
             };
-        }
-        self.cvns.bgm_loop_sample = saved.bgm_loop_sample;
-        for (i, ((channel, gain), pan)) in saved
-            .channels
-            .iter()
-            .zip(&saved.gains)
-            .zip(&saved.pans)
-            .enumerate()
-        {
-            if let Some(c) = channel.as_ref().filter(|c| !c.name.is_empty()) {
-                let start = c.looped && c.flag;
-                backend.play(&AudioRequest::PlaySe {
-                    channel: i as u8,
-                    name: c.name.clone(),
-                    volume: Self::cvns_se_volume_for(&self.cvns_volumes, c.volume),
-                    looped: c.looped,
-                    flag: start,
-                    fade_in_ms: 0,
-                })?;
-                if *gain < 100 {
-                    let mult = (u64::from(*gain) * 256 / 100) as u32;
-                    backend.set_se_gain(i as u8, mult)?;
-                }
-                if *pan != 0 {
-                    backend.set_se_pan(i as u8, *pan)?;
-                }
+            if cvns {
+                backend.play_bgm_loop_from(&req, self.cvns.bgm_loop_sample)?;
+            } else {
+                backend.play_bgm(&req)?;
             }
-            *self.cvns_se_slot_mut(i) = channel.clone();
-            self.cvns.gains[i] = *gain;
-            self.cvns.pans[i] = *pan;
         }
-        for (i, aux) in saved.aux_channels.iter().enumerate() {
+        for i in 0..channels {
+            let Some(c) = self.cvns_se_slot(i).filter(|c| !c.name.is_empty()) else {
+                continue;
+            };
+            let volume = if cvns {
+                Self::cvns_se_volume_for(&self.cvns_volumes, c.volume)
+            } else {
+                let base = self.settings.master.wrapping_mul(self.settings.se) >> 8;
+                if c.volume > 0 {
+                    (c.volume as u32).wrapping_mul(base) >> 8
+                } else {
+                    base
+                }
+            };
+            backend.play(&AudioRequest::PlaySe {
+                channel: i as u8,
+                name: c.name.clone(),
+                volume,
+                looped: c.looped,
+                flag: c.looped && c.flag,
+                fade_in_ms: 0,
+            })?;
+            if cvns && self.cvns.gains[i] < 100 {
+                backend.set_se_gain(i as u8, self.cvns.gains[i] * 256 / 100)?;
+            }
+            if cvns && self.cvns.pans[i] != 0 {
+                backend.set_se_pan(i as u8, self.cvns.pans[i])?;
+            }
+        }
+        for (i, aux) in self.cvns.aux_channels.iter().enumerate() {
             if let Some(c) = aux.as_ref().filter(|c| !c.name.is_empty()) {
                 let eff = Self::cvns_percent_to_gain(
                     (c.volume.max(0) as u32).saturating_mul(self.cvns_volumes[0]) / 100,
@@ -2778,17 +2745,12 @@ impl AudioHost {
                     looped: c.looped,
                     start: c.flag,
                 })?;
-                let gain = saved.aux_gains[i];
+                let gain = self.cvns.aux_gains[i];
                 if gain != 100 {
                     backend.set_aux_se_gain(i as u8, (u64::from(gain) * 256 / 100) as u32)?;
                 }
             }
         }
-        self.cvns.aux_channels = saved.aux_channels;
-        self.cvns.aux_gains = saved.aux_gains;
-        self.cvns.voice_gains = [100; VOICE_CHANNELS];
-        self.cvns.voice_pans = [0; VOICE_CHANNELS];
-        self.played = [0; SE_CHANNELS];
         Ok(())
     }
 }
@@ -2908,9 +2870,8 @@ mod lifecycle_tests {
         let bytes = host.saved_cvns();
         let mut restored = AudioHost::default();
         let mut backend = RecordingAudio::default();
-        restored
-            .restore_cvns(SavedCvnsAudio::decode(&bytes).unwrap(), &mut backend)
-            .unwrap();
+        restored.restore_cvns(SavedCvnsAudio::decode(&bytes).unwrap());
+        restored.sync_restored(&mut backend).unwrap();
         assert_eq!(restored.saved_cvns(), bytes);
         let requests: Vec<_> = backend
             .requests()
@@ -2943,12 +2904,7 @@ mod lifecycle_tests {
         assert_eq!(requests, expected);
 
         let legacy_len = bytes.len() - AUX_SE_CHANNELS * 4;
-        restored
-            .restore_cvns(
-                SavedCvnsAudio::decode(&bytes[..legacy_len]).unwrap(),
-                &mut backend,
-            )
-            .unwrap();
+        restored.restore_cvns(SavedCvnsAudio::decode(&bytes[..legacy_len]).unwrap());
         assert_eq!(restored.cvns.aux_gains, [100; AUX_SE_CHANNELS]);
         for end in legacy_len + 1..bytes.len() {
             assert!(SavedCvnsAudio::decode(&bytes[..end]).is_err());
@@ -3222,12 +3178,9 @@ mod lifecycle_tests {
             &[b"replacement"],
         );
         let mut restored_backend = RecordingAudio::default();
-        AudioHost::default()
-            .restore_cvns(
-                SavedCvnsAudio::decode(&host.saved_cvns()).unwrap(),
-                &mut restored_backend,
-            )
-            .unwrap();
+        let mut restored = AudioHost::default();
+        restored.restore_cvns(SavedCvnsAudio::decode(&host.saved_cvns()).unwrap());
+        restored.sync_restored(&mut restored_backend).unwrap();
         assert_eq!(
             restored_backend.requests().last(),
             backend.requests().last()

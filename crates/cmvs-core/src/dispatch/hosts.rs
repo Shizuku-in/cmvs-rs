@@ -156,6 +156,7 @@ pub struct Hosts<'a> {
     pub waits: Option<WaitHosts<'a>>,
     pub text: Option<TextHosts<'a>>,
     pub timers: Option<&'a mut VmTimers>,
+    pub wall_clock: Option<&'a mut dyn FnMut() -> crate::runtime::SaveTime>,
     pub flags: Option<&'a mut MessageFlags>,
     pub random: Option<&'a mut CrtRandom>,
     pub settings: Option<&'a mut SettingsHost>,

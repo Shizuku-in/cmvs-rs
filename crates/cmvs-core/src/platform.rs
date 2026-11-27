@@ -722,18 +722,8 @@ impl PlatformHost {
         }
         Ok(text)
     }
-    /// Record 0x101 and the window title. The backend applies the title before the scene
-    /// title commits.
-    pub(crate) fn restore_scene_title(
-        &mut self,
-        title: Vec<u8>,
-        encoding: TextEncoding,
-        backend: &mut impl PlatformBackend,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let text = self.restored_title(&title, encoding)?;
-        backend.apply(&PlatformRequest::Title(text))?;
-        self.scene_title = title;
-        Ok(())
+    pub(crate) fn set_restored_scene_title(&mut self, title: &[u8]) {
+        self.scene_title = title.to_vec();
     }
     pub fn cursor(&self) -> u32 {
         self.cursor
@@ -1130,16 +1120,12 @@ mod tests {
                 title: Some(b"Game".to_vec()),
                 ..Default::default()
             };
-            let mut backend = RecordingBackend::default();
-            host.restore_scene_title(b"- Opening -".to_vec(), encoding, &mut backend)
-                .unwrap();
+            let title = host.restored_title(b"- Opening -", encoding).unwrap();
+            host.set_restored_scene_title(b"- Opening -");
             let mut expected = b"Game".to_vec();
             expected.extend(separator);
             expected.extend(b"- Opening -");
-            assert_eq!(
-                backend.requests().last(),
-                Some(&PlatformRequest::Title(expected))
-            );
+            assert_eq!(title, expected);
             assert_eq!(host.scene_title(), b"- Opening -");
         }
     }

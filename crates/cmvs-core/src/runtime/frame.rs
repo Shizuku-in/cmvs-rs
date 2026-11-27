@@ -1,31 +1,38 @@
 //! Cooperative VM slices share one input sample and one frame completion.
 use super::{Runtime, RuntimeEvent};
 use crate::input::ActionInput;
-use std::{
-    error::Error,
-    time::{Duration, Instant},
-};
+use std::error::Error;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use std::time::{Duration, Instant};
 
 /// A host slice limit, retained across device-service retries within that slice.
 pub struct FrameBudget {
     remaining: usize,
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     deadline: Option<Instant>,
 }
 impl FrameBudget {
     pub fn steps(steps: usize) -> Self {
         Self {
             remaining: steps,
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
             deadline: None,
         }
     }
+    /// Limit a slice by the platform monotonic clock. Bare WebAssembly hosts use step budgets.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     pub fn time(duration: Duration) -> Self {
         Self {
             remaining: usize::MAX,
-            deadline: Some(Instant::now() + duration),
+            deadline: Instant::now().checked_add(duration),
         }
     }
     fn take(&mut self) -> bool {
-        if self.remaining == 0 || self.deadline.is_some_and(|end| Instant::now() >= end) {
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        if self.deadline.is_some_and(|end| Instant::now() >= end) {
+            return false;
+        }
+        if self.remaining == 0 {
             return false;
         }
         self.remaining -= 1;

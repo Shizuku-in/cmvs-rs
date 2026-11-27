@@ -28,6 +28,9 @@ fn height(triangle: &Triangle, x: f32, z: f32) -> Option<f32> {
     let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     // Keep the original reversed cross product and normalized plane arithmetic.
     let normal = cross(subtract(c, a), subtract(b, a));
+    if normal[1] == 0.0 {
+        return None;
+    }
     let length = dot(normal, normal).sqrt();
     let normal = normal.map(|v| v / length);
     let origin = [x, 35.0, z];
@@ -35,10 +38,14 @@ fn height(triangle: &Triangle, x: f32, z: f32) -> Option<f32> {
         + normal[0] * (a[0] - origin[0])
         + normal[2] * (a[2] - origin[2]))
         / normal[1];
-    let point = [0.0 * t + x, t + 35.0, 0.0 * t + z];
+    if !t.is_finite() {
+        return None;
+    }
+    let point = [x, t + 35.0, z];
     for (start, end) in [(a, b), (b, c), (c, a)] {
         let side = cross(subtract(point, start), subtract(end, start));
-        if normal[1] * side[1] + normal[0] * side[0] + normal[2] * side[2] < 0.0 {
+        let facing = normal[1] * side[1] + normal[0] * side[0] + normal[2] * side[2];
+        if !facing.is_finite() || facing < 0.0 {
             return None;
         }
     }
@@ -606,7 +613,8 @@ mod tests {
         let mut a = effect(1);
         a.particles[0].words[6..10].copy_from_slice(&[0, 2.25f32.to_bits(), 0, 100.0f32.to_bits()]);
         let mut random = CrtRandom::new(0);
-        a.advance(0, &[triangle], &mut random);
+        let wall = [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        a.advance(0, &[[[0.0; 3]; 3], wall, triangle], &mut random);
         assert_eq!(a.particles[0].object.draw.as_ref().unwrap().words[17], 191);
         assert_eq!(a.particles[0].words[10], 2.0f32.to_bits());
         a.advance(8, &[triangle], &mut random);

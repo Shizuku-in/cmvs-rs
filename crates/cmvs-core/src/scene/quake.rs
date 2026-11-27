@@ -76,7 +76,7 @@ impl Quake {
         } else {
             0
         };
-        if word(4) != phase || word(5) > 1 || word(0) & 0xf00 == 0x100 && word(2) == 0 {
+        if word(4) != phase || word(5) > 1 || word(0) & 0xf00 != 0x200 && word(2) == 0 {
             return Err("saved quake state is not modeled");
         }
         Ok(Self {
@@ -113,49 +113,47 @@ impl Quake {
         if self.mode & 0xf00 == 0x200 {
             return self.damped();
         }
+        let Some(periods) = self.elapsed.checked_div(self.period) else {
+            return true;
+        };
+        self.elapsed %= self.period;
+        // Completion compares count with the step index before incrementing it.
+        let first = self.steps;
+        self.steps = first.wrapping_add(periods);
+        let done = periods != 0 && first.saturating_add(periods - 1) > self.count;
         if self.mode & 0xf00 == 0x100 {
-            return self.triangle();
-        }
-        let mut done = false;
-        while self.elapsed >= self.period {
-            self.elapsed -= self.period;
+            self.triangle();
+        } else if periods != 0 {
             let a = self.amplitude;
-            let [x, y] = &mut self.offset;
+            let toggle = |value: i32| {
+                let base = if value == 0 { a.wrapping_neg() } else { value };
+                if periods & 1 != 0 {
+                    base.wrapping_neg()
+                } else {
+                    base
+                }
+            };
             match self.mode & 0xf0 {
-                0x00 => *x = if *x == 0 { a } else { x.wrapping_neg() },
-                0x10 => *y = if *y == 0 { a } else { y.wrapping_neg() },
+                0x00 => self.offset[0] = toggle(self.offset[0]),
+                0x10 => self.offset[1] = toggle(self.offset[1]),
                 0x30 => {
                     let neg = a.wrapping_neg();
-                    [*x, *y] = match self.steps & 3 {
+                    self.offset = match self.steps.wrapping_sub(1) & 3 {
                         0 => [neg, neg],
                         1 => [a, a],
                         2 => [a, neg],
                         _ => [neg, a],
                     };
                 }
-                // 0x20 is rejected at creation; others leave the offset.
                 _ => {}
             }
-            // Compared before counting this step, so count + 2 steps run.
-            if self.count != u32::MAX && self.count < self.steps {
-                done = true;
-            }
-            self.steps = self.steps.wrapping_add(1);
         }
         done
     }
 
     /// HAROUSE 0x43b1a3 and MEMORIA 0x43e3e3: each whole period toggles +16. Since it starts at
     /// zero and steps increments in the same loop, its value is steps & 1.
-    fn triangle(&mut self) -> bool {
-        let mut done = false;
-        while self.elapsed >= self.period {
-            self.elapsed -= self.period;
-            if self.count != u32::MAX && self.count < self.steps {
-                done = true;
-            }
-            self.steps = self.steps.wrapping_add(1);
-        }
+    fn triangle(&mut self) {
         let value = (self.elapsed as i32)
             .wrapping_mul(self.amplitude)
             .wrapping_mul(2)
@@ -172,7 +170,6 @@ impl Quake {
             0x10 => self.offset = [0, value],
             _ => {}
         }
-        done
     }
 
     /// The 0x200 waveform: the phase angle is (count × elapsed × 360) / duration in u32,
@@ -250,22 +247,21 @@ impl SceneHost {
                 // cmvs-20070119 0x42b9d0 runs the triangle wave for every nonzero waveform
                 // nibble; other directions leave the offset. Stored as 0x100 here.
                 let mode = if self.config.allow_legacy_triangle_quake && mode & 0xf00 != 0 {
-                    if period == 0 {
-                        return Err(error(pc, op, "triangle quake needs a nonzero period"));
-                    }
                     mode & !0xf00 | 0x100
                 } else {
                     mode
                 };
                 match mode & 0xf00 {
+                    0 | 0x100 if period == 0 => {
+                        return Err(error(
+                            pc,
+                            op,
+                            "step and triangle quakes need a nonzero period",
+                        ));
+                    }
                     0x100 if self.config.allow_legacy_triangle_quake => {}
                     0x100
-                        if self.config.allow_triangle_quake && matches!(mode & 0xf0, 0 | 0x10) =>
-                    {
-                        if period == 0 {
-                            return Err(error(pc, op, "triangle quake needs a nonzero period"));
-                        }
-                    }
+                        if self.config.allow_triangle_quake && matches!(mode & 0xf0, 0 | 0x10) => {}
                     0x200 => {}
                     0 if mode & 0xf0 == 0x20 => {
                         return Err(error(
@@ -361,6 +357,16 @@ mod triangle_tests {
             elapsed: 0,
             steps: 0,
             offset: [0, 0],
+        }
+    }
+    #[test]
+    fn only_damped_quakes_can_restore_with_zero_period() {
+        let mut q = quake();
+        q.period = 0;
+        for mode in [0, 0x100, 0x200] {
+            q.mode = mode;
+            assert_eq!(Quake::restore(&q.saved()).is_ok(), mode == 0x200);
+            assert!(q.advance(0));
         }
     }
     #[test]

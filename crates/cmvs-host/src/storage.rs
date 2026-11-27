@@ -207,10 +207,7 @@ fn mark_imported(target: &Path, marker: &Path) -> io::Result<()> {
 fn import_entries(mut entries: Vec<fs::DirEntry>, target: &Path) -> io::Result<()> {
     // Import backups last so an interrupted import cannot leave an orphaned
     // backup that prevents opening the local profile to retry the migration.
-    entries.sort_by_key(|entry| {
-        let name = entry.file_name();
-        name == "system.bak" || name == "save000.bak" || name == "cmvs.cfg.bak"
-    });
+    entries.sort_by_key(|entry| entry.path().extension().is_some_and(|ext| ext == "bak"));
     for entry in entries {
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -475,6 +472,8 @@ mod tests {
             ("system.bak", b"system backup".as_slice()),
             ("cmvs.cfg", b"[S]\nX=1\n".as_slice()),
             ("cmvs.cfg.bak", b"[S]\nX=0\n".as_slice()),
+            ("cvns.cfg", b"[S]\nY=1\n".as_slice()),
+            ("cvns.cfg.bak", b"[S]\nY=0\n".as_slice()),
         ];
         for (name, bytes) in originals {
             fs::write(root.legacy().join(name), bytes).unwrap();
@@ -495,9 +494,11 @@ mod tests {
         let order = [
             "system.bak",
             "cmvs.cfg.bak",
+            "cvns.cfg.bak",
             "save003.dat",
             "system.dat",
             "cmvs.cfg",
+            "cvns.cfg",
         ];
         let entries = order
             .into_iter()
@@ -507,6 +508,7 @@ mod tests {
         assert!(!root.savedata().join(IMPORTED).exists());
         assert!(!root.savedata().join("system.bak").exists());
         assert!(!root.savedata().join("cmvs.cfg.bak").exists());
+        assert!(!root.savedata().join("cvns.cfg.bak").exists());
         drop(local);
         let reopened = ProfileSystemSave::open_game_savedata(&root.game()).unwrap();
         assert!(reopened.read_configuration().unwrap().is_none());

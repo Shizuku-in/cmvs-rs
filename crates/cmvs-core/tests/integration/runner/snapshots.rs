@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn restoring_a_slot_discards_the_movie_overlay_and_its_pending_keyboard() {
     use cmvs_core::host::{
+        audio::{AudioBackend, AudioRequest, RecordingAudio, VoiceDuckingSettings},
         input::{CodeInput, KeyBindings},
         platform::{TextDialogRequest, TextDialogResult},
     };
@@ -63,6 +64,30 @@ fn restoring_a_slot_discards_the_movie_overlay_and_its_pending_keyboard() {
     assert!(backend.pending);
     assert!(run.load_slot(4, &mut backend).is_err());
     assert!(run.keyboard_comment_rect().is_some() && backend.pending);
+    struct NoMovieStop;
+    impl AudioBackend for NoMovieStop {
+        fn configure_voice_ducking(
+            &mut self,
+            _: VoiceDuckingSettings,
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
+            Ok(())
+        }
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
+            Ok(false)
+        }
+    }
+    run.set_audio_backend(Box::new(NoMovieStop)).unwrap();
+    let pc = run.machine().pc();
+    assert!(
+        run.load_slot(3, &mut backend)
+            .unwrap_err()
+            .to_string()
+            .contains("stopping movie audio")
+    );
+    assert_eq!(run.machine().pc(), pc);
+    assert!(run.movies().has_player() && run.keyboard_comment_rect().is_some() && backend.pending);
+    run.set_audio_backend(Box::new(RecordingAudio::default()))
+        .unwrap();
     run.load_slot(3, &mut backend).unwrap();
     assert!(run.keyboard_comment_rect().is_none() && !backend.pending);
     assert!(run.movies().player_image().is_none());
@@ -598,6 +623,7 @@ fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
         paths_ready: bool,
         configured: bool,
         played: Arc<AtomicBool>,
+        fail_next_play: bool,
     }
     impl AudioBackend for Audio {
         fn configure_voice_ducking(
@@ -649,6 +675,9 @@ fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
             assert!(
                 matches!(request, AudioRequest::PlayBgm { primary, .. } if primary == b"Synthetic")
             );
+            if std::mem::take(&mut self.fail_next_play) {
+                return Err("BGM device unavailable".into());
+            }
             self.played.store(true, Ordering::Relaxed);
             Ok(())
         }
@@ -660,6 +689,7 @@ fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
     commands::command(&mut code, 0x2160, &[0]);
     let audio_pc = code.len();
     commands::command(&mut code, 0x20a0, &[0, 0, 1]);
+    commands::command(&mut code, 0x2161, &[0]);
     commands::command(&mut code, 0x22b2, &[]);
     commands::command(&mut code, 0x2000, &[]);
     let root = Root::new("resume-audio-paths", &code, b"Synthetic\0");
@@ -684,8 +714,18 @@ fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
         paths_ready: false,
         configured: false,
         played: played.clone(),
+        fail_next_play: true,
     }))
     .unwrap();
+    assert_eq!(
+        run.load_slot(3, &mut backend).unwrap_err().to_string(),
+        "BGM device unavailable"
+    );
+    assert_eq!(run.audio().bgm().primary, b"Synthetic");
+    assert_eq!(run.platform().scene_title(), b"Synthetic");
+    assert!(
+        matches!(backend.requests().last(), Some(PlatformRequest::Title(title)) if title.ends_with(b"Synthetic"))
+    );
     run.load_slot(3, &mut backend).unwrap();
     assert!(played.load(Ordering::Relaxed));
     drop(run);
@@ -1215,6 +1255,8 @@ fn slot_loads_validate_before_backup_and_replace_the_thumbnail() {
     commands::command(&mut code, 0x22b8, &[]);
     let capture_pc = code.len();
     commands::command(&mut code, 0x22b2, &[]);
+    commands::command(&mut code, 0x22b5, &[4]);
+    let resume_pc = code.len();
     commands::command(&mut code, 0x2000, &[]);
     let root = Root::new("load-slot-preflight", &code, b"Synthetic\0");
     let original_system = auto_resume_save(0x12345678);
@@ -1276,6 +1318,32 @@ fn slot_loads_validate_before_backup_and_replace_the_thumbnail() {
     assert!(run.save_slot(3).unwrap());
     let rewritten = Csv2Save::decode(&fs::read(user.join("save003.dat")).unwrap()).unwrap();
     assert!(rewritten.auxiliary.is_empty());
+
+    // The load instruction must finish its repeat adjustment even if the window rejects the title.
+    struct NoWindow;
+    impl PlatformBackend for NoWindow {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
+            Err("window closed".into())
+        }
+    }
+    let mut saved = EngineSnapshot::decode(&save.snapshot).unwrap();
+    saved.pc = resume_pc as u32;
+    saved.repeat_count = u32::MAX;
+    saved.scene_title = b"Restored".to_vec();
+    let slot = Csv2Save::encode(header, &saved.encode().unwrap(), &[], &save.script_image).unwrap();
+    fs::write(user.join("save004.dat"), slot).unwrap();
+    assert_eq!(run.tick(&mut NoWindow).unwrap(), RuntimeEvent::Progress);
+    assert!(
+        run.tick(&mut NoWindow)
+            .unwrap_err()
+            .to_string()
+            .contains("window closed")
+    );
+    assert_eq!(
+        (run.machine().pc(), run.machine().repeat_count()),
+        (resume_pc, 0)
+    );
+    assert_eq!(run.platform().scene_title(), b"Restored");
 
     fs::write(root.0.join("save/save001.dat"), raw).unwrap();
     let mut read_only = Runtime::new(&script, &root.0, &game, 0).unwrap();

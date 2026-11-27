@@ -175,7 +175,7 @@ impl Curtain {
                     self.state = 0;
                 } else {
                     for mesh in &mut self.scene.meshes {
-                        mesh.alpha = 256 - (self.action_clock << 8) / 500;
+                        mesh.alpha = (256 - (self.action_clock << 8) / 500).min(255);
                     }
                 }
             }
@@ -285,6 +285,8 @@ mod tests {
         assert_eq!(effect.state, 0);
         effect.requested = 5;
         effect.advance(16).unwrap();
+        effect.advance(0).unwrap();
+        assert_eq!(effect.quads()[0].alpha, 255);
         effect.advance(250).unwrap();
         assert_eq!(effect.scene.meshes[0].alpha, 128);
         effect.advance(250).unwrap();

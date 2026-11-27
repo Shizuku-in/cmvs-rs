@@ -4,7 +4,7 @@ use cmvs_core::{
     host::platform::PlatformRequest, host::platform::RecordingBackend, render::raster::RgbaImage,
     runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome, runtime::RuntimeError,
 };
-use std::{error::Error, time::Duration};
+use std::error::Error;
 
 fn slice(driver: &mut FrameDriver, run: &mut Runtime, steps: usize) -> FrameOutcome {
     driver
@@ -166,11 +166,12 @@ fn device_retry_keeps_slice_budget_and_structured_stops() {
         FrameOutcome::BudgetExhausted
     );
     assert_eq!(calls, 1);
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     assert_eq!(
         driver
             .run_slice(
                 &mut run,
-                &mut FrameBudget::time(Duration::ZERO),
+                &mut FrameBudget::time(std::time::Duration::ZERO),
                 |_| -> Result<RuntimeEvent, ()> { panic!("expired budget must not execute") }
             )
             .unwrap(),
