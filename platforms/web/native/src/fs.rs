@@ -11,8 +11,8 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(js_namespace = ["globalThis", "cmvsFs"], js_name = size)]
-    fn host_size(path: &str) -> f64;
+    #[wasm_bindgen(catch, js_namespace = ["globalThis", "cmvsFs"], js_name = size)]
+    fn host_size(path: &str) -> Result<f64, JsValue>;
     #[wasm_bindgen(catch, js_namespace = ["globalThis", "cmvsFs"], js_name = read)]
     fn host_read(path: &str, offset: f64, length: u32) -> Result<Vec<u8>, JsValue>;
     #[wasm_bindgen(catch, js_namespace = ["globalThis", "cmvsFs"], js_name = write)]
@@ -29,15 +29,24 @@ fn missing() -> io::Error {
     io::Error::from(io::ErrorKind::NotFound)
 }
 
+fn lookup_size(path: &str) -> io::Result<f64> {
+    host_size(path).map_err(host_error)
+}
+
 fn normalized(path: impl AsRef<Path>) -> io::Result<String> {
     let mut parts = Vec::new();
     for part in path.as_ref().components() {
         match part {
             Component::RootDir | Component::CurDir => {}
-            Component::Normal(name) => parts.push(
-                name.to_str()
-                    .ok_or_else(|| io::Error::other("non-UTF8 browser path"))?,
-            ),
+            Component::Normal(name) => {
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| io::Error::other("non-UTF8 browser path"))?;
+                if name.contains(['\\', ':', '\0']) {
+                    return Err(io::ErrorKind::InvalidInput.into());
+                }
+                parts.push(name);
+            }
             _ => return Err(io::Error::other("invalid browser path")),
         }
     }
@@ -128,7 +137,7 @@ pub struct WebFs;
 impl HostFs for WebFs {
     fn open(&self, path: &Path, options: &OpenOptions) -> io::Result<File> {
         let path = normalized(path)?;
-        let size = host_size(&path);
+        let size = lookup_size(&path)?;
         if size == -2.0 {
             return Err(io::Error::other("cannot open browser directory"));
         }
@@ -153,7 +162,7 @@ impl HostFs for WebFs {
     }
 
     fn metadata(&self, path: &Path) -> io::Result<Metadata> {
-        let size = host_size(&normalized(path)?);
+        let size = lookup_size(&normalized(path)?)?;
         if size == -1.0 {
             return Err(missing());
         }
@@ -165,20 +174,12 @@ impl HostFs for WebFs {
     }
 
     fn try_exists(&self, path: &Path) -> io::Result<bool> {
-        Ok(host_size(&normalized(path)?) != -1.0)
-    }
-
-    fn is_file(&self, path: &Path) -> bool {
-        normalized(path).is_ok_and(|p| host_size(&p) >= 0.0)
-    }
-
-    fn is_dir(&self, path: &Path) -> bool {
-        normalized(path).is_ok_and(|p| host_size(&p) == -2.0)
+        Ok(lookup_size(&normalized(path)?)? != -1.0)
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         let name = normalized(path)?;
-        if host_size(&name) == -1.0 {
+        if lookup_size(&name)? == -1.0 {
             return Err(missing());
         }
         Ok(name.into())
@@ -194,7 +195,7 @@ impl HostFs for WebFs {
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         let path = normalized(path)?;
-        if host_size(&path) == -1.0 {
+        if lookup_size(&path)? == -1.0 {
             return Err(missing());
         }
         host_operation("remove", &path, "").map_err(host_error)
@@ -202,9 +203,29 @@ impl HostFs for WebFs {
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         let from = normalized(from)?;
-        if host_size(&from) == -1.0 {
+        if lookup_size(&from)? == -1.0 {
             return Err(missing());
         }
         host_operation("rename", &from, &normalized(to)?).map_err(host_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_invalid_browser_path_components() {
+        for path in [
+            "/user/a:b",
+            "/user/a\0b",
+            #[cfg(not(windows))]
+            "/user/a\\b",
+        ] {
+            assert_eq!(
+                normalized(path).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
     }
 }
