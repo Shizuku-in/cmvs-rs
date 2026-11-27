@@ -435,6 +435,11 @@ int cmvs_gpu_open(void) {
     dkCmdBufMakerDefaults(&cmdbuf, g.device);
     cmdbuf.cbAddMem = on_cmd_full;
     g.cmdbuf = dkCmdBufCreate(&cmdbuf);
+    if (!g.cmdbuf) {
+        fail("GPU command buffer creation failed");
+        cmvs_gpu_close();
+        return CMVS_GPU_ERROR;
+    }
     dkCmdBufAddMemory(g.cmdbuf, g.cmd, 0, CMD_SIZE - CMD_RESERVE);
 
     DkImageLayoutMaker layout_maker;
@@ -708,6 +713,10 @@ int cmvs_gpu_present(const float view[8], const float *overlays, u32 count) {
     submit();
     /* Canvas work runs while the queue waits for a free swapchain image. */
     int slot = dkQueueAcquireImage(g.queue, g.swapchain);
+    if (slot < 0 || slot >= SWAP_IMAGES) {
+        fail("invalid GPU swapchain image slot");
+        return CMVS_GPU_ERROR;
+    }
     reserve(COST_PASS + count * COST_DRAW);
     bind_target(&g.swap[slot], SCREEN_W, SCREEN_H);
     draw_present(view, dkMakeTextureHandle(CANVAS_SLOT, 0));

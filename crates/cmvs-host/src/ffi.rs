@@ -112,7 +112,6 @@ unsafe fn open(
     let Some(h) = (unsafe { handle.as_mut() }) else {
         return -1;
     };
-    h.player = None;
     let result = catch_unwind(AssertUnwindSafe(
         || -> Result<Player, Box<dyn std::error::Error + Send + Sync>> {
             if game.is_null() || user.is_null() || font.is_null() {
@@ -121,6 +120,8 @@ unsafe fn open(
             let game = unsafe { CStr::from_ptr(game) }.to_str()?;
             let user = unsafe { CStr::from_ptr(user) }.to_str()?;
             let font = unsafe { CStr::from_ptr(font) }.to_str()?;
+            // Release the previous profile lock before opening the next session.
+            drop(h.player.take());
             let open_player = if game_savedata {
                 Player::open_game_savedata
             } else {

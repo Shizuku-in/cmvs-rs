@@ -319,19 +319,27 @@ static void draw_quad(int blend, const float *params, uint32_t count, Texture *c
         sceGxmSetFragmentProgram(g.context, g.fragment[blend]);
         g.bound_blend = blend;
     }
-    void *uniforms = NULL;
-    sceGxmReserveVertexDefaultUniformBuffer(g.context, &uniforms);
-    sceGxmSetUniformDataF(uniforms, g.vertex_v, 0, VERTEX_FLOATS, params);
-    sceGxmReserveFragmentDefaultUniformBuffer(g.context, &uniforms);
-    sceGxmSetUniformDataF(uniforms, g.fragment_v, 0, count, params);
+    void *vertex_uniforms = NULL, *fragment_uniforms = NULL;
+    int code = sceGxmReserveVertexDefaultUniformBuffer(g.context, &vertex_uniforms);
+    if (code < 0 || !vertex_uniforms) {
+        fail_code("sceGxmReserveVertexDefaultUniformBuffer", code);
+        return;
+    }
+    code = sceGxmReserveFragmentDefaultUniformBuffer(g.context, &fragment_uniforms);
+    if (code < 0 || !fragment_uniforms) {
+        fail_code("sceGxmReserveFragmentDefaultUniformBuffer", code);
+        return;
+    }
+    sceGxmSetUniformDataF(vertex_uniforms, g.vertex_v, 0, VERTEX_FLOATS, params);
+    sceGxmSetUniformDataF(fragment_uniforms, g.fragment_v, 0, count, params);
     float dims[8] = {(float)t[0]->width, (float)t[0]->height, (float)t[1]->width,
                      (float)t[1]->height, (float)t[2]->width, (float)t[2]->height, 0.0f, 0.0f};
-    sceGxmSetUniformDataF(uniforms, g.fragment_dims, 0, 8, dims);
+    sceGxmSetUniformDataF(fragment_uniforms, g.fragment_dims, 0, 8, dims);
     for (unsigned i = 0; i < 3; ++i)
         sceGxmSetFragmentTexture(g.context, i, &t[i]->gxm);
     sceGxmSetVertexStream(g.context, 0, g.corners);
-    int code = sceGxmDraw(g.context, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16,
-                          g.indices, 4);
+    code = sceGxmDraw(g.context, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16,
+                      g.indices, 4);
     if (code < 0)
         fail_code("sceGxmDraw", code);
 }

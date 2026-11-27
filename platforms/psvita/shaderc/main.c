@@ -30,8 +30,12 @@ static int ends_with(const char *name, const char *suffix) {
 
 /* Returns 0 when `name` compiled; the output replaces any earlier binary. */
 static int compile(const char *name, shark_type type) {
-    char path[256];
-    snprintf(path, sizeof(path), DIR "/%s", name);
+    char path[512];
+    int n = snprintf(path, sizeof(path), DIR "/%s", name);
+    if (n < 0 || (size_t)n >= sizeof(path) - 1) { /* .gxp needs one more byte than .cg */
+        fprintf(log_file, "%s: shader path too long\n", name);
+        return -1;
+    }
     FILE *in = fopen(path, "rb");
     if (!in) {
         fprintf(log_file, "%s: cannot open\n", name);
@@ -54,17 +58,19 @@ static int compile(const char *name, shark_type type) {
                                                            SHARK_DISABLE);
     free(source);
     int result = -1;
-    path[strlen(path) - 3] = 0; /* drop ".cg" */
-    strcat(path, ".gxp");
+    strcpy(path + n - 3, ".gxp");
     remove(path);
     if (program) {
         FILE *out = fopen(path, "wb");
-        if (out && fwrite(program, 1, size, out) == size && fclose(out) == 0) {
+        if (out) {
+            size_t written = fwrite(program, 1, size, out);
+            if (fclose(out) == 0 && written == size)
+                result = 0;
+        }
+        if (result == 0) {
             fprintf(log_file, "%s: %u bytes\n", name, (unsigned)size);
-            result = 0;
         } else {
-            if (out)
-                fclose(out);
+            remove(path);
             fprintf(log_file, "%s: cannot write the program\n", name);
         }
     } else {
@@ -89,7 +95,7 @@ int main(void) {
         shark_install_log_cb(on_diagnostic);
         shark_set_warnings_level(SHARK_WARN_HIGH);
         SceUID dir = sceIoDopen(DIR);
-        SceIoDirent entry;
+        SceIoDirent entry = {0};
         int count = 0;
         while (dir >= 0 && sceIoDread(dir, &entry) > 0) {
             if (ends_with(entry.d_name, "_v.cg"))

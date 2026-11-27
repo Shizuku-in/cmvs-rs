@@ -32,6 +32,9 @@ impl CommentInput {
     ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
         match self.state.take() {
             None => {
+                if request.initial.contains(&0) {
+                    return Err("comment input contains a NUL byte".into());
+                }
                 self.id = self.id.wrapping_add(1);
                 self.state = Some(State::Requested(CommentInputRequest {
                     id: self.id,
@@ -76,5 +79,26 @@ impl CommentInput {
 
     pub fn cancel(&mut self) {
         self.state = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_initial_text_leaves_keyboard_available() {
+        let mut input = CommentInput::default();
+        let mut request = TextDialogRequest {
+            title: vec![],
+            prompt: vec![],
+            initial: b"a\0b".to_vec(),
+            max_bytes: 16,
+        };
+        assert!(input.poll(&request, TextEncoding::Utf8).is_err());
+        assert!(input.take_request().is_none());
+        request.initial = b"next".to_vec();
+        input.poll(&request, TextEncoding::Utf8).unwrap();
+        assert_eq!(input.take_request().unwrap().initial, "next");
     }
 }

@@ -1,7 +1,7 @@
 //! Color cursors retaining Win32's (background AND mask) XOR color operation.
 use crate::NativeError;
 use raw_window_handle::RawWindowHandle;
-use std::{cell::Cell, marker::PhantomData, ptr, rc::Rc};
+use std::{cell::Cell, ptr, rc::Rc};
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     Graphics::Gdi::{CreateBitmap, DeleteObject},
@@ -23,8 +23,7 @@ struct State {
 /// Owns a cursor and a client-area WM_SETCURSOR override. Create and drop on the
 /// window's thread. Other areas retain their normal resize/title-bar cursors.
 pub struct MaskedCursor {
-    state: Box<State>,
-    _thread: PhantomData<Rc<()>>,
+    state: Rc<State>,
 }
 
 impl MaskedCursor {
@@ -62,13 +61,13 @@ impl MaskedCursor {
             ));
         }
         let cursor = create(size, hotspot, xor_rgb, and_mask)?;
-        let state = Box::new(State {
+        let state = Rc::new(State {
             window: Cell::new(window),
             cursor,
         });
-        let id = (&*state as *const State) as usize;
-        // SAFETY: the stable Box remains owned until Drop removes the callback. Each
-        // live box has its own ID; the !Send/!Sync guard keeps it on the window thread.
+        let id = Rc::as_ptr(&state) as usize;
+        // SAFETY: the thread-bound Rc keeps the shared callback state alive at
+        // this address until Drop unregisters the subclass.
         #[allow(unsafe_code)]
         if unsafe { SetWindowSubclass(window, Some(subclass), id, id) } == 0 {
             let error = last_error("SetWindowSubclass");
@@ -85,10 +84,7 @@ impl MaskedCursor {
         unsafe {
             SetCursor(cursor);
         }
-        Ok(Self {
-            state,
-            _thread: PhantomData,
-        })
+        Ok(Self { state })
     }
 }
 
@@ -152,7 +148,7 @@ unsafe extern "system" fn subclass(
     id: usize,
     data: usize,
 ) -> LRESULT {
-    // SAFETY: `data` is the stable Box registered by attach, removed before freeing.
+    // SAFETY: `data` points to the live Rc allocation registered by attach.
     let state = unsafe { &*(data as *const State) };
     if message == WM_SETCURSOR && wparam == window as usize && lparam as u16 == HTCLIENT as u16 {
         // SAFETY: owned cursor remains live for the callback's lifetime.
@@ -175,17 +171,13 @@ unsafe extern "system" fn subclass(
 impl Drop for MaskedCursor {
     fn drop(&mut self) {
         // SAFETY: same thread as attach. A destroyed window cleared its handle in
-        // WM_NCDESTROY; otherwise unregister before freeing the Box. Never destroy a
+        // WM_NCDESTROY; otherwise unregister before dropping the Rc. Never destroy a
         // selected cursor, and do not replace a newer guard's cursor during swaps.
         #[allow(unsafe_code)]
         unsafe {
             let window = self.state.window.get();
             if !window.is_null() {
-                RemoveWindowSubclass(
-                    window,
-                    Some(subclass),
-                    (&*self.state as *const State) as usize,
-                );
+                RemoveWindowSubclass(window, Some(subclass), Rc::as_ptr(&self.state) as usize);
             }
             if GetCursor() == self.state.cursor {
                 SetCursor(LoadCursorW(ptr::null_mut(), IDC_ARROW));
