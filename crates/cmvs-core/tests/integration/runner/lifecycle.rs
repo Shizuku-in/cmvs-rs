@@ -927,3 +927,449 @@ fn realive_list_selection_receives_input_and_scene_hosts_in_startup() {
     assert_eq!(run.input().pointer(), [25, 40]);
     assert_eq!(run.machine().state().system_integer(0), Some(1));
 }
+
+fn ps2a_bytes(code: &[u8], text: &[u8]) -> Vec<u8> {
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48u32,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+        text.len() as u32,
+        0,
+        0,
+        (code.len() + text.len()) as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(
+        code.iter()
+            .chain(text)
+            .map(|b| b.rotate_left(1).wrapping_add(124)),
+    );
+    raw
+}
+
+fn push_string_arg(code: &mut Vec<u8>, offset: u32) {
+    code.extend(0x201u16.to_le_bytes());
+    code.extend(0x120u16.to_le_bytes());
+    code.extend(offset.to_le_bytes());
+    code.extend(0x20fu16.to_le_bytes());
+    code.extend(0x430u16.to_le_bytes());
+}
+
+fn push_int_arg(code: &mut Vec<u8>, value: u32) {
+    code.extend(0x200u16.to_le_bytes());
+    code.extend(0x100u16.to_le_bytes());
+    code.extend(value.to_le_bytes());
+    code.extend(0x20fu16.to_le_bytes());
+    code.extend(0x430u16.to_le_bytes());
+}
+
+fn assign_integer(code: &mut Vec<u8>, index: u32, value: u32) {
+    code.extend(0x200u16.to_le_bytes());
+    code.extend(0x101u16.to_le_bytes());
+    code.extend(0x200u16.to_le_bytes());
+    code.extend(0x100u16.to_le_bytes());
+    code.extend(index.to_le_bytes());
+    code.extend(0x20fu16.to_le_bytes());
+    code.extend(0x100u16.to_le_bytes());
+    code.extend(value.to_le_bytes());
+    code.extend(0x170u16.to_le_bytes());
+    code.extend(0x20fu16.to_le_bytes());
+}
+
+fn write_cpz7(
+    path: &std::path::Path,
+    parameters: cmvs_core::format::cpz::Cpz7Parameters,
+    dir_name: &[u8],
+    entries: &[(&[u8], Vec<u8>)],
+) {
+    use cmvs_core::format::cpz::{DirectoryFormat, DirectoryNames};
+    let mut out = std::io::Cursor::new(Vec::new());
+    let dirs = [DirectoryNames {
+        name: dir_name.to_vec(),
+        files: entries.iter().map(|(name, _)| name.to_vec()).collect(),
+    }];
+    DirectoryFormat::Cpz7 {
+        parameters,
+        encrypted: true,
+    }
+    .write(&mut out, &dirs, |i| {
+        let data = &entries[i].1;
+        Ok((data.len() as u32, data.as_slice()))
+    })
+    .unwrap();
+    fs::write(path, out.into_inner()).unwrap();
+}
+
+fn push_string_table(table: &mut Vec<u8>, value: &[u8]) -> u32 {
+    if table.is_empty() {
+        table.push(0);
+    }
+    let offset = table.len() as u32;
+    table.extend_from_slice(value);
+    table.push(0);
+    offset
+}
+
+fn register_script_slot(code: &mut Vec<u8>, slot: u32, path_offset: u32) {
+    push_string_arg(code, path_offset);
+    push_int_arg(code, slot);
+    code.extend(0x2010u16.to_le_bytes());
+}
+
+fn register_keyed_script_slot(code: &mut Vec<u8>, slot: u32, path_offset: u32, keys: [u32; 4]) {
+    for key in keys.into_iter().rev() {
+        push_int_arg(code, key);
+    }
+    push_string_arg(code, path_offset);
+    push_int_arg(code, slot);
+    code.extend(0x2268u16.to_le_bytes());
+}
+
+fn common_script_bytes(index: u32, value: u32) -> Vec<u8> {
+    let mut code = Vec::new();
+    assign_integer(&mut code, index, value);
+    code.extend(0x414u16.to_le_bytes());
+    code.extend(0u16.to_le_bytes());
+    ps2a_bytes(&code, b"")
+}
+
+fn main_script_bytes(index: u32, value: u32) -> Vec<u8> {
+    let mut code = Vec::new();
+    assign_integer(&mut code, index, value);
+    code.extend(0x2000u16.to_le_bytes());
+    ps2a_bytes(&code, b"")
+}
+
+#[test]
+fn script_slots_search_registered_cpz7_archives_in_priority_order() {
+    use cmvs_core::format::cpz::Cpz7Parameters;
+
+    let mut text = Vec::new();
+    let update_off = push_string_table(&mut text, b"data\\pack\\update.cpz");
+    let script_off = push_string_table(&mut text, b"data\\pack\\script.cpz");
+    let intcode_off = push_string_table(&mut text, b"intcode.ps3");
+    let main_off = push_string_table(&mut text, b"main.ps3");
+
+    let mut code = Vec::new();
+    push_int_arg(&mut code, 12);
+    code.extend(0x201fu16.to_le_bytes());
+    register_script_slot(&mut code, 0, update_off);
+    register_script_slot(&mut code, 1, script_off);
+    // Call common script intcode.ps3 (present in both update.cpz and script.cpz).
+    push_string_arg(&mut code, intcode_off);
+    push_int_arg(&mut code, 0);
+    code.extend(0x2081u16.to_le_bytes());
+    // Transition to main.ps3 (present only in script.cpz).
+    push_string_arg(&mut code, main_off);
+    code.extend(0x2080u16.to_le_bytes());
+
+    let root = Root::new("script-slot-priority", &code, &text);
+    write_cpz7(
+        &root.0.join("data/pack/update.cpz"),
+        Cpz7Parameters::default(),
+        b"update",
+        &[(b"intcode.ps3", common_script_bytes(1, 103))],
+    );
+    write_cpz7(
+        &root.0.join("data/pack/script.cpz"),
+        Cpz7Parameters::default(),
+        b"script",
+        &[
+            (b"intcode.ps3", common_script_bytes(1, 100)),
+            (b"main.ps3", main_script_bytes(2, 200)),
+        ],
+    );
+
+    let game = root.game();
+    let script = root.script();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
+    run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
+    let mut backend = RecordingBackend::default();
+    let mut yielded = false;
+    for _ in 0..100 {
+        if run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
+            yielded = true;
+            break;
+        }
+    }
+    assert!(yielded);
+    assert_eq!(run.machine().state().integer(1), Some(103));
+    assert_eq!(run.machine().state().integer(2), Some(200));
+}
+
+#[test]
+fn script_slots_handle_missing_corrupt_directory_rebind_and_keyed_cpz7() {
+    use cmvs_core::format::cpz::Cpz7Parameters;
+
+    // 1) Missing optional slot 0 falls through to slot 1; rebinding slot 0 invalidates cache;
+    //    directory slot 0 overrides archive slot 1.
+    let mut text = Vec::new();
+    let missing_off = push_string_table(&mut text, b"data\\pack\\missing.cpz");
+    let update_off = push_string_table(&mut text, b"data\\pack\\update.cpz");
+    let dir_off = push_string_table(&mut text, b"data\\patch\\");
+    let script_off = push_string_table(&mut text, b"data\\pack\\script.cpz");
+    let first_off = push_string_table(&mut text, b"first.ps3");
+    let second_off = push_string_table(&mut text, b"second.ps3");
+    let third_off = push_string_table(&mut text, b"third.ps3");
+
+    let mut code = Vec::new();
+    push_int_arg(&mut code, 12);
+    code.extend(0x201fu16.to_le_bytes());
+    register_script_slot(&mut code, 0, missing_off);
+    register_script_slot(&mut code, 1, script_off);
+    push_string_arg(&mut code, first_off);
+    push_int_arg(&mut code, 0);
+    code.extend(0x2081u16.to_le_bytes());
+    // Rebind slot 0 to update.cpz and load second.ps3.
+    register_script_slot(&mut code, 0, update_off);
+    push_string_arg(&mut code, second_off);
+    push_int_arg(&mut code, 1);
+    code.extend(0x2081u16.to_le_bytes());
+    // Rebind slot 0 to a directory override and load third.ps3.
+    register_script_slot(&mut code, 0, dir_off);
+    push_string_arg(&mut code, third_off);
+    push_int_arg(&mut code, 2);
+    code.extend(0x2081u16.to_le_bytes());
+    code.extend(0x2000u16.to_le_bytes());
+
+    let root = Root::new("script-slot-rebind-dir", &code, &text);
+    fs::create_dir(root.0.join("data/patch")).unwrap();
+    fs::write(
+        root.0.join("data/patch/third.ps3"),
+        common_script_bytes(3, 303),
+    )
+    .unwrap();
+    write_cpz7(
+        &root.0.join("data/pack/update.cpz"),
+        Cpz7Parameters::default(),
+        b"update",
+        &[(b"second.ps3", common_script_bytes(2, 202))],
+    );
+    write_cpz7(
+        &root.0.join("data/pack/script.cpz"),
+        Cpz7Parameters::default(),
+        b"script",
+        &[
+            (b"first.ps3", common_script_bytes(1, 101)),
+            (b"second.ps3", common_script_bytes(2, 200)),
+            (b"third.ps3", common_script_bytes(3, 300)),
+        ],
+    );
+
+    let game = root.game();
+    let script = root.script();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    let mut yielded = false;
+    for _ in 0..200 {
+        if run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
+            yielded = true;
+            break;
+        }
+    }
+    assert!(yielded);
+    assert_eq!(run.machine().state().integer(1), Some(101));
+    assert_eq!(run.machine().state().integer(2), Some(202));
+    assert_eq!(run.machine().state().integer(3), Some(303));
+
+    // 2) Corrupt archive in slot 0 must fail explicitly rather than falling back to slot 1.
+    let mut bad_text = Vec::new();
+    let bad_upd = push_string_table(&mut bad_text, b"data\\pack\\update.cpz");
+    let bad_scr = push_string_table(&mut bad_text, b"data\\pack\\script.cpz");
+    let bad_name = push_string_table(&mut bad_text, b"first.ps3");
+    let mut bad_code = Vec::new();
+    push_int_arg(&mut bad_code, 12);
+    bad_code.extend(0x201fu16.to_le_bytes());
+    register_script_slot(&mut bad_code, 0, bad_upd);
+    register_script_slot(&mut bad_code, 1, bad_scr);
+    push_string_arg(&mut bad_code, bad_name);
+    push_int_arg(&mut bad_code, 0);
+    bad_code.extend(0x2081u16.to_le_bytes());
+    let bad_root = Root::new("script-slot-corrupt", &bad_code, &bad_text);
+    fs::write(bad_root.0.join("data/pack/update.cpz"), b"not-a-cpz").unwrap();
+    write_cpz7(
+        &bad_root.0.join("data/pack/script.cpz"),
+        Cpz7Parameters::default(),
+        b"script",
+        &[(b"first.ps3", common_script_bytes(1, 101))],
+    );
+    let bad_game = bad_root.game();
+    let bad_script = bad_root.script();
+    let mut bad_run = Runtime::new(&bad_script, &bad_root.0, &bad_game, 0).unwrap();
+    let mut failed = false;
+    for _ in 0..100 {
+        if bad_run.tick(&mut backend).is_err() {
+            failed = true;
+            break;
+        }
+    }
+    assert!(failed);
+
+    // 3) Mode 13 per-archive keyed CPZ7 across two slots with distinct keys.
+    let keys0 = [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210];
+    let keys1 = [0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00];
+    let mut key_text = Vec::new();
+    let k_upd = push_string_table(&mut key_text, b"data\\pack\\update.cpz");
+    let k_scr = push_string_table(&mut key_text, b"data\\pack\\script.cpz");
+    let k_int = push_string_table(&mut key_text, b"intcode.ps3");
+    let k_main = push_string_table(&mut key_text, b"main.ps3");
+    let mut key_code = Vec::new();
+    push_int_arg(&mut key_code, 13);
+    key_code.extend(0x201fu16.to_le_bytes());
+    register_keyed_script_slot(&mut key_code, 0, k_upd, keys0);
+    register_keyed_script_slot(&mut key_code, 1, k_scr, keys1);
+    push_string_arg(&mut key_code, k_int);
+    push_int_arg(&mut key_code, 0);
+    key_code.extend(0x2081u16.to_le_bytes());
+    push_string_arg(&mut key_code, k_main);
+    key_code.extend(0x2080u16.to_le_bytes());
+    let key_root = Root::new("script-slot-keyed", &key_code, &key_text);
+    write_cpz7(
+        &key_root.0.join("data/pack/update.cpz"),
+        Cpz7Parameters::from(keys0),
+        b"update",
+        &[(b"intcode.ps3", common_script_bytes(1, 77))],
+    );
+    write_cpz7(
+        &key_root.0.join("data/pack/script.cpz"),
+        Cpz7Parameters::from(keys1),
+        b"script",
+        &[
+            (b"intcode.ps3", common_script_bytes(1, 11)),
+            (b"main.ps3", main_script_bytes(2, 88)),
+        ],
+    );
+    let key_game = Registry::builtin()
+        .identify_game(&key_root.0, Some("cmvs-20190305"))
+        .unwrap();
+    let key_script = load_start(&key_root.0, &key_game.files).unwrap();
+    let mut key_run = Runtime::new(&key_script, &key_root.0, &key_game, 0).unwrap();
+    key_run.set_block_unreviewed(false);
+    key_run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
+    let mut key_yielded = false;
+    for _ in 0..200 {
+        if key_run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
+            key_yielded = true;
+            break;
+        }
+    }
+    assert!(key_yielded);
+    assert_eq!(key_run.machine().state().integer(1), Some(77));
+    assert_eq!(key_run.machine().state().integer(2), Some(88));
+}
+
+#[test]
+fn skip_auto_resume_preview_uses_registered_script_slot_priority() {
+    use cmvs_core::format::cpz::Cpz7Parameters;
+
+    let guard_main = |integer_index: u32| -> Vec<u8> {
+        // `if (int[integer_index] != 0) 0x22bb(870)` recognized by `script_settings::conditional_integer`.
+        let mut code = Vec::new();
+        code.extend(0x200u16.to_le_bytes());
+        code.extend(0x101u16.to_le_bytes());
+        code.extend(0x200u16.to_le_bytes());
+        code.extend(0x100u16.to_le_bytes());
+        code.extend(integer_index.to_le_bytes());
+        code.extend(0x20fu16.to_le_bytes());
+        code.extend(0x100u16.to_le_bytes());
+        code.extend(0u32.to_le_bytes());
+        code.extend(0x172u16.to_le_bytes()); // !=
+        code.extend(0x20fu16.to_le_bytes());
+        let jump_target_at = code.len() + 2;
+        code.extend(0x401u16.to_le_bytes());
+        code.extend(0u32.to_le_bytes());
+        push_int_arg(&mut code, 870);
+        code.extend(0x22bbu16.to_le_bytes());
+        let end = code.len() as u32;
+        code[jump_target_at..jump_target_at + 4].copy_from_slice(&end.to_le_bytes());
+        code.extend(0x2000u16.to_le_bytes());
+        ps2a_bytes(&code, b"")
+    };
+
+    let game_id = 0x1810_a032;
+    let mut text = Vec::new();
+    let update_off = push_string_table(&mut text, b"data\\pack\\update.cpz");
+    let script_off = push_string_table(&mut text, b"data\\pack\\script.cpz");
+    let mut code = Vec::new();
+    push_int_arg(&mut code, 12);
+    code.extend(0x201fu16.to_le_bytes());
+    push_int_arg(&mut code, game_id);
+    code.extend(0x201du16.to_le_bytes());
+    register_script_slot(&mut code, 0, update_off);
+    register_script_slot(&mut code, 1, script_off);
+    code.extend(0x2128u16.to_le_bytes()); // system save load
+    code.extend(0x2000u16.to_le_bytes());
+
+    let root = Root::new("script-slot-preview", &code, &text);
+    write_cpz7(
+        &root.0.join("data/pack/update.cpz"),
+        Cpz7Parameters::default(),
+        b"update",
+        &[(b"main.ps3", guard_main(2205))],
+    );
+    write_cpz7(
+        &root.0.join("data/pack/script.cpz"),
+        Cpz7Parameters::default(),
+        b"script",
+        &[(b"main.ps3", guard_main(2198))],
+    );
+    // Build CSS1 with both 2198 = 1 and 2205 = 1 so we verify only 2205 (from update.cpz) is cleared.
+    let save_bytes = {
+        let mut payload = vec![0u8; 44864];
+        payload[32512 + 4 * (2198 - 2048)..32516 + 4 * (2198 - 2048)]
+            .copy_from_slice(&1i32.to_le_bytes());
+        payload[32512 + 4 * (2205 - 2048)..32516 + 4 * (2205 - 2048)]
+            .copy_from_slice(&1i32.to_le_bytes());
+        let mut packed = Vec::new();
+        for chunk in payload.chunks(8) {
+            packed.push(((1u16 << chunk.len()) - 1) as u8);
+            packed.extend_from_slice(chunk);
+        }
+        let mut raw = vec![0u8; 360];
+        raw[..4].copy_from_slice(b"CSS1");
+        for (offset, value) in [
+            (4, 104),
+            (68, game_id),
+            (92, 44864),
+            (96, packed.len() as u32),
+            (100, 360 + packed.len() as u32),
+        ] {
+            raw[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        raw[76] = 1;
+        let key = b"YUKO_KAWAI_PURPLE_SYSTEM_SAVE_CHECK";
+        for (i, byte) in packed.iter().enumerate() {
+            raw.push((byte.wrapping_add(64) ^ key[i % key.len()]).rotate_left(2));
+        }
+        let checksum = raw[360..]
+            .iter()
+            .fold(0u16, |sum, &b| sum.wrapping_add(u16::from(b)));
+        raw.extend(checksum.to_le_bytes());
+        raw
+    };
+    fs::write(root.0.join("save/system.dat"), save_bytes).unwrap();
+
+    let registry = root.recorded_registry(game_id);
+    let game = registry.identify_game(&root.0, None).unwrap();
+    let script = load_start(&root.0, &game.files).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
+    run.set_skip_auto_resume(true).unwrap();
+    let mut backend = RecordingBackend::default();
+    let mut yielded = false;
+    for _ in 0..100 {
+        if run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
+            yielded = true;
+            break;
+        }
+    }
+    assert!(yielded);
+    assert!(run.auto_resume_skipped());
+    assert_eq!(run.machine().state().integer(2205), Some(0));
+    assert_eq!(run.machine().state().integer(2198), Some(1));
+}

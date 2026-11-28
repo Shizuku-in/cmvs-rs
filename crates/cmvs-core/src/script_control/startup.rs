@@ -176,7 +176,7 @@ impl<'a> ArchiveTarget<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ArchiveSettings {
     Auto,
     Five(Cpz5Mode),
@@ -189,6 +189,30 @@ impl ArchiveSettings {
             Self::Five(mode) => ArchiveIndex::read_with_cpz5_mode(r, mode)?,
             Self::Seven(keys) => ArchiveIndex::read_with_cpz7_parameters(r, keys)?,
         })
+    }
+}
+pub(super) fn slot_archive_settings(
+    version: ArchiveVersion,
+    packing_mode: Option<u32>,
+    parameters: Option<Cpz7Parameters>,
+    allow_cpz5_auto: bool,
+) -> Result<ArchiveSettings, crate::FormatError> {
+    use crate::FormatError;
+    match version {
+        ArchiveVersion::Cpz5 if allow_cpz5_auto && packing_mode.is_none() => {
+            Ok(ArchiveSettings::Auto)
+        }
+        ArchiveVersion::Cpz5 => Ok(ArchiveSettings::Five(Cpz5Mode::try_from(
+            packing_mode.ok_or(FormatError("missing CPZ5 packing mode"))?,
+        )?)),
+        ArchiveVersion::Cpz7 if packing_mode == Some(12) => {
+            Ok(ArchiveSettings::Seven(Cpz7Parameters::default()))
+        }
+        ArchiveVersion::Cpz7 if packing_mode == Some(13) => Ok(ArchiveSettings::Seven(
+            parameters.ok_or(FormatError("missing CPZ7 per-archive parameters"))?,
+        )),
+        ArchiveVersion::Cpz7 => Err(FormatError("missing or unsupported CPZ7 packing mode")),
+        _ => Ok(ArchiveSettings::Auto),
     }
 }
 pub(super) fn archive_settings(

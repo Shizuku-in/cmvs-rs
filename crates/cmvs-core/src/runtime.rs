@@ -53,7 +53,7 @@
 //! [`SnapshotPolicy`] controls gameplay snapshots. The default captures state and
 //! returns an error if the state includes unsupported records.
 //! Errors from VM execution, resources, and host services propagate to the caller.
-use crate::filesystem::{File, HostFs};
+use crate::filesystem::HostFs;
 pub use crate::modules::{bootstrap, save_menu, script_control};
 use crate::{
     MAX_PAYLOAD,
@@ -75,7 +75,7 @@ use crate::{
     resources::{ResourceArchives, ResourceKind},
     save_menu::{DirectorySaves, SaveMenuHost},
     scene::SceneHost,
-    script_control::{ArchiveScripts, ControlEvent, ScriptControl},
+    script_control::{ControlEvent, RegisteredScripts, ScriptControl},
     snapshot::{SaveImage, SaveInfo, SaveTitle},
     system_save::{
         FileSystemSave, NewSystemSave, ProfileSystemSave, SystemSaveEvent, SystemSaveHost,
@@ -430,7 +430,7 @@ pub struct Runtime {
     notices: Vec<u16>,
     bootstrap: Bootstrap,
     control: ScriptControl,
-    source: ArchiveScripts<File>,
+    source: RegisteredScripts,
     saves: DirectorySaves,
     save_menu: SaveMenuHost,
     system_source: FileSystemSave,
@@ -633,10 +633,9 @@ impl Runtime {
             focused: true,
             bootstrap: Bootstrap::default(),
             control: ScriptControl::for_profile(game.selection.profile, virtual_tick),
-            source: ArchiveScripts::deferred(
-                fs.open_read(&root.join(&game.files.script_archive))?,
-                &*fs,
-                &canonical_root,
+            source: RegisteredScripts::new(
+                Arc::clone(&fs),
+                canonical_root.clone(),
                 &game.files.script_archive,
             )?,
             saves: DirectorySaves::with_fs(root.join("save"), Arc::clone(&fs))?,
@@ -711,8 +710,6 @@ impl Runtime {
                     .source
                     .preview(
                         self.main_script_name,
-                        &*self.fs,
-                        &self.root,
                         self.machine.loaded_script(0),
                         self.gate.profile(),
                     )
@@ -1533,8 +1530,7 @@ impl Runtime {
             {
                 self.settings.cvns_mut().frame_interval_ms = interval;
             }
-            self.source
-                .configure(&self.bootstrap, &*self.fs, &self.root);
+            self.source.configure(&self.bootstrap);
             self.images
                 .configure_parameters(self.bootstrap.archive_parameters());
             self.scene_movies

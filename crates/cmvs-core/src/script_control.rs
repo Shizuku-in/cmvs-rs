@@ -5,11 +5,12 @@
 //! coordinates these operations through [`crate::runtime::Runtime`]; rendering and
 //! save-snapshot orchestration remain separate.
 use crate::{
+    MAX_PAYLOAD,
     bootstrap::Bootstrap,
     cpz::{ArchiveIndex, ArchiveVersion, Cpz7Parameters},
     dispatch::Call,
     evaluate::error,
-    filesystem::HostFs,
+    filesystem::{File, HostFs, resolve_under_with_fs},
     profile::EngineProfile,
     ps3::Script,
 };
@@ -18,11 +19,12 @@ use std::{
     error::Error,
     io::{Read, Seek},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 mod startup;
 pub use startup::Startup;
-use startup::{ArchiveSettings, ArchiveTarget, archive_settings};
+use startup::{ArchiveSettings, ArchiveTarget, archive_settings, slot_archive_settings};
 
 pub type LoadError = Box<dyn Error + Send + Sync>;
 
@@ -340,6 +342,211 @@ impl<R: Read + Seek> ScriptSource for ArchiveScripts<R> {
         let entry = index.find(name)?;
         Ok(Script::decode(&index.read_entry(&mut self.reader, entry)?)?)
     }
+}
+
+const SCRIPT_SLOTS: u32 = 5;
+
+struct OpenScriptArchive {
+    file: File,
+    index: Box<ArchiveIndex>,
+}
+
+/// Runtime script lookup across `0x2010`/`0x2268` slots in priority order, with fallback
+/// to the discovered `script.cpz` when startup has not registered any script slot.
+pub(crate) struct RegisteredScripts {
+    fs: Arc<dyn HostFs>,
+    root: PathBuf,
+    fallback: ArchiveScripts<File>,
+    paths: [Option<Vec<u8>>; SCRIPT_SLOTS as usize],
+    parameters: [Option<Cpz7Parameters>; SCRIPT_SLOTS as usize],
+    packing_mode: Option<u32>,
+    open: [Option<OpenScriptArchive>; SCRIPT_SLOTS as usize],
+    lookup_pc: usize,
+}
+
+impl RegisteredScripts {
+    pub(crate) fn new(
+        fs: Arc<dyn HostFs>,
+        root: PathBuf,
+        relative: &Path,
+    ) -> Result<Self, LoadError> {
+        let fallback =
+            ArchiveScripts::deferred(fs.open_read(&root.join(relative))?, &*fs, &root, relative)?;
+        Ok(Self {
+            fs,
+            root,
+            fallback,
+            paths: std::array::from_fn(|_| None),
+            parameters: [None; SCRIPT_SLOTS as usize],
+            packing_mode: None,
+            open: std::array::from_fn(|_| None),
+            lookup_pc: 0,
+        })
+    }
+
+    pub(crate) fn configure(&mut self, state: &Bootstrap) {
+        self.fallback.configure(state, &*self.fs, &self.root);
+        let new_mode = state.settings().get(&0x201f).copied();
+        let mode_changed = self.packing_mode != new_mode;
+        self.packing_mode = new_mode;
+        for slot in 0..SCRIPT_SLOTS {
+            let index = slot as usize;
+            let new_path = state
+                .paths()
+                .get(&(0x2010, slot))
+                .filter(|path| !path.is_empty())
+                .cloned();
+            let new_params = state.archive_parameters().get(&(0x2010, slot)).copied();
+            if mode_changed || self.paths[index] != new_path || self.parameters[index] != new_params
+            {
+                self.open[index] = None;
+            }
+            self.paths[index] = new_path;
+            self.parameters[index] = new_params;
+        }
+    }
+
+    pub(crate) fn set_lookup_pc(&mut self, pc: usize) {
+        self.lookup_pc = pc;
+        self.fallback.set_lookup_pc(pc);
+    }
+
+    // Early auto-resume detection must not fix the live indices used by later commands.
+    pub(crate) fn preview(
+        &mut self,
+        name: &[u8],
+        script: Option<&Script>,
+        profile: &EngineProfile,
+    ) -> Result<Script, LoadError> {
+        if let Some(start) = script {
+            let startup = Startup::execute(start, profile)?;
+            let mode = startup.bootstrap.settings().get(&0x201f).copied();
+            let mut any_registered = false;
+            for slot in 0..SCRIPT_SLOTS {
+                let Some(path) = startup
+                    .bootstrap
+                    .paths()
+                    .get(&(0x2010, slot))
+                    .filter(|path| !path.is_empty())
+                else {
+                    continue;
+                };
+                any_registered = true;
+                if path.ends_with(b"\\") {
+                    if let Some(found) = read_directory_script(&*self.fs, &self.root, path, name)? {
+                        return Ok(found);
+                    }
+                    continue;
+                }
+                let resolved = match resolve_under_with_fs(&*self.fs, &self.root, path) {
+                    Ok(resolved) => resolved,
+                    Err(err) if err.is_not_found() => continue,
+                    Err(err) => return Err(err.into()),
+                };
+                let mut file = self.fs.open_read(&resolved)?;
+                let version = crate::cpz::read_version(&mut file)?;
+                let settings = slot_archive_settings(
+                    version,
+                    mode,
+                    startup
+                        .bootstrap
+                        .archive_parameters()
+                        .get(&(0x2010, slot))
+                        .copied(),
+                    true,
+                )
+                .map_err(|e| format!("startup PC {:#x} ({}), {e}", startup.pc, startup.stopped))?;
+                let index = settings.open(&mut file)?;
+                if let Some(entry) = index.lookup(name)? {
+                    return Ok(Script::decode(&index.read_entry(&mut file, entry)?)?);
+                }
+            }
+            if any_registered {
+                return Err(format!(
+                    "script preview: {} not found in registered script archives",
+                    String::from_utf8_lossy(name)
+                )
+                .into());
+            }
+        }
+        self.fallback
+            .preview(name, &*self.fs, &self.root, script, profile)
+    }
+}
+
+impl ScriptSource for RegisteredScripts {
+    fn load(&mut self, name: &[u8]) -> Result<Script, LoadError> {
+        if self.paths.iter().all(Option::is_none) {
+            return self.fallback.load(name);
+        }
+        for slot in 0..SCRIPT_SLOTS as usize {
+            let Some(path) = self.paths[slot].as_deref() else {
+                continue;
+            };
+            if path.ends_with(b"\\") {
+                if let Some(script) = read_directory_script(&*self.fs, &self.root, path, name)? {
+                    return Ok(script);
+                }
+                continue;
+            }
+            if self.open[slot].is_none() {
+                let resolved = match resolve_under_with_fs(&*self.fs, &self.root, path) {
+                    Ok(resolved) => resolved,
+                    Err(err) if err.is_not_found() => continue,
+                    Err(err) => return Err(err.into()),
+                };
+                let mut file = self.fs.open_read(&resolved)?;
+                let version = crate::cpz::read_version(&mut file)?;
+                let settings =
+                    slot_archive_settings(version, self.packing_mode, self.parameters[slot], false)
+                        .map_err(|e| {
+                            format!(
+                                "script lookup at PC {:#x} ({}): {e}",
+                                self.lookup_pc,
+                                String::from_utf8_lossy(path)
+                            )
+                        })?;
+                let index = settings.open(&mut file)?;
+                self.open[slot] = Some(OpenScriptArchive {
+                    file,
+                    index: Box::new(index),
+                });
+            }
+            let open = self.open[slot].as_mut().expect("opened above");
+            if let Some(entry) = open.index.lookup(name)? {
+                let bytes = open.index.read_entry(&mut open.file, entry)?;
+                return Ok(Script::decode(&bytes)?);
+            }
+        }
+        Err(format!(
+            "script lookup at PC {:#x}: {} not found in registered script archives",
+            self.lookup_pc,
+            String::from_utf8_lossy(name)
+        )
+        .into())
+    }
+}
+
+fn read_directory_script(
+    fs: &dyn HostFs,
+    root: &Path,
+    dir: &[u8],
+    name: &[u8],
+) -> Result<Option<Script>, LoadError> {
+    let joined = [dir, name].concat();
+    let resolved = match resolve_under_with_fs(fs, root, &joined) {
+        Ok(resolved) => resolved,
+        Err(err) if err.is_not_found() => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let mut bytes = Vec::new();
+    fs.open_read(&resolved)?
+        .take(MAX_PAYLOAD as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_PAYLOAD {
+        return Err("script file exceeds research limit".into());
+    }
+    Ok(Some(Script::decode(&bytes)?))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
