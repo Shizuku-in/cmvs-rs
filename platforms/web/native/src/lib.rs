@@ -10,7 +10,7 @@ use cmvs_core::{
     format::{save::Csv2Save, system_save::Css1Save},
     host::{filesystem::HostFs, settings::Configuration},
     profile::Registry,
-    render::raster::ScaleFilter,
+    render::raster::{RenderScale, ScaleFilter},
     runtime::{FrameBudget, FrameOutcome, RuntimeEvent, SaveStorage, script_control::Startup},
 };
 use cmvs_font::font::FontRenderer;
@@ -30,6 +30,7 @@ pub struct WebRuntime {
     backend: BrowserBackend,
     scale_filter: Option<ScaleFilter>,
     anti_aliasing: bool,
+    render_scale: RenderScale,
     output: [u32; 2],
 }
 #[wasm_bindgen]
@@ -68,9 +69,14 @@ impl WebRuntime {
             return Err(js_error("WebGPU is already initialized"));
         }
         self.backend.gpu = Some(
-            gpu::BrowserGpu::new(canvas, self.backend.size, self.anti_aliasing)
-                .await
-                .map_err(js_error)?,
+            gpu::BrowserGpu::new(
+                canvas,
+                self.backend.size,
+                self.anti_aliasing,
+                self.render_scale,
+            )
+            .await
+            .map_err(js_error)?,
         );
         self.backend.frame = None;
         Ok(())
@@ -80,6 +86,14 @@ impl WebRuntime {
     }
     pub fn anti_aliasing(&self) -> bool {
         self.anti_aliasing
+    }
+    pub fn set_render_scale(&mut self, scale: &str) -> Result<(), JsValue> {
+        self.render_scale = self
+            .session
+            .runtime
+            .render_scale_override(Some(scale))
+            .map_err(js_error)?;
+        Ok(())
     }
     /// An immediate screenshot suspends at its pending command until mapping completes.
     #[cfg(target_arch = "wasm32")]
@@ -177,10 +191,14 @@ impl WebRuntime {
         self.backend.size[1]
     }
     pub fn uses_custom_scale_filter(&self) -> bool {
-        self.scale_filter.is_some()
+        #[cfg(target_arch = "wasm32")]
+        let gpu_scaled = self.backend.gpu.is_some() && self.render_scale != RenderScale::Original;
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu_scaled = false;
+        self.scale_filter.is_some() || gpu_scaled
     }
     pub fn resize_output(&mut self, width: u32, height: u32) {
-        if self.scale_filter.is_none() || width == 0 || height == 0 {
+        if !self.uses_custom_scale_filter() || width == 0 || height == 0 {
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -372,12 +390,14 @@ impl WebRuntime {
         )?;
         let scale_filter = session.runtime.scale_filter_override(scale_filter)?;
         let anti_aliasing = session.runtime.anti_aliasing_override(None)?;
+        let render_scale = session.runtime.render_scale_override(None)?;
         let output = backend.size;
         Ok(Self {
             session,
             backend,
             scale_filter,
             anti_aliasing,
+            render_scale,
             output,
         })
     }

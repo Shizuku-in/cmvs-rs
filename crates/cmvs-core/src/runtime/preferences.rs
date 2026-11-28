@@ -3,7 +3,7 @@ use crate::{
     FormatError,
     audio::AudioHost,
     message_flags::MessageFlags,
-    raster::ScaleFilter,
+    raster::{RenderScale, ScaleFilter},
     save_menu::{profile_int, profile_string},
     settings::{Configuration, DisplayPreferences, SettingsHost},
 };
@@ -95,6 +95,34 @@ impl Runtime {
             b"0" | b"off" | b"false" => Ok(false),
             b"1" | b"on" | b"true" => Ok(true),
             _ => Err(FormatError("ANTI_ALIASING must be off, on, 0, or 1")),
+        }
+    }
+
+    /// Resolve internal GPU scene resolution scaling, with a launch choice taking priority.
+    pub fn render_scale_override(&self, launch: Option<&str>) -> Result<RenderScale, FormatError> {
+        let configured;
+        let value = match launch {
+            Some(value) => value.as_bytes(),
+            None => {
+                configured = profile_string(
+                    self.configuration.bytes(),
+                    "CMVS_RS_DISPLAY",
+                    "RENDER_SCALE",
+                    b"1x",
+                    16,
+                );
+                &configured
+            }
+        };
+        match value {
+            b"1x" | b"1" | b"original" | b"game" => Ok(RenderScale::Original),
+            b"auto" | b"native" => Ok(RenderScale::Auto),
+            b"1.5x" | b"1.5" => Ok(RenderScale::X1_5),
+            b"2x" | b"2" => Ok(RenderScale::X2),
+            b"3x" | b"3" => Ok(RenderScale::X3),
+            _ => Err(FormatError(
+                "RENDER_SCALE must be 1x, auto, 1.5x, 2x, or 3x",
+            )),
         }
     }
 

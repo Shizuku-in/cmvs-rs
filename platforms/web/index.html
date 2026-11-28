@@ -57,6 +57,16 @@ input:focus-visible, button:focus-visible, summary:focus-visible, canvas:focus-v
 }
 input[type=checkbox] { accent-color: #655b4a; }
 .check { display: flex; align-items: center; gap: 8px; }
+.badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid #c9945b;
+  color: #8c551c;
+  background: #f3e4d0;
+  font-size: 11px;
+  line-height: 1.6;
+}
 details { margin-top: 16px; color: var(--muted); font-size: 13px; }
 summary { width: fit-content; cursor: pointer; }
 details[open] summary { margin-bottom: 20px; }
@@ -139,6 +149,14 @@ canvas.filtered {
   <option value="lanczos3">Lanczos3</option>
   <option value="lanczos3-anti-ringing">Lanczos3（抗振铃）</option>
   <option value="lanczos4">Lanczos4</option>
+</select></label>
+<label><span>渲染分辨率（WebGPU）<span class="badge">实验性</span></span><select id="render-scale">
+  <option value="">默认</option>
+  <option value="1x">原始（1×）</option>
+  <option value="auto">匹配屏幕</option>
+  <option value="1.5x">1.5×</option>
+  <option value="2x">2×</option>
+  <option value="3x">3×</option>
 </select></label>
 <label class="check"><input id="anti-aliasing" type="checkbox">立绘抗锯齿（WebGPU）</label>
 <label>导入存档备份（可选，将替换本游戏的浏览器存档）<input id="backup" type="file" accept=".json"></label>

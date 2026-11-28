@@ -145,6 +145,7 @@ extern "C" fn cmvs_apple_attach_metal_layer(
             p.metal = Some(crate::renderer::Metal::new(
                 &instance,
                 p.anti_aliasing,
+                p.render_scale,
                 move || {
                     // SAFETY: Swift retains the CAMetalLayer until synchronous detach.
                     Ok(unsafe {
@@ -157,7 +158,7 @@ extern "C" fn cmvs_apple_attach_metal_layer(
         }
         #[cfg(not(target_vendor = "apple"))]
         {
-            let _ = p.anti_aliasing;
+            let _ = (p.anti_aliasing, p.render_scale);
             Err("Metal requires Apple hardware".into())
         }
     })

@@ -32,6 +32,7 @@ class LauncherActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var face: EditText
     private lateinit var scaleFilter: Spinner
+    private lateinit var renderScale: Spinner
     private lateinit var antiAliasing: CheckBox
     private lateinit var gameButton: Button
     private lateinit var fontButton: Button
@@ -73,6 +74,15 @@ class LauncherActivity : Activity() {
         val savedFilter = settings.getString("scaleFilter", "")
         scaleFilter.setSelection(filters.indexOfFirst { it.first == savedFilter }.coerceAtLeast(0))
         layout.addView(scaleFilter)
+        val scaleLabel = text(layout, "渲染分辨率（实验性）")
+        renderScale = Spinner(this)
+        renderScale.id = View.generateViewId()
+        scaleLabel.labelFor = renderScale.id
+        renderScale.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
+            renderScales.map { it.second })
+        val savedScale = settings.getString("renderScale", "")
+        renderScale.setSelection(renderScales.indexOfFirst { it.first == savedScale }.coerceAtLeast(0))
+        layout.addView(renderScale)
         antiAliasing = CheckBox(this)
         antiAliasing.text = "抗锯齿"
         antiAliasing.isChecked = settings.getBoolean("antiAliasing", false)
@@ -108,6 +118,7 @@ class LauncherActivity : Activity() {
         fontButton.isEnabled = !busy
         face.isEnabled = !busy
         scaleFilter.isEnabled = !busy
+        renderScale.isEnabled = !busy
         antiAliasing.isEnabled = !busy
         startButton.isEnabled = !busy && selected("game").isDirectory && selected("font").isFile
         cancelButton.visibility = if (busy) View.VISIBLE else View.GONE
@@ -167,10 +178,12 @@ class LauncherActivity : Activity() {
             val index = face.text.toString().toInt()
             if (index !in 0..1024) throw IllegalArgumentException()
             val filter = filters[scaleFilter.selectedItemPosition].first
+            val scale = renderScales[renderScale.selectedItemPosition].first
             val aa = if (antiAliasing.isChecked) "on" else ""
             settings.edit().putInt("face", index).putString("scaleFilter", filter)
+                .putString("renderScale", scale)
                 .putBoolean("antiAliasing", antiAliasing.isChecked).apply()
-            val config = "${settings.getString("game", "")}\n${settings.getString("font", "")}\n$index\n$filter\n$aa\n"
+            val config = "${settings.getString("game", "")}\n${settings.getString("font", "")}\n$index\n$filter\n$aa\n$scale\n"
             val temporary = File(filesDir, "launch.tmp")
             Files.write(temporary.toPath(), config.toByteArray(StandardCharsets.UTF_8))
             Files.move(temporary.toPath(), File(filesDir, "launch.cfg").toPath(), StandardCopyOption.REPLACE_EXISTING)
@@ -226,6 +239,14 @@ class LauncherActivity : Activity() {
             "lanczos3" to "Lanczos3",
             "lanczos3-anti-ringing" to "Lanczos3（抗振铃）",
             "lanczos4" to "Lanczos4",
+        )
+        private val renderScales = listOf(
+            "" to "默认",
+            "1x" to "原始（1×）",
+            "auto" to "匹配屏幕",
+            "1.5x" to "1.5×",
+            "2x" to "2×",
+            "3x" to "3×",
         )
     }
 }

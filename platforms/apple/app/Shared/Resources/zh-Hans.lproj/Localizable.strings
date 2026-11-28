@@ -31,6 +31,10 @@
 "Bilinear" = "双线性";
 "Keys Bicubic" = "Keys 双三次";
 "Lanczos3 with Anti-Ringing" = "Lanczos3（抗振铃）";
+"Render Scale" = "渲染分辨率";
+"Experimental" = "实验性";
+"Original (1×)" = "原始（1×）";
+"Match Screen" = "匹配屏幕";
 "Anti-Aliasing" = "抗锯齿";
 "Game Preference" = "遵循游戏设置";
 "Original Size" = "原始尺寸";

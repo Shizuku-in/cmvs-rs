@@ -31,6 +31,10 @@
 "Bilinear" = "バイリニア";
 "Keys Bicubic" = "Keys バイキュービック";
 "Lanczos3 with Anti-Ringing" = "Lanczos3（リンギング抑制）";
+"Render Scale" = "描画解像度";
+"Experimental" = "実験的";
+"Original (1×)" = "原寸（1×）";
+"Match Screen" = "画面解像度に合わせる";
 "Anti-Aliasing" = "アンチエイリアス";
 "Game Preference" = "ゲームの設定";
 "Original Size" = "原寸";

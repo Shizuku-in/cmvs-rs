@@ -86,7 +86,7 @@ $('setup').onsubmit = async event => {
   };
   try {
     const offscreen=renderer==='webgpu'?canvas.transferControlToOffscreen():undefined;
-    send({type:'start',canvas:offscreen,files:[...$('game').files].map(file=>({path:file.webkitRelativePath.split('/').slice(1).join('/'),file})),font:$('font').files[0],face:Number($('face').value),profile:$('profile').value.trim(),skip:$('skip').checked,backup:$('backup').files[0],scaleFilter:$('scale-filter').value,antiAliasing:$('anti-aliasing').checked},offscreen?[offscreen]:[]);
+    send({type:'start',canvas:offscreen,files:[...$('game').files].map(file=>({path:file.webkitRelativePath.split('/').slice(1).join('/'),file})),font:$('font').files[0],face:Number($('face').value),profile:$('profile').value.trim(),skip:$('skip').checked,backup:$('backup').files[0],scaleFilter:$('scale-filter').value,renderScale:$('render-scale').value,antiAliasing:$('anti-aliasing').checked},offscreen?[offscreen]:[]);
   } catch(error) {stop('启动失败：'+error);}
 };
 $('stop').onclick = () => {

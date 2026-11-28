@@ -4,7 +4,7 @@ use crate::{FormatError, MAX_PAYLOAD};
 use std::sync::{Arc, OnceLock};
 
 mod filter;
-pub use filter::ScaleFilter;
+pub use filter::{RenderScale, ScaleFilter};
 
 struct ImageData {
     pixels: Vec<u8>,

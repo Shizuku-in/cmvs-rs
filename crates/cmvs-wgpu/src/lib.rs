@@ -1,9 +1,10 @@
 //! GPU execution of validated CMVS draw commands, with lazy logical-frame readback.
 use cmvs_core::{
-    render::raster::{CacheKey, RgbaImage, ScaleFilter},
+    render::raster::{CacheKey, RenderScale, RgbaImage, ScaleFilter},
     render::scene_render::Layer,
     render::scene_render::RenderFrame,
     render::scene_render::shader::ShaderBlend,
+    render::scene_render::shader::flags as shader_flags,
     render::scene_render::shader::shader_draw,
 };
 use std::{
@@ -22,16 +23,23 @@ const CACHE_LIMIT: usize = 128 * 1024 * 1024;
 /// player), which leaves room for images that stopped players retain.
 const FRAME_TEXTURES: usize = 8;
 
-/// An immutable submitted logical frame. Readback is performed only on demand.
+/// An immutable submitted frame. Readback is performed only on demand and always
+/// returns the logical canvas dimensions (downsampling high-resolution renders).
 pub struct GpuFrame {
     // Raw handles stay private so an untracked clone cannot outlive its pool lease.
     target: Shared<Texture>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     size: [u32; 2],
+    logical_size: [u32; 2],
 }
 impl GpuFrame {
+    /// Logical canvas dimensions expected by engine captures and presentation viewports.
     pub fn dimensions(&self) -> [u32; 2] {
+        self.logical_size
+    }
+    /// Actual GPU render-target dimensions (larger than [`Self::dimensions`] when high-res scaling is active).
+    pub fn render_dimensions(&self) -> [u32; 2] {
         self.size
     }
     fn begin_read(&self) -> wgpu::Buffer {
@@ -65,6 +73,12 @@ impl GpuFrame {
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read(&self) -> Result<RgbaImage> {
+        let image = self.read_native()?;
+        self.to_logical(image)
+    }
+    /// Reads back the raw GPU render target without downsampling to logical dimensions.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_native(&self) -> Result<RgbaImage> {
         let buffer = self.begin_read();
         let (tx, rx) = std::sync::mpsc::channel();
         buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
@@ -101,7 +115,15 @@ impl GpuFrame {
             }
         })
         .await?;
-        self.finish_read(&buffer)
+        let image = self.finish_read(&buffer)?;
+        self.to_logical(image)
+    }
+    fn to_logical(&self, image: RgbaImage) -> Result<RgbaImage> {
+        if self.size == self.logical_size {
+            Ok(image)
+        } else {
+            Ok(downsample_area(&image, self.logical_size)?)
+        }
     }
     fn finish_read(&self, buffer: &wgpu::Buffer) -> Result<RgbaImage> {
         let [w, h] = self.size;
@@ -115,6 +137,74 @@ impl GpuFrame {
         buffer.unmap();
         Ok(RgbaImage::new(w, h, pixels)?)
     }
+}
+
+/// Separable box-area downsampler used when reading back a high-resolution scene frame
+/// at logical engine dimensions for captures or save thumbnails.
+fn downsample_area(
+    src: &RgbaImage,
+    [dst_w, dst_h]: [u32; 2],
+) -> std::result::Result<RgbaImage, cmvs_core::FormatError> {
+    let [sw, sh] = [src.width() as usize, src.height() as usize];
+    let [dw, dh] = [dst_w as usize, dst_h as usize];
+    let (pixels, _) = src.pixels().as_chunks::<4>();
+    let mut horiz = vec![[0f32; 4]; sh * dw];
+    let scale_x = sw as f32 / dw as f32;
+    for dx in 0..dw {
+        let x0 = dx as f32 * scale_x;
+        let x1 = ((dx + 1) as f32 * scale_x).min(sw as f32);
+        let ix0 = x0.floor() as usize;
+        let ix1 = (x1.ceil() as usize).min(sw);
+        let inv = 1.0 / (x1 - x0);
+        for y in 0..sh {
+            let mut acc = [0f32; 4];
+            let row = &pixels[y * sw..][..sw];
+            for (ix, px) in row.iter().enumerate().take(ix1).skip(ix0) {
+                let left = (ix as f32).max(x0);
+                let right = ((ix + 1) as f32).min(x1);
+                let w = (right - left) * inv;
+                let a = f32::from(px[3]);
+                let af = a / 255.0;
+                acc[0] += f32::from(px[0]) * af * w;
+                acc[1] += f32::from(px[1]) * af * w;
+                acc[2] += f32::from(px[2]) * af * w;
+                acc[3] += a * w;
+            }
+            horiz[y * dw + dx] = acc;
+        }
+    }
+    let mut out = vec![0u8; dw * dh * 4];
+    let scale_y = sh as f32 / dh as f32;
+    for dy in 0..dh {
+        let y0 = dy as f32 * scale_y;
+        let y1 = ((dy + 1) as f32 * scale_y).min(sh as f32);
+        let iy0 = y0.floor() as usize;
+        let iy1 = (y1.ceil() as usize).min(sh);
+        let inv = 1.0 / (y1 - y0);
+        for dx in 0..dw {
+            let mut acc = [0f32; 4];
+            for (iy, row) in horiz.chunks_exact(dw).enumerate().take(iy1).skip(iy0) {
+                let top = (iy as f32).max(y0);
+                let bottom = ((iy + 1) as f32).min(y1);
+                let w = (bottom - top) * inv;
+                let p = row[dx];
+                for c in 0..4 {
+                    acc[c] += p[c] * w;
+                }
+            }
+            let a = acc[3].clamp(0.0, 255.0);
+            let a_u8 = a.round() as u8;
+            let dst = (dy * dw + dx) * 4;
+            if a_u8 != 0 {
+                let unpremul = 255.0 / a;
+                for c in 0..3 {
+                    out[dst + c] = (acc[c] * unpremul).round().clamp(0.0, 255.0) as u8;
+                }
+            }
+            out[dst + 3] = a_u8;
+        }
+    }
+    RgbaImage::new(dst_w, dst_h, out)
 }
 struct Cached {
     target: Shared<Texture>,
@@ -139,6 +229,8 @@ pub struct Renderer {
     frame_start: u64,
     errors: Arc<Mutex<Option<String>>>,
     anti_aliasing: bool,
+    render_scale: RenderScale,
+    viewport_size: Option<[u32; 2]>,
     pub uploaded_bytes: u64,
 }
 impl Renderer {
@@ -291,7 +383,7 @@ impl Renderer {
             frames: HashMap::new(),
             canvases: TexturePool::new(
                 4,
-                64 << 20,
+                128 << 20,
                 wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_SRC,
@@ -308,6 +400,8 @@ impl Renderer {
             frame_start: 0,
             errors,
             anti_aliasing: false,
+            render_scale: RenderScale::Original,
+            viewport_size: None,
             uploaded_bytes: 0,
         };
         renderer.check()?;
@@ -320,6 +414,26 @@ impl Renderer {
     }
     pub fn anti_aliasing(&self) -> bool {
         self.anti_aliasing
+    }
+    /// Configures internal GPU scene resolution scaling. Defaults to [`RenderScale::Original`] (1x).
+    pub fn set_render_scale(&mut self, scale: RenderScale) {
+        self.render_scale = scale;
+    }
+    pub fn render_scale(&self) -> RenderScale {
+        self.render_scale
+    }
+    /// Updates the physical presentation viewport hint used by [`RenderScale::Auto`].
+    pub fn set_viewport_size(&mut self, viewport: Option<[u32; 2]>) {
+        self.viewport_size = viewport;
+    }
+    /// Returns the internal render-target dimensions that [`Self::render`] will use for a
+    /// CMVS scene of `logical` dimensions.
+    pub fn resolved_render_size(&self, logical: [u32; 2]) -> [u32; 2] {
+        self.render_scale.resolve(
+            logical,
+            self.viewport_size,
+            self.device.limits().max_texture_dimension_2d,
+        )
     }
     pub fn check(&self) -> Result<()> {
         if let Some(message) = self.errors.lock().expect("GPU error lock").take() {
@@ -469,6 +583,7 @@ impl Renderer {
             device: self.device.clone(),
             queue: self.queue.clone(),
             size: [w, h],
+            logical_size: [w, h],
         })
     }
     /// Preserves the source alpha for the desktop checkerboard preview path.
@@ -484,6 +599,7 @@ impl Renderer {
             device: self.device.clone(),
             queue: self.queue.clone(),
             size: [image.width(), image.height()],
+            logical_size: [image.width(), image.height()],
         })
     }
     /// Scales an image to fit an opaque canvas entirely on the GPU.
@@ -512,14 +628,32 @@ impl Renderer {
         }
         self.frame_start = self.clock;
         self.bindings.prepare(&self.device, commands.len())?;
-        let target = self.canvases.acquire(&self.device, size);
+        let has_cvns = commands.iter().any(|c| matches!(c, Layer::Cvns(_)));
+        let render_size = if has_cvns {
+            size
+        } else {
+            self.resolved_render_size(size)
+        };
+        let high_res = render_size != size;
+        let target = self.canvases.acquire(&self.device, render_size);
         let dummy = Shared::clone(&self.white);
         let mut draws = Vec::with_capacity(commands.len());
         let mut resolved = Vec::with_capacity(commands.len());
         for command in commands {
             let mut draw = shader_draw(command, size);
-            if self.anti_aliasing && draw.params[3] > 0.0 {
-                draw.params[3] = 2.0;
+            let flags = draw.flags();
+            if flags & shader_flags::CVNS == 0 {
+                draw.params[20] = render_size[0] as f32;
+                draw.params[21] = render_size[1] as f32;
+                if draw.params[3] > 0.0 {
+                    if self.anti_aliasing || high_res {
+                        draw.params[3] = 2.0;
+                    }
+                } else if high_res && flags & shader_flags::SOLID == 0 {
+                    // Upscale 1:1 CMVS Layer::Image with rect-clamped anti-ringing bicubic
+                    // to avoid nearest-neighbor blocks and sprite-sheet edge bleed.
+                    draw.params[3] = 3.0;
+                }
             }
             for image in draw.textures.into_iter().flatten() {
                 self.touch(image);
@@ -611,7 +745,8 @@ impl Renderer {
             target,
             device: self.device.clone(),
             queue: self.queue.clone(),
-            size,
+            size: render_size,
+            logical_size: size,
         })
     }
 }
@@ -977,9 +1112,49 @@ mod tests {
             on_pixels.iter().all(|&v| v >= 200),
             "premultiplied AA must not dip below background 200: {on_pixels:?}"
         );
-        // x=1 (uv=0.75 -> 75% white over 200 -> 241), x=2 (uv=1.25 -> 25% white over 200 -> 214)
+        // x=1 has 75% white over 200 -> ~241, x=2 has 25% white over 200 -> ~214 (step=1.0 -> linear premul).
         assert!((239..=243).contains(&on_pixels[1]), "got {on_pixels:?}");
         assert!((212..=216).contains(&on_pixels[2]), "got {on_pixels:?}");
+
+        // 1b. Uniform 2D magnification (step = 0.5 < 0.95) uses premultiplied Catmull-Rom AR
+        // for sharper edges without overshoot or dark halos.
+        let edge_2d = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(
+                2,
+                2,
+                vec![
+                    255, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0,
+                ],
+            )
+            .unwrap(),
+        };
+        let bicubic_2d = gpu
+            .compose(
+                [4, 4],
+                [200, 200, 200, 255],
+                &[Layer::Projected {
+                    image: &edge_2d,
+                    rect: [0, 0, 2, 2],
+                    quad: [-0.5, -0.5, 3.5, 3.5],
+                    alpha: 255,
+                    blend: Blend::Alpha,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        let row1: Vec<u8> = (0..4).map(|x| bicubic_2d.pixels()[(4 + x) * 4]).collect();
+        assert!(
+            row1.iter().all(|&v| v >= 200),
+            "Catmull-Rom AR must not dip below background 200: {row1:?}"
+        );
+        // Catmull-Rom AR sharpens 75%/25% coverage to ~79.7% (244) and ~20.3% (211).
+        assert!((242..=246).contains(&row1[1]), "got {row1:?}");
+        assert!((209..=213).contains(&row1[2]), "got {row1:?}");
 
         // 2. RGSS minification reduces sub-pixel vertical float shimmer on thin bright strands.
         let mut strand_pixels = vec![0u8; 16 * 16 * 4];
@@ -1144,12 +1319,193 @@ mod tests {
             .unwrap()
             .read()
             .unwrap();
-        // x=2 has 25% coverage of white (255) added onto 100 -> ~164 (straight-alpha would give ~116!).
+        // x=2 has 25% premultiplied coverage of white (255) added onto 100 -> ~164
+        // (straight-alpha bilinear would lose brightness to ~116).
         let add_x2 = additive.pixels()[2 * 4];
         assert!(
             (160..=168).contains(&add_x2),
             "expected premultiplied additive ~164 at x=2, got {add_x2}"
         );
+        gpu.check().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a native GPU adapter; run explicitly"]
+    fn high_res_internal_rendering_preserves_source_detail_and_logical_readback() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
+        let (mut gpu, _) = Renderer::new(&instance, None).unwrap();
+        assert_eq!(gpu.render_scale(), RenderScale::Original);
+
+        // 1. High-res 16x4 alternating red/green stripes drawn at 0.5x into an 8x2 logical canvas:
+        // 2x internal resolution (16x4) preserves every stripe, while read() returns 8x2 logical.
+        let stripe_pixels: Vec<u8> = (0..4)
+            .flat_map(|_| {
+                (0..16).flat_map(|x| {
+                    if x % 2 == 0 {
+                        [255, 0, 0, 255]
+                    } else {
+                        [0, 255, 0, 255]
+                    }
+                })
+            })
+            .collect();
+        let stripes = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(16, 4, stripe_pixels).unwrap(),
+        };
+        gpu.set_render_scale(RenderScale::X2);
+        let frame = gpu
+            .compose(
+                [8, 2],
+                [0, 0, 0, 255],
+                &[Layer::Projected {
+                    image: &stripes,
+                    rect: [0, 0, 16, 4],
+                    quad: [-0.5, -0.5, 7.5, 1.5],
+                    alpha: 255,
+                    blend: Blend::Replace,
+                }],
+            )
+            .unwrap();
+        assert_eq!(frame.dimensions(), [8, 2]);
+        assert_eq!(frame.render_dimensions(), [16, 4]);
+        let native = frame.read_native().unwrap();
+        assert_eq!([native.width(), native.height()], [16, 4]);
+        for y in 0..4usize {
+            for x in 0..16usize {
+                let p = &native.pixels()[(y * 16 + x) * 4..][..4];
+                if x % 2 == 0 {
+                    assert!(
+                        p[0] > 240 && p[1] < 15,
+                        "expected crisp red stripe at ({x},{y}), got {p:?}"
+                    );
+                } else {
+                    assert!(
+                        p[1] > 240 && p[0] < 15,
+                        "expected crisp green stripe at ({x},{y}), got {p:?}"
+                    );
+                }
+            }
+        }
+        let logical = frame.read().unwrap();
+        assert_eq!([logical.width(), logical.height()], [8, 2]);
+        for p in logical.pixels().as_chunks::<4>().0 {
+            assert!(
+                (120..=135).contains(&p[0]) && (120..=135).contains(&p[1]),
+                "expected box-downsampled yellow ~[128,128,0], got {p:?}"
+            );
+        }
+
+        // 2. Cropped Layer::Image upscaling clamps to its source rect with zero sprite-sheet bleed.
+        let atlas_pixels: Vec<u8> = (0..2)
+            .flat_map(|_| {
+                [
+                    [255, 255, 255, 255],
+                    [255, 255, 255, 255],
+                    [255, 0, 0, 255],
+                    [255, 0, 0, 255],
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .collect();
+        let atlas = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(4, 2, atlas_pixels).unwrap(),
+        };
+        let cropped = gpu
+            .compose(
+                [2, 2],
+                [0, 0, 0, 255],
+                &[Layer::Image {
+                    image: &atlas,
+                    rect: [0, 0, 2, 2],
+                    corner: [0, 0],
+                    alpha: 255,
+                    mask: None,
+                    screen_mask: None,
+                    blend: Blend::Replace,
+                }],
+            )
+            .unwrap()
+            .read_native()
+            .unwrap();
+        assert_eq!([cropped.width(), cropped.height()], [4, 4]);
+        for p in cropped.pixels().as_chunks::<4>().0 {
+            assert_eq!(p, &[255, 255, 255, 255], "cropped UI must not bleed red");
+        }
+
+        // 3. Screen-space second texture mask scales to the full high-res render target.
+        let white = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(8, 4, [255, 255, 255, 255].repeat(32)).unwrap(),
+        };
+        let mask_pixels: Vec<u8> = (0..4)
+            .flat_map(|_| {
+                (0..8).flat_map(|x| {
+                    let g = if x < 4 { 255 } else { 0 };
+                    [0, g, 0, 255]
+                })
+            })
+            .collect();
+        let screen_mask = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(8, 4, mask_pixels).unwrap(),
+        };
+        let masked = gpu
+            .compose(
+                [8, 4],
+                [0, 0, 0, 255],
+                &[Layer::Image {
+                    image: &white,
+                    rect: [0, 0, 8, 4],
+                    corner: [0, 0],
+                    alpha: 255,
+                    mask: None,
+                    screen_mask: Some(&screen_mask),
+                    blend: Blend::Alpha,
+                }],
+            )
+            .unwrap()
+            .read_native()
+            .unwrap();
+        assert_eq!([masked.width(), masked.height()], [16, 8]);
+        for y in 0..8usize {
+            for x in 0..6usize {
+                assert!(
+                    masked.pixels()[(y * 16 + x) * 4] > 240,
+                    "left screen_mask region must stay white at ({x},{y})"
+                );
+            }
+            for x in 10..16usize {
+                assert!(
+                    masked.pixels()[(y * 16 + x) * 4] < 15,
+                    "right screen_mask region must stay black at ({x},{y})"
+                );
+            }
+        }
+
+        // 4. RenderScale::Auto follows viewport_size cleanly and clamps to [1x .. 3x].
+        gpu.set_render_scale(RenderScale::Auto);
+        gpu.set_viewport_size(Some([16, 8]));
+        assert_eq!(gpu.resolved_render_size([8, 4]), [16, 8]);
+        gpu.set_viewport_size(Some([4, 2]));
+        assert_eq!(gpu.resolved_render_size([8, 4]), [8, 4]);
+        gpu.set_viewport_size(Some([40, 20]));
+        assert_eq!(gpu.resolved_render_size([8, 4]), [24, 12]);
         gpu.check().unwrap();
     }
 }

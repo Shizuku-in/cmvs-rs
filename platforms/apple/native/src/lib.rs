@@ -15,6 +15,7 @@ use cmvs_audio::HostAudioControl;
 use cmvs_audio::NativeAudio;
 use cmvs_core::{
     format::system_save::ProfileSystemSave,
+    render::raster::RenderScale,
     runtime::{FrameBudget, FrameOutcome, RuntimeEvent, SaveStorage, SnapshotPolicy},
 };
 use cmvs_font::font::FontRenderer;
@@ -42,6 +43,8 @@ struct Config {
     aspect: Option<u32>,
     scale_filter: Option<String>,
     #[serde(default)]
+    render_scale: Option<String>,
+    #[serde(default)]
     anti_aliasing: Option<bool>,
     skip_auto_resume: bool,
     continue_without_snapshot: bool,
@@ -59,6 +62,7 @@ struct Player {
     metal: Option<Metal>,
     use_metal: bool,
     anti_aliasing: bool,
+    render_scale: RenderScale,
     touch: TouchInput,
     touching: bool,
     fresh_touch: bool,
@@ -109,6 +113,9 @@ impl Player {
         let anti_aliasing = session
             .runtime
             .anti_aliasing_override(c.anti_aliasing.map(|v| if v { "on" } else { "off" }))?;
+        let render_scale = session
+            .runtime
+            .render_scale_override(c.render_scale.as_deref())?;
         #[cfg(target_os = "ios")]
         let mut output_audio = None;
         let audio = if c.native_audio {
@@ -159,6 +166,7 @@ impl Player {
             output_audio,
             use_metal: c.metal,
             anti_aliasing,
+            render_scale,
             metal: None,
             touch,
             touching: false,

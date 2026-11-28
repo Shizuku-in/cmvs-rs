@@ -1,6 +1,11 @@
 //! Worker-owned WebGPU surface; only explicit device screenshots read pixels back.
 use cmvs_core::{
-    host::settings::DisplayPreferences, render::raster::ScaleFilter, runtime::Runtime,
+    host::settings::DisplayPreferences,
+    render::{
+        raster::{RenderScale, ScaleFilter},
+        viewport::Viewport,
+    },
+    runtime::Runtime,
 };
 use cmvs_font::font::FontRenderer;
 use cmvs_host::{GpuTarget, with_gpu_target};
@@ -22,6 +27,7 @@ impl BrowserGpu {
         canvas: OffscreenCanvas,
         size: [u32; 2],
         anti_aliasing: bool,
+        render_scale: RenderScale,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         canvas.set_width(size[0]);
         canvas.set_height(size[1]);
@@ -33,6 +39,7 @@ impl BrowserGpu {
             instance.create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()))?;
         let (mut renderer, adapter) = Renderer::new_async(&instance, Some(&surface)).await?;
         renderer.set_anti_aliasing(anti_aliasing);
+        renderer.set_render_scale(render_scale);
         let presenter = Presenter::new(surface, &adapter, &renderer)?;
         Ok(Self {
             instance,
@@ -63,16 +70,8 @@ impl BrowserGpu {
             self.presenter = Presenter::new(surface, &self.adapter, &self.renderer)?;
         }
         let linear = display.render_mode == 1;
-        let frame = with_gpu_target(startup, Some(font), linear, |target| match target {
-            GpuTarget::Movie {
-                image,
-                size,
-                render_mode,
-            } => self.renderer.render_image(image, size, render_mode),
-            GpuTarget::Scene(scene) => self.renderer.render(&scene),
-        })?;
         // The browser lays out the canvas and maps input over its full extent.
-        let mode = if filter.is_some() {
+        let mode = if filter.is_some() || self.renderer.render_scale() != RenderScale::Original {
             3
         } else {
             cmvs_core::render::viewport::presentation_mode(
@@ -81,6 +80,21 @@ impl BrowserGpu {
                 display.aspect_mode,
             )
         };
+        let logical = startup.screen_size();
+        let viewport = Viewport::new(logical, output, mode)
+            .ok()
+            .map(|view| [view.width, view.height]);
+        self.renderer.set_viewport_size(viewport);
+        let render_size = self.renderer.resolved_render_size(logical);
+        font.set_raster_scale(RenderScale::font_scale(logical, render_size));
+        let frame = with_gpu_target(startup, Some(font), linear, |target| match target {
+            GpuTarget::Movie {
+                image,
+                size,
+                render_mode,
+            } => self.renderer.render_image(image, size, render_mode),
+            GpuTarget::Scene(scene) => self.renderer.render(&scene),
+        })?;
         if self.canvas.width() != output[0] {
             self.canvas.set_width(output[0]);
         }

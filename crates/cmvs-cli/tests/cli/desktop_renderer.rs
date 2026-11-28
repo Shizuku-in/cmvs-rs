@@ -28,6 +28,26 @@ fn rejects_invalid_or_cpu_anti_aliasing_before_opening_a_window() {
         String::from_utf8_lossy(&cpu.stderr)
             .contains("--anti-aliasing on requires --renderer wgpu")
     );
+
+    let bad_scale = Command::new(env!("CARGO_BIN_EXE_cmvs-desktop"))
+        .args([".", "--encoding", "shift-jis", "--render-scale", "5x"])
+        .output()
+        .unwrap();
+    assert!(!bad_scale.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad_scale.stderr)
+            .contains("render-scale must be 1x, auto, 1.5x, 2x, or 3x")
+    );
+
+    let cpu_scale = Command::new(env!("CARGO_BIN_EXE_cmvs-desktop"))
+        .args([".", "--encoding", "shift-jis", "--render-scale", "2x"])
+        .output()
+        .unwrap();
+    assert!(!cpu_scale.status.success());
+    assert!(
+        String::from_utf8_lossy(&cpu_scale.stderr)
+            .contains("--render-scale requires --renderer wgpu")
+    );
 }
 
 #[cfg(not(feature = "wgpu-renderer"))]
