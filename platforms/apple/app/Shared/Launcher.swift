@@ -562,13 +562,11 @@ private struct OptionsForm: View {
                 }
             }
             .disabled(!options.metal)
-            Toggle(
-                "Anti-Aliasing",
-                isOn: Binding(
-                    get: { options.anti_aliasing ?? false },
-                    set: { options.anti_aliasing = $0 }
-                )
-            )
+            Picker("Anti-Aliasing", selection: $options.anti_aliasing) {
+                Text("Automatic").tag(nil as Bool?)
+                Text("Off").tag(Optional(false))
+                Text("On").tag(Optional(true))
+            }
             .disabled(!options.metal)
             Toggle("Native Audio", isOn: $options.native_audio)
             #if os(macOS)

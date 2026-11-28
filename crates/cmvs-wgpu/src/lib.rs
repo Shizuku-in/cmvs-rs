@@ -22,6 +22,9 @@ const CACHE_LIMIT: usize = 128 * 1024 * 1024;
 /// static images. Each player shows one frame (three scene slots and the full-screen
 /// player), which leaves room for images that stopped players retain.
 const FRAME_TEXTURES: usize = 8;
+/// Internal wgpu-only shader flag (above `cmvs_core::render::scene_render::shader::flags`):
+/// filter RGB as opaque without alpha premultiplication for `ShaderBlend::Replace`.
+const FLAG_OPAQUE_FILTER: u32 = 128;
 
 /// An immutable submitted frame. Readback is performed only on demand and always
 /// returns the logical canvas dimensions (downsampling high-resolution renders).
@@ -72,13 +75,7 @@ impl GpuFrame {
         buffer
     }
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn read(&self) -> Result<RgbaImage> {
-        let image = self.read_native()?;
-        self.to_logical(image)
-    }
-    /// Reads back the raw GPU render target without downsampling to logical dimensions.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn read_native(&self) -> Result<RgbaImage> {
+    fn map_read(&self) -> Result<wgpu::Buffer> {
         let buffer = self.begin_read();
         let (tx, rx) = std::sync::mpsc::channel();
         buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
@@ -86,6 +83,17 @@ impl GpuFrame {
         });
         self.device.poll(wgpu::PollType::wait_indefinitely())?;
         rx.recv()??;
+        Ok(buffer)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read(&self) -> Result<RgbaImage> {
+        let buffer = self.map_read()?;
+        self.finish_read_logical(&buffer)
+    }
+    /// Reads back the raw GPU render target without downsampling to logical dimensions.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_native(&self) -> Result<RgbaImage> {
+        let buffer = self.map_read()?;
         self.finish_read(&buffer)
     }
     /// Browser mappings complete through the event loop, without blocking the Worker.
@@ -115,15 +123,19 @@ impl GpuFrame {
             }
         })
         .await?;
-        let image = self.finish_read(&buffer)?;
-        self.to_logical(image)
+        self.finish_read_logical(&buffer)
     }
-    fn to_logical(&self, image: RgbaImage) -> Result<RgbaImage> {
+    fn finish_read_logical(&self, buffer: &wgpu::Buffer) -> Result<RgbaImage> {
         if self.size == self.logical_size {
-            Ok(image)
-        } else {
-            Ok(downsample_area(&image, self.logical_size)?)
+            return self.finish_read(buffer);
         }
+        let [w, _] = self.size;
+        let pitch = (w * 4).div_ceil(256) * 256;
+        let bytes = buffer.slice(..).get_mapped_range()?;
+        let image = downsample_area_rows(&bytes, pitch as usize, self.size, self.logical_size);
+        drop(bytes);
+        buffer.unmap();
+        Ok(image?)
     }
     fn finish_read(&self, buffer: &wgpu::Buffer) -> Result<RgbaImage> {
         let [w, h] = self.size;
@@ -139,69 +151,77 @@ impl GpuFrame {
     }
 }
 
-/// Separable box-area downsampler used when reading back a high-resolution scene frame
-/// at logical engine dimensions for captures or save thumbnails.
-fn downsample_area(
-    src: &RgbaImage,
+/// Separable box-area downsampler streaming one destination row at a time from a strided
+/// RGBA byte buffer (such as a mapped GPU readback buffer) to keep scratch memory O(dst_w).
+fn downsample_area_rows(
+    src: &[u8],
+    src_stride: usize,
+    [src_w, src_h]: [u32; 2],
     [dst_w, dst_h]: [u32; 2],
 ) -> std::result::Result<RgbaImage, cmvs_core::FormatError> {
-    let [sw, sh] = [src.width() as usize, src.height() as usize];
+    let [sw, sh] = [src_w as usize, src_h as usize];
     let [dw, dh] = [dst_w as usize, dst_h as usize];
-    let (pixels, _) = src.pixels().as_chunks::<4>();
-    let mut horiz = vec![[0f32; 4]; sh * dw];
     let scale_x = sw as f32 / dw as f32;
-    for dx in 0..dw {
-        let x0 = dx as f32 * scale_x;
-        let x1 = ((dx + 1) as f32 * scale_x).min(sw as f32);
-        let ix0 = x0.floor() as usize;
-        let ix1 = (x1.ceil() as usize).min(sw);
-        let inv = 1.0 / (x1 - x0);
-        for y in 0..sh {
-            let mut acc = [0f32; 4];
-            let row = &pixels[y * sw..][..sw];
-            for (ix, px) in row.iter().enumerate().take(ix1).skip(ix0) {
-                let left = (ix as f32).max(x0);
-                let right = ((ix + 1) as f32).min(x1);
-                let w = (right - left) * inv;
-                let a = f32::from(px[3]);
-                let af = a / 255.0;
-                acc[0] += f32::from(px[0]) * af * w;
-                acc[1] += f32::from(px[1]) * af * w;
-                acc[2] += f32::from(px[2]) * af * w;
-                acc[3] += a * w;
-            }
-            horiz[y * dw + dx] = acc;
-        }
-    }
-    let mut out = vec![0u8; dw * dh * 4];
     let scale_y = sh as f32 / dh as f32;
+    let mut cached_y: Option<usize> = None;
+    let mut horiz_row = vec![[0f32; 4]; dw];
+    let mut dst_row = vec![[0f32; 4]; dw];
+    let mut out = vec![0u8; dw * dh * 4];
     for dy in 0..dh {
         let y0 = dy as f32 * scale_y;
         let y1 = ((dy + 1) as f32 * scale_y).min(sh as f32);
         let iy0 = y0.floor() as usize;
         let iy1 = (y1.ceil() as usize).min(sh);
-        let inv = 1.0 / (y1 - y0);
-        for dx in 0..dw {
-            let mut acc = [0f32; 4];
-            for (iy, row) in horiz.chunks_exact(dw).enumerate().take(iy1).skip(iy0) {
-                let top = (iy as f32).max(y0);
-                let bottom = ((iy + 1) as f32).min(y1);
-                let w = (bottom - top) * inv;
-                let p = row[dx];
+        let inv_y = 1.0 / (y1 - y0);
+        dst_row.fill([0f32; 4]);
+        for iy in iy0..iy1 {
+            let top = (iy as f32).max(y0);
+            let bottom = ((iy + 1) as f32).min(y1);
+            let wy = (bottom - top) * inv_y;
+            if wy <= 0.0 {
+                continue;
+            }
+            if cached_y != Some(iy) {
+                let (row, _) = src[iy * src_stride..][..sw * 4].as_chunks::<4>();
+                for (dx, slot) in horiz_row.iter_mut().enumerate() {
+                    let x0 = dx as f32 * scale_x;
+                    let x1 = ((dx + 1) as f32 * scale_x).min(sw as f32);
+                    let ix0 = x0.floor() as usize;
+                    let ix1 = (x1.ceil() as usize).min(sw);
+                    let inv_x = 1.0 / (x1 - x0);
+                    let mut acc = [0f32; 4];
+                    for (ix, px) in row.iter().enumerate().take(ix1).skip(ix0) {
+                        let left = (ix as f32).max(x0);
+                        let right = ((ix + 1) as f32).min(x1);
+                        let wx = (right - left) * inv_x;
+                        let a = f32::from(px[3]);
+                        let af = a / 255.0;
+                        acc[0] += f32::from(px[0]) * af * wx;
+                        acc[1] += f32::from(px[1]) * af * wx;
+                        acc[2] += f32::from(px[2]) * af * wx;
+                        acc[3] += a * wx;
+                    }
+                    *slot = acc;
+                }
+                cached_y = Some(iy);
+            }
+            for (dst, src_px) in dst_row.iter_mut().zip(&horiz_row) {
                 for c in 0..4 {
-                    acc[c] += p[c] * w;
+                    dst[c] += src_px[c] * wy;
                 }
             }
+        }
+        let out_row = &mut out[dy * dw * 4..][..dw * 4];
+        for (px_out, acc) in out_row.as_chunks_mut::<4>().0.iter_mut().zip(&dst_row) {
             let a = acc[3].clamp(0.0, 255.0);
             let a_u8 = a.round() as u8;
-            let dst = (dy * dw + dx) * 4;
             if a_u8 != 0 {
                 let unpremul = 255.0 / a;
-                for c in 0..3 {
-                    out[dst + c] = (acc[c] * unpremul).round().clamp(0.0, 255.0) as u8;
-                }
+                px_out[0] = (acc[0] * unpremul).round().clamp(0.0, 255.0) as u8;
+                px_out[1] = (acc[1] * unpremul).round().clamp(0.0, 255.0) as u8;
+                px_out[2] = (acc[2] * unpremul).round().clamp(0.0, 255.0) as u8;
             }
-            out[dst + 3] = a_u8;
+            px_out[3] = a_u8;
         }
     }
     RgbaImage::new(dst_w, dst_h, out)
@@ -641,10 +661,14 @@ impl Renderer {
         let mut resolved = Vec::with_capacity(commands.len());
         for command in commands {
             let mut draw = shader_draw(command, size);
-            let flags = draw.flags();
+            let mut flags = draw.flags();
             if flags & shader_flags::CVNS == 0 {
                 draw.params[20] = render_size[0] as f32;
                 draw.params[21] = render_size[1] as f32;
+                if draw.blend == ShaderBlend::Replace {
+                    flags |= FLAG_OPAQUE_FILTER;
+                    draw.params[19] = flags as f32;
+                }
                 if draw.params[3] > 0.0 {
                     if self.anti_aliasing || high_res {
                         draw.params[3] = 2.0;
@@ -1326,7 +1350,202 @@ mod tests {
             (160..=168).contains(&add_x2),
             "expected premultiplied additive ~164 at x=2, got {add_x2}"
         );
+
+        // 5. Blend::Replace ignores source alpha even when texels carry alpha=0.
+        let opaque_zero_alpha = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(
+                2,
+                2,
+                vec![
+                    255, 0, 0, 0, 0, 0, 255, 255, //
+                    255, 0, 0, 0, 0, 0, 255, 255,
+                ],
+            )
+            .unwrap(),
+        };
+        let replace_min = gpu
+            .compose(
+                [1, 1],
+                [0, 0, 0, 255],
+                &[Layer::Projected {
+                    image: &opaque_zero_alpha,
+                    rect: [0, 0, 2, 2],
+                    quad: [-0.5, -0.5, 0.5, 0.5],
+                    alpha: 255,
+                    blend: Blend::Replace,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        let px = &replace_min.pixels()[..4];
+        assert!(
+            (122..=134).contains(&px[0]) && px[1] == 0 && (122..=134).contains(&px[2]),
+            "Blend::Replace must weight alpha=0 red equally with alpha=255 blue, got {px:?}"
+        );
+        let replace_mag = gpu
+            .compose(
+                [4, 4],
+                [0, 0, 0, 255],
+                &[Layer::Projected {
+                    image: &opaque_zero_alpha,
+                    rect: [0, 0, 2, 2],
+                    quad: [-0.5, -0.5, 3.5, 3.5],
+                    alpha: 255,
+                    blend: Blend::Replace,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        let left_px = &replace_mag.pixels()[..4];
+        assert!(
+            left_px[0] > 240 && left_px[1] == 0 && left_px[2] < 15,
+            "Blend::Replace must keep alpha=0 red bright under bicubic AA, got {left_px:?}"
+        );
+
+        // 6. Cropped atlas cells clamp AA samples to their source rect (RGSS and bicubic),
+        // while world billboards retain wrapped sampling.
+        let atlas_pixels: Vec<u8> = (0..2)
+            .flat_map(|_| {
+                [
+                    [255, 255, 255, 255],
+                    [255, 255, 255, 255],
+                    [255, 0, 0, 255],
+                    [255, 0, 0, 255],
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .collect();
+        let atlas = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(4, 2, atlas_pixels).unwrap(),
+        };
+        let cropped_min = gpu
+            .compose(
+                [1, 1],
+                [0, 0, 0, 255],
+                &[Layer::Projected {
+                    image: &atlas,
+                    rect: [0, 0, 2, 2],
+                    quad: [-0.5, -0.5, 0.5, 0.5],
+                    alpha: 255,
+                    blend: Blend::Alpha,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        assert_eq!(
+            &cropped_min.pixels()[..4],
+            &[255, 255, 255, 255],
+            "RGSS minification of cropped atlas cell must not bleed adjacent red cell"
+        );
+        let cropped_mag = gpu
+            .compose(
+                [4, 4],
+                [0, 0, 0, 255],
+                &[Layer::Projected {
+                    image: &atlas,
+                    rect: [0, 0, 2, 2],
+                    quad: [-0.5, -0.5, 3.5, 3.5],
+                    alpha: 255,
+                    blend: Blend::Alpha,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        for p in cropped_mag.pixels().as_chunks::<4>().0 {
+            assert_eq!(
+                p,
+                &[255, 255, 255, 255],
+                "bicubic magnification of cropped atlas cell must not bleed adjacent red cell"
+            );
+        }
+        let wrapped = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]).unwrap(),
+        };
+        let billboard = gpu
+            .compose(
+                [4, 2],
+                [0, 0, 0, 255],
+                &[Layer::Billboard {
+                    image: &wrapped,
+                    quad: [0.0, 0.0, 4.0, 2.0],
+                    alpha: 255,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        let wrap_edge = &billboard.pixels()[..4];
+        assert!(
+            (110..=145).contains(&wrap_edge[0])
+                && wrap_edge[1] == 0
+                && (110..=145).contains(&wrap_edge[2]),
+            "Billboard AA must preserve wrapped edge blending, got {wrap_edge:?}"
+        );
         gpu.check().unwrap();
+    }
+
+    #[test]
+    fn streaming_box_area_downsampler_handles_strided_rows_and_fractional_scales() {
+        // 6x6 source in a 256-byte-strided buffer (matching GPU readback row pitch):
+        // left 3 columns red, right 3 columns blue; top 3 rows opaque, bottom 3 rows transparent.
+        let stride = 256usize;
+        let mut buf = vec![0xAAu8; 6 * stride];
+        for y in 0..6usize {
+            for x in 0..6usize {
+                let px = if y < 3 {
+                    if x < 3 {
+                        [255, 0, 0, 255]
+                    } else {
+                        [0, 0, 255, 255]
+                    }
+                } else {
+                    [0, 255, 0, 0]
+                };
+                buf[y * stride + x * 4..][..4].copy_from_slice(&px);
+            }
+        }
+        // 1.5x fractional downsample: 6x6 -> 4x4 (shares boundary row y=1 between dy=0 and dy=1).
+        let frac = downsample_area_rows(&buf, stride, [6, 6], [4, 4]).unwrap();
+        assert_eq!([frac.width(), frac.height()], [4, 4]);
+        let at = |x: usize, y: usize| &frac.pixels()[(y * 4 + x) * 4..][..4];
+        assert_eq!(at(0, 0), &[255, 0, 0, 255]);
+        assert_eq!(at(1, 0), &[255, 0, 0, 255]);
+        assert_eq!(at(2, 0), &[0, 0, 255, 255]);
+        assert_eq!(at(3, 0), &[0, 0, 255, 255]);
+        // Bottom two rows cover y in [3, 6) which is completely transparent.
+        assert_eq!(at(0, 2), &[0, 0, 0, 0]);
+        assert_eq!(at(3, 3), &[0, 0, 0, 0]);
+
+        // 2x exact downsample: 6x6 -> 3x3 (middle column mixes red+blue, middle row mixes opaque+transparent).
+        let half = downsample_area_rows(&buf, stride, [6, 6], [3, 3]).unwrap();
+        assert_eq!([half.width(), half.height()], [3, 3]);
+        let at2 = |x: usize, y: usize| &half.pixels()[(y * 3 + x) * 4..][..4];
+        assert_eq!(at2(0, 0), &[255, 0, 0, 255]);
+        assert_eq!(at2(1, 0), &[128, 0, 128, 255]);
+        assert_eq!(at2(2, 0), &[0, 0, 255, 255]);
+        // Middle row has 50% opaque red (top) and 50% transparent green (bottom):
+        // premultiplied downsampling must keep pure red at ~50% alpha, with zero green bleed.
+        let mid_left = at2(0, 1);
+        assert_eq!(mid_left[0], 255);
+        assert_eq!(mid_left[1], 0);
+        assert!((127..=128).contains(&mid_left[3]), "got {mid_left:?}");
     }
 
     #[test]

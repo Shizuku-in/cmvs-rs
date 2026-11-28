@@ -86,6 +86,20 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
         RenderScale::X1_5.resolve([1280, 720], None, 8192),
         [1920, 1080]
     );
+    // Applying logical-size floors in Auto mode must never exceed the MAX_PAYLOAD / 4 pixel budget.
+    assert_eq!(
+        RenderScale::Auto.resolve([4096, 2048], Some([2048, 8192]), 8192),
+        [4096, 4096]
+    );
+    assert_eq!(
+        RenderScale::Auto.resolve([2048, 4096], Some([8192, 2048]), 8192),
+        [4096, 4096]
+    );
+    let capped_4k = RenderScale::X2.resolve([3840, 2160], None, 8192);
+    assert!(
+        u64::from(capped_4k[0]) * u64::from(capped_4k[1]) <= (cmvs_core::MAX_PAYLOAD / 4) as u64
+    );
+    assert!(capped_4k[0] >= 3840 && capped_4k[1] >= 2160);
     let mut backend = RecordingBackend::default();
     let mut yielded = false;
     for _ in 0..100 {

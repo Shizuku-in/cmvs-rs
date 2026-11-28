@@ -36,6 +36,8 @@
 "Original (1×)" = "Original (1×)";
 "Match Screen" = "Match Screen";
 "Anti-Aliasing" = "Anti-Aliasing";
+"Off" = "Off";
+"On" = "On";
 "Game Preference" = "Game Preference";
 "Original Size" = "Original Size";
 "Fit" = "Fit";

@@ -1042,10 +1042,13 @@ impl FontRenderer {
 
     fn glyph_scene_fingerprint(&self, messages: &MessageHost) -> Option<u128> {
         let mut h = GlyphSceneHasher::new();
+        let is_cvns = messages.cvns().is_some();
+        let effective_scale = if is_cvns { 1.0f32 } else { self.raster_scale };
         (
             self.encoding,
             self.library_generation.load(Ordering::Relaxed),
-            self.raster_scale.to_bits(),
+            effective_scale.to_bits(),
+            is_cvns,
             messages.screen_size(),
             messages.allows_logical_text_scale(),
         )
@@ -2037,6 +2040,75 @@ mod tests {
         let reshown_objs = font.prepare_objects(&messages).unwrap();
         assert_eq!(font.glyph_build_calls, 8);
         assert_eq!(reshown_objs, visible_objs);
+    }
+
+    #[test]
+    fn cvns_vector_glyphs_stay_at_logical_resolution_under_high_raster_scale() {
+        use cmvs_core::{
+            host::input::ActionInput,
+            profile::Semantics,
+            vm::dispatch::{self, Hosts},
+            vm::machine::{Machine, Step},
+        };
+
+        let mut font =
+            FontRenderer::from_bytes(crate::font_library::tests::minimal_ttf("CvnsFont"), 0)
+                .unwrap();
+        let mut messages = MessageHost::default();
+        messages.set_glyph_metrics(font.metrics());
+        messages.set_record_output(true);
+
+        let mut code = Vec::new();
+        push_call(&mut code, 0x215d, &[720, 1280, 120, 400, 0, 0, 7, 0]);
+        push_call(&mut code, 0x214e, &[1, 0]);
+        push_call(&mut code, 0x2152, &[0, u32::MAX, 0]);
+        let script = ps2_script(&code, b"AA\0");
+        let mut vm = Machine::new(&script).unwrap();
+
+        for _ in 0..2 {
+            while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            let mut hosts = Hosts {
+                messages: Some(&mut messages),
+                ..Hosts::default()
+            };
+            assert!(
+                dispatch::run(Semantics::Root, &mut vm, &mut hosts)
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let mut input = ActionInput::default();
+        messages
+            .try_record_output(&mut vm, &mut input, Default::default())
+            .unwrap()
+            .unwrap();
+        messages.advance_frame(1000);
+
+        font.set_raster_scale(2.0);
+        let cmvs_objs = font.prepare_objects(&messages).unwrap();
+        let cmvs_child = &cmvs_objs[0].children[&0];
+        let cmvs_pixels = &cmvs_child.image.as_ref().unwrap().pixels;
+        let cmvs_draw = cmvs_child.draw.as_ref().unwrap();
+        let glyph_size = messages.text(7).unwrap().glyphs[0].size;
+        let logical_side = glyph_size + 4;
+        assert_eq!(cmvs_pixels.height(), logical_side * 2);
+        assert_eq!(cmvs_draw.source_rect()[3], logical_side * 2);
+        assert_eq!(cmvs_draw.scale(), [0.5, 0.5]);
+
+        // CVNS copies glyph children as 1:1 tiles onto a 1x target, ignoring words 18..20.
+        messages.enable_cvns();
+        let cvns_objs = font.prepare_objects(&messages).unwrap();
+        for child in cvns_objs[0].children.values() {
+            let pixels = &child.image.as_ref().unwrap().pixels;
+            let draw = child.draw.as_ref().unwrap();
+            assert_eq!(
+                [pixels.width(), pixels.height()],
+                [logical_side, logical_side]
+            );
+            assert_eq!(draw.source_rect()[2..4], [logical_side, logical_side]);
+            assert_eq!(draw.scale(), [1.0, 1.0]);
+        }
     }
 }
 

@@ -5,12 +5,14 @@ mod fs;
 #[cfg(target_arch = "wasm32")]
 mod gpu;
 use backend::BrowserBackend;
+#[cfg(target_arch = "wasm32")]
+use cmvs_core::render::raster::RenderScale;
 use cmvs_core::{
     MAX_PAYLOAD,
     format::{save::Csv2Save, system_save::Css1Save},
     host::{filesystem::HostFs, settings::Configuration},
     profile::Registry,
-    render::raster::{RenderScale, ScaleFilter},
+    render::raster::ScaleFilter,
     runtime::{FrameBudget, FrameOutcome, RuntimeEvent, SaveStorage, script_control::Startup},
 };
 use cmvs_font::font::FontRenderer;
@@ -30,6 +32,7 @@ pub struct WebRuntime {
     backend: BrowserBackend,
     scale_filter: Option<ScaleFilter>,
     anti_aliasing: bool,
+    #[cfg(target_arch = "wasm32")]
     render_scale: RenderScale,
     output: [u32; 2],
 }
@@ -81,19 +84,8 @@ impl WebRuntime {
         self.backend.frame = None;
         Ok(())
     }
-    pub fn set_anti_aliasing(&mut self, enabled: bool) {
-        self.anti_aliasing = enabled;
-    }
     pub fn anti_aliasing(&self) -> bool {
         self.anti_aliasing
-    }
-    pub fn set_render_scale(&mut self, scale: &str) -> Result<(), JsValue> {
-        self.render_scale = self
-            .session
-            .runtime
-            .render_scale_override(Some(scale))
-            .map_err(js_error)?;
-        Ok(())
     }
     /// An immediate screenshot suspends at its pending command until mapping completes.
     #[cfg(target_arch = "wasm32")]
@@ -140,6 +132,7 @@ impl WebRuntime {
         }
     }
     #[wasm_bindgen(constructor)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         font: Vec<u8>,
         face: u32,
@@ -147,6 +140,8 @@ impl WebRuntime {
         skip_auto_resume: bool,
         scale_filter: Option<String>,
         backup_paths: Option<Vec<String>>,
+        anti_aliasing: Option<String>,
+        render_scale: Option<String>,
     ) -> Result<WebRuntime, JsValue> {
         Self::create(
             font,
@@ -155,6 +150,8 @@ impl WebRuntime {
             skip_auto_resume,
             scale_filter.as_deref(),
             backup_paths.as_deref(),
+            anti_aliasing.as_deref(),
+            render_scale.as_deref(),
         )
         .map_err(js_error)
     }
@@ -346,6 +343,7 @@ impl WebRuntime {
         })()
         .map_err(js_error)
     }
+    #[allow(clippy::too_many_arguments)]
     fn create(
         font: Vec<u8>,
         face: u32,
@@ -353,6 +351,8 @@ impl WebRuntime {
         skip: bool,
         scale_filter: Option<&str>,
         backup_paths: Option<&[String]>,
+        anti_aliasing: Option<&str>,
+        render_scale: Option<&str>,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let root = Path::new("/game");
         let fs: Arc<dyn HostFs> = Arc::new(WebFs);
@@ -389,14 +389,17 @@ impl WebRuntime {
             session.runtime.machine().text_encoding(),
         )?;
         let scale_filter = session.runtime.scale_filter_override(scale_filter)?;
-        let anti_aliasing = session.runtime.anti_aliasing_override(None)?;
-        let render_scale = session.runtime.render_scale_override(None)?;
+        let anti_aliasing = session.runtime.anti_aliasing_override(anti_aliasing)?;
+        let render_scale = session.runtime.render_scale_override(render_scale)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = render_scale;
         let output = backend.size;
         Ok(Self {
             session,
             backend,
             scale_filter,
             anti_aliasing,
+            #[cfg(target_arch = "wasm32")]
             render_scale,
             output,
         })

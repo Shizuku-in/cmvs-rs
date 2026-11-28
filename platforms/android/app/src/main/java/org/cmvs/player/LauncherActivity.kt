@@ -9,7 +9,6 @@ import android.text.InputType
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -33,7 +32,7 @@ class LauncherActivity : Activity() {
     private lateinit var face: EditText
     private lateinit var scaleFilter: Spinner
     private lateinit var renderScale: Spinner
-    private lateinit var antiAliasing: CheckBox
+    private lateinit var antiAliasing: Spinner
     private lateinit var gameButton: Button
     private lateinit var fontButton: Button
     private lateinit var startButton: Button
@@ -83,9 +82,20 @@ class LauncherActivity : Activity() {
         val savedScale = settings.getString("renderScale", "")
         renderScale.setSelection(renderScales.indexOfFirst { it.first == savedScale }.coerceAtLeast(0))
         layout.addView(renderScale)
-        antiAliasing = CheckBox(this)
-        antiAliasing.text = "抗锯齿"
-        antiAliasing.isChecked = settings.getBoolean("antiAliasing", false)
+        val aaLabel = text(layout, "抗锯齿")
+        antiAliasing = Spinner(this)
+        antiAliasing.id = View.generateViewId()
+        aaLabel.labelFor = antiAliasing.id
+        antiAliasing.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
+            antiAliasingModes.map { it.second })
+        val savedAa = if (settings.contains("antiAliasingMode")) {
+            settings.getString("antiAliasingMode", "")
+        } else if (settings.getBoolean("antiAliasing", false)) {
+            "on"
+        } else {
+            ""
+        }
+        antiAliasing.setSelection(antiAliasingModes.indexOfFirst { it.first == savedAa }.coerceAtLeast(0))
         layout.addView(antiAliasing)
         startButton = button(layout, "启动") { launch() }
         cancelButton = button(layout, "取消导入") { cancelled.set(true) }
@@ -179,10 +189,11 @@ class LauncherActivity : Activity() {
             if (index !in 0..1024) throw IllegalArgumentException()
             val filter = filters[scaleFilter.selectedItemPosition].first
             val scale = renderScales[renderScale.selectedItemPosition].first
-            val aa = if (antiAliasing.isChecked) "on" else ""
+            val aa = antiAliasingModes[antiAliasing.selectedItemPosition].first
             settings.edit().putInt("face", index).putString("scaleFilter", filter)
                 .putString("renderScale", scale)
-                .putBoolean("antiAliasing", antiAliasing.isChecked).apply()
+                .putString("antiAliasingMode", aa)
+                .remove("antiAliasing").apply()
             val config = "${settings.getString("game", "")}\n${settings.getString("font", "")}\n$index\n$filter\n$aa\n$scale\n"
             val temporary = File(filesDir, "launch.tmp")
             Files.write(temporary.toPath(), config.toByteArray(StandardCharsets.UTF_8))
@@ -247,6 +258,11 @@ class LauncherActivity : Activity() {
             "1.5x" to "1.5×",
             "2x" to "2×",
             "3x" to "3×",
+        )
+        private val antiAliasingModes = listOf(
+            "" to "默认",
+            "off" to "关闭",
+            "on" to "开启",
         )
     }
 }

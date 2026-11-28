@@ -610,6 +610,7 @@ impl MessageHost {
                 visible_glyphs += 1;
                 let pixels = match self.glyph_mask(glyph) {
                     Some(mask) => rasterizer.rasterize_bitmap_glyph(glyph, mask)?,
+                    None if self.cvns.is_some() => rasterizer.rasterize_glyph_unscaled(glyph)?,
                     None => rasterizer.rasterize_glyph(glyph)?,
                 };
                 let mut draw = crate::scene::DrawState::default();
@@ -687,7 +688,7 @@ impl MessageHost {
                     reveal_mode: 0,
                     reveal_width: glyph.size + 4,
                 };
-                let pixels = if group.secondary_image.is_some() {
+                let pixels = if group.secondary_image.is_some() || self.cvns.is_some() {
                     rasterizer.rasterize_glyph_unscaled(&recorded)?
                 } else {
                     rasterizer.rasterize_glyph(&recorded)?

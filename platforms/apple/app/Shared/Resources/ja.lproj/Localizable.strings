@@ -36,6 +36,8 @@
 "Original (1×)" = "原寸（1×）";
 "Match Screen" = "画面解像度に合わせる";
 "Anti-Aliasing" = "アンチエイリアス";
+"Off" = "オフ";
+"On" = "オン";
 "Game Preference" = "ゲームの設定";
 "Original Size" = "原寸";
 "Fit" = "画面に合わせる";

@@ -25,33 +25,63 @@ impl RenderScale {
     /// physical presentation viewport, bounded by `max_dim` and `MAX_PAYLOAD / 4` pixels.
     pub fn resolve(self, logical: [u32; 2], viewport: Option<[u32; 2]>, max_dim: u32) -> [u32; 2] {
         let [lw, lh] = logical;
-        if lw == 0 || lh == 0 || max_dim == 0 {
+        let max_pixels = (MAX_PAYLOAD / 4) as u64;
+        if lw == 0
+            || lh == 0
+            || max_dim == 0
+            || lw > max_dim
+            || lh > max_dim
+            || u64::from(lw) * u64::from(lh) > max_pixels
+        {
             return logical;
         }
+        let [lw64, lh64] = [u64::from(lw), u64::from(lh)];
         let requested = match self {
             Self::Original => return logical,
             Self::Auto => match viewport {
-                Some([vw, vh]) if vw > lw || vh > lh => [vw.max(lw), vh.max(lh)],
+                Some([vw, vh]) if vw > lw || vh > lh => {
+                    [u64::from(vw.max(lw)), u64::from(vh.max(lh))]
+                }
                 _ => return logical,
             },
-            Self::X1_5 => [(lw * 3).div_ceil(2), (lh * 3).div_ceil(2)],
-            Self::X2 => [lw.saturating_mul(2), lh.saturating_mul(2)],
-            Self::X3 => [lw.saturating_mul(3), lh.saturating_mul(3)],
+            Self::X1_5 => [(lw64 * 3).div_ceil(2), (lh64 * 3).div_ceil(2)],
+            Self::X2 => [lw64 * 2, lh64 * 2],
+            Self::X3 => [lw64 * 3, lh64 * 3],
         };
-        let max_pixels = (MAX_PAYLOAD / 4) as f64;
-        let [rw, rh] = requested.map(f64::from);
-        let factor_cap = Self::MAX_FACTOR / (rw / f64::from(lw)).max(rh / f64::from(lh));
+        let [rw, rh] = requested.map(|v| v as f64);
+        let factor_cap = Self::MAX_FACTOR / (rw / lw64 as f64).max(rh / lh64 as f64);
         let dim_cap = f64::from(max_dim) / rw.max(rh);
-        let pixel_cap = (max_pixels / (rw * rh)).sqrt();
+        let pixel_cap = (max_pixels as f64 / (rw * rh)).sqrt();
         let clamp = factor_cap.min(dim_cap).min(pixel_cap).min(1.0);
-        if clamp >= 1.0 {
-            requested
+        let max_w = (lw64 * 3).min(u64::from(max_dim));
+        let max_h = (lh64 * 3).min(u64::from(max_dim));
+        let mut w = if clamp >= 1.0 {
+            requested[0]
         } else {
-            [
-                (rw * clamp).floor().max(f64::from(lw)) as u32,
-                (rh * clamp).floor().max(f64::from(lh)) as u32,
-            ]
+            (rw * clamp).floor() as u64
         }
+        .clamp(lw64, max_w);
+        let mut h = if clamp >= 1.0 {
+            requested[1]
+        } else {
+            (rh * clamp).floor() as u64
+        }
+        .clamp(lh64, max_h);
+        // Raising one axis back to its logical floor (or float rounding) can push w * h
+        // above max_pixels; enforce the budget against the final dimensions.
+        if w * h > max_pixels {
+            if w == lw64 {
+                h = (max_pixels / w).clamp(lh64, max_h);
+            } else if h == lh64 {
+                w = (max_pixels / h).clamp(lw64, max_w);
+            } else {
+                h = (max_pixels / w).clamp(lh64, max_h);
+                if w * h > max_pixels {
+                    w = (max_pixels / h).clamp(lw64, max_w);
+                }
+            }
+        }
+        [w as u32, h as u32]
     }
 
     /// Vector glyph rasterization scale corresponding to an internal render target.

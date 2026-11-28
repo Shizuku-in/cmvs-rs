@@ -20,12 +20,25 @@ fn sample_linear(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
     let q=uv-0.5; let f=fract(q); let xy=vec2<i32>(floor(q));
     return round(mix(mix(load(t,xy),load(t,xy+vec2<i32>(1,0)),f.x),mix(load(t,xy+vec2<i32>(0,1)),load(t,xy+vec2<i32>(1,1)),f.x),f.y));
 }
-fn load_premul(t: texture_2d<f32>, xy: vec2<i32>) -> vec4<f32> {
-    let c = load(t, xy);
-    return vec4<f32>(c.rgb * (c.a / 255.0), c.a);
-}
-fn load_rect_premul(t: texture_2d<f32>, xy: vec2<i32>, lo: vec2<i32>, hi: vec2<i32>) -> vec4<f32> {
-    let c = round(textureLoad(t, clamp(xy, lo, hi), 0) * 255.0);
+fn load_filtered(
+    t: texture_2d<f32>,
+    xy: vec2<i32>,
+    size: vec2<i32>,
+    lo: vec2<i32>,
+    hi: vec2<i32>,
+    wrap: bool,
+    opaque: bool,
+) -> vec4<f32> {
+    var at: vec2<i32>;
+    if (wrap) {
+        at = ((xy % size) + size) % size;
+    } else {
+        at = clamp(xy, lo, hi);
+    }
+    let c = round(textureLoad(t, at, 0) * 255.0);
+    if (opaque) {
+        return vec4<f32>(c.rgb, 255.0);
+    }
     return vec4<f32>(c.rgb * (c.a / 255.0), c.a);
 }
 fn catmull_rom(d: f32) -> f32 {
@@ -39,14 +52,15 @@ fn catmull_rom(d: f32) -> f32 {
     }
     return 0.0;
 }
-fn sample_bicubic_ar_premul(t: texture_2d<f32>, uv: vec2<f32>, clamp_rect: bool) -> vec4<f32> {
-    let size = vec2<i32>(textureDimensions(t));
-    var lo = vec2<i32>(0);
-    var hi = size - 1;
-    if (clamp_rect) {
-        lo = clamp(vec2<i32>(floor(p.v[1].xy)), vec2<i32>(0), size - 1);
-        hi = clamp(vec2<i32>(ceil(p.v[1].xy + p.v[1].zw)) - 1, lo, size - 1);
-    }
+fn sample_bicubic_ar(
+    t: texture_2d<f32>,
+    uv: vec2<f32>,
+    size: vec2<i32>,
+    lo: vec2<i32>,
+    hi: vec2<i32>,
+    wrap: bool,
+    opaque: bool,
+) -> vec4<f32> {
     let q = uv - 0.5;
     let f = fract(q);
     let base = vec2<i32>(floor(q));
@@ -69,8 +83,7 @@ fn sample_bicubic_ar_premul(t: texture_2d<f32>, uv: vec2<f32>, clamp_rect: bool)
         var row = vec4<f32>(0.0);
         let wj = wy[j + 1];
         for (var i = -1; i <= 2; i += 1) {
-            let xy = base + vec2<i32>(i, j);
-            let s = select(load_premul(t, xy), load_rect_premul(t, xy, lo, hi), clamp_rect);
+            let s = load_filtered(t, base + vec2<i32>(i, j), size, lo, hi, wrap, opaque);
             if ((i == 0 || i == 1) && (j == 0 || j == 1)) {
                 nmin = min(nmin, s);
                 nmax = max(nmax, s);
@@ -81,29 +94,55 @@ fn sample_bicubic_ar_premul(t: texture_2d<f32>, uv: vec2<f32>, clamp_rect: bool)
     }
     return clamp(sum, nmin, nmax);
 }
-fn sample_linear_premul(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
+fn sample_linear_filtered(
+    t: texture_2d<f32>,
+    uv: vec2<f32>,
+    size: vec2<i32>,
+    lo: vec2<i32>,
+    hi: vec2<i32>,
+    wrap: bool,
+    opaque: bool,
+) -> vec4<f32> {
     let q = uv - 0.5;
     let f = fract(q);
     let xy = vec2<i32>(floor(q));
     return mix(
-        mix(load_premul(t, xy), load_premul(t, xy + vec2<i32>(1, 0)), f.x),
-        mix(load_premul(t, xy + vec2<i32>(0, 1)), load_premul(t, xy + vec2<i32>(1, 1)), f.x),
-        f.y
+        mix(
+            load_filtered(t, xy, size, lo, hi, wrap, opaque),
+            load_filtered(t, xy + vec2<i32>(1, 0), size, lo, hi, wrap, opaque),
+            f.x,
+        ),
+        mix(
+            load_filtered(t, xy + vec2<i32>(0, 1), size, lo, hi, wrap, opaque),
+            load_filtered(t, xy + vec2<i32>(1, 1), size, lo, hi, wrap, opaque),
+            f.x,
+        ),
+        f.y,
     );
 }
-fn sample_aa_premul(t: texture_2d<f32>, uv: vec2<f32>, du: vec2<f32>, dv: vec2<f32>) -> vec4<f32> {
+fn sample_aa(
+    t: texture_2d<f32>,
+    uv: vec2<f32>,
+    du: vec2<f32>,
+    dv: vec2<f32>,
+    size: vec2<i32>,
+    lo: vec2<i32>,
+    hi: vec2<i32>,
+    wrap: bool,
+    opaque: bool,
+) -> vec4<f32> {
     let step = max(length(du), length(dv));
     if (step < 0.95) {
-        return sample_bicubic_ar_premul(t, uv, false);
+        return sample_bicubic_ar(t, uv, size, lo, hi, wrap, opaque);
     }
     if (step <= 1.05) {
-        return sample_linear_premul(t, uv);
+        return sample_linear_filtered(t, uv, size, lo, hi, wrap, opaque);
     }
     if (step <= 2.5) {
-        let s0 = sample_linear_premul(t, uv + du * -0.375 + dv * -0.125);
-        let s1 = sample_linear_premul(t, uv + du * 0.125 + dv * -0.375);
-        let s2 = sample_linear_premul(t, uv + du * 0.375 + dv * 0.125);
-        let s3 = sample_linear_premul(t, uv + du * -0.125 + dv * 0.375);
+        let s0 = sample_linear_filtered(t, uv + du * -0.375 + dv * -0.125, size, lo, hi, wrap, opaque);
+        let s1 = sample_linear_filtered(t, uv + du * 0.125 + dv * -0.375, size, lo, hi, wrap, opaque);
+        let s2 = sample_linear_filtered(t, uv + du * 0.375 + dv * 0.125, size, lo, hi, wrap, opaque);
+        let s3 = sample_linear_filtered(t, uv + du * -0.125 + dv * 0.375, size, lo, hi, wrap, opaque);
         return (s0 + s1 + s2 + s3) * 0.25;
     }
     var sum = vec4<f32>(0.0);
@@ -111,7 +150,7 @@ fn sample_aa_premul(t: texture_2d<f32>, uv: vec2<f32>, du: vec2<f32>, dv: vec2<f
         let oy = (f32(yi) - 1.5) * 0.25;
         for (var xi = 0; xi < 4; xi += 1) {
             let ox = (f32(xi) - 1.5) * 0.25;
-            sum += sample_linear_premul(t, uv + du * ox + dv * oy);
+            sum += sample_linear_filtered(t, uv + du * ox + dv * oy, size, lo, hi, wrap, opaque);
         }
     }
     return sum * 0.0625;
@@ -153,19 +192,30 @@ fn div255(x: f32) -> f32 {
     let aa = (flags & 1u) == 0u && p.v[0].w > 1.5;
     if ((flags & 1u)==0u) {
         if (aa) {
-            let pm = select(
-                sample_aa_premul(image, in.uv, du, dv),
-                sample_bicubic_ar_premul(image, in.uv, true),
-                p.v[0].w > 2.5,
-            );
-            if (pm.a > 0.0001) {
+            let size = vec2<i32>(textureDimensions(image));
+            let wrap = (flags & 16u) != 0u;
+            let opaque = (flags & 128u) != 0u;
+            let r0 = p.v[1].xy;
+            let r1 = p.v[1].xy + p.v[1].zw;
+            let lo = clamp(vec2<i32>(floor(min(r0, r1))), vec2<i32>(0), size - 1);
+            let hi = clamp(vec2<i32>(ceil(max(r0, r1))) - 1, lo, size - 1);
+            var pm: vec4<f32>;
+            if (p.v[0].w > 2.5) {
+                pm = sample_bicubic_ar(image, in.uv, size, lo, hi, wrap, opaque);
+            } else {
+                pm = sample_aa(image, in.uv, du, dv, size, lo, hi, wrap, opaque);
+            }
+            if (opaque) {
+                texel = vec4<f32>(clamp(pm.rgb, vec3<f32>(0.0), vec3<f32>(255.0)), 255.0);
+            } else if (pm.a > 0.0001) {
                 texel = vec4<f32>(clamp(pm.rgb * (255.0 / pm.a), vec3<f32>(0.0), vec3<f32>(255.0)), pm.a);
             } else {
                 texel = vec4<f32>(0.0);
             }
+        } else if (p.v[0].w > 0.0) {
+            texel = sample_linear(image, in.uv);
         } else {
-            texel=load(image,vec2<i32>(floor(in.uv)));
-            if (p.v[0].w>0.0) { texel=sample_linear(image,in.uv); }
+            texel = load(image, vec2<i32>(floor(in.uv)));
         }
     }
     var alpha = select(div255(texel.a * p.v[0].z + 127.0), texel.a * p.v[0].z / 255.0, aa);

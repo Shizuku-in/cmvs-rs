@@ -1,7 +1,9 @@
 use crate::encoding::EncodingChoice;
 use crate::game_input::{GameInput, event_key};
 use crate::{DesktopInput, InputEvent, NativeBackend, TextEncoding};
-use cmvs_core::render::raster::{RenderScale, RgbaImage, ScaleFilter};
+#[cfg(feature = "wgpu-renderer")]
+use cmvs_core::render::raster::RenderScale;
+use cmvs_core::render::raster::{RgbaImage, ScaleFilter};
 use cmvs_core::{
     format::cpz::ArchiveIndex, format::cursor::CursorBitmap, format::pb3, host::input::KeyBindings,
     host::platform::DirectoryAssets, host::platform::PlatformAssets,
@@ -148,7 +150,9 @@ struct App {
     aspect_scaling: std::cell::Cell<bool>,
     render_mode: std::cell::Cell<RenderMode>,
     scale_filter: Option<ScaleFilter>,
+    #[cfg(feature = "wgpu-renderer")]
     anti_aliasing: bool,
+    #[cfg(feature = "wgpu-renderer")]
     render_scale: RenderScale,
     fullscreen_monitor: std::cell::RefCell<crate::FullscreenMonitor>,
     windowed_size: std::cell::Cell<[u32; 2]>,
@@ -1270,6 +1274,8 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let anti_aliasing = startup
         .anti_aliasing_override(anti_aliasing.map(|enabled| if enabled { "on" } else { "off" }))?;
     let render_scale = startup.render_scale_override(render_scale.as_deref())?;
+    #[cfg(not(feature = "wgpu-renderer"))]
+    let _ = (anti_aliasing, render_scale);
     let fullscreen_monitor_mode = startup.platform().fullscreen_monitor_mode();
     let canvas = startup.screen_size();
     let mut game_input = GameInput::default();
@@ -1315,7 +1321,9 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         aspect_scaling: std::cell::Cell::new(display_preferences.aspect_scaling),
         render_mode: std::cell::Cell::new(RenderMode::try_from(display_preferences.render_mode)?),
         scale_filter,
+        #[cfg(feature = "wgpu-renderer")]
         anti_aliasing,
+        #[cfg(feature = "wgpu-renderer")]
         render_scale,
         fullscreen_monitor: std::cell::RefCell::new(crate::FullscreenMonitor::new(
             fullscreen_monitor_mode,
