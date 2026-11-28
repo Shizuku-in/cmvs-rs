@@ -287,57 +287,6 @@ fn profile_text_round_trips_and_marks_present_commands_by_profile_kind() {
 }
 
 #[test]
-fn relocated_binary_keeps_primary_command_rows_and_matches_the_updated_addresses() {
-    let root = build("synthetic-root", None, &[0, 1, 2, 0], 1);
-    let original = &root.binaries[1];
-    let sha256 = "03".repeat(32);
-    let table = original.table_rva + 0x90;
-    let default = original.default_rva + 0x90;
-    let line = format!(
-        "relocated-binary x86 file=cmvs32.exe sha256={sha256} timestamp=0x{:08x} linker={}.{} image-base=0x{:x} table=0x{table:x} default=0x{default:x} cases=4",
-        original.timestamp + 10_000,
-        original.linker.0,
-        original.linker.1,
-        original.image_base,
-    );
-    let source = root
-        .to_text()
-        .replace("# command status", &format!("{line}\n# command status"));
-    let registry = Registry::parse(&[&source], "").unwrap();
-    let profile = registry.profile("synthetic-root").unwrap();
-    assert_eq!(profile.binaries, root.binaries);
-    assert_eq!(profile.statuses(), root.statuses());
-    let relocated = profile.binary(&[3; 32]).unwrap();
-    assert_eq!(
-        relocated.cases,
-        [
-            Case::Handler(match original.cases[0] {
-                Case::Handler(rva) => rva + 0x90,
-                case => panic!("expected a handler, got {case:?}"),
-            }),
-            Case::NoOp(match original.cases[1] {
-                Case::NoOp(rva) => rva + 0x90,
-                case => panic!("expected a no-op, got {case:?}"),
-            }),
-            Case::Default,
-            relocated.cases[0],
-        ],
-    );
-    assert!(registry.playback().binary(&[3; 32]).is_some());
-    assert_eq!(
-        Registry::parse(&[&profile.to_text()], "").unwrap(),
-        registry
-    );
-
-    let wrong_default = source.replace(
-        &format!("default=0x{default:x}"),
-        &format!("default=0x{:x}", default + 1),
-    );
-    let error = Registry::parse(&[&wrong_default], "").unwrap_err();
-    assert!(error.to_string().contains("default address"));
-}
-
-#[test]
 fn profile_data_parses_the_same_with_crlf_line_endings() {
     let root = build("synthetic-root", None, &[0, 1, 2, 0], 1).to_text();
     let derived = build(
@@ -1180,6 +1129,167 @@ fn startup_variants_keep_one_identity_with_known_executable_fallback() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(Registry::parse(&[&root, &derived], &missing_start).is_err());
+}
+
+#[test]
+fn patched_builds_may_share_script_archive_across_distinct_profiles_and_executables() {
+    let root = build("synthetic-root", None, &[0, 1], 1).to_text();
+    let derived_a = build("synthetic-a", Some("synthetic-root"), &[0, 1], 3).to_text();
+    let derived_b = build("synthetic-b", Some("synthetic-root"), &[0, 1], 5).to_text();
+    let record_a = games(&[7; 32], &[8; 32], &[3; 32])
+        .replace("game synthetic", "game synthetic_v1")
+        .replace("profile synthetic-derived", "profile synthetic-a");
+    let record_b = games(&[9; 32], &[8; 32], &[5; 32])
+        .replace("game synthetic", "game synthetic_v2")
+        .replace("profile synthetic-derived", "profile synthetic-b");
+
+    let registry = Registry::parse(
+        &[&root, &derived_a, &derived_b],
+        &format!("{record_a}{record_b}"),
+    )
+    .unwrap();
+    let playback = registry.playback();
+
+    // Distinct start scripts disambiguate the shared archive directly.
+    let v1 = playback
+        .select(
+            None,
+            &Evidence {
+                start_script: Some(file("start.ps3", 7)),
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![file("cmvs64.exe", 3)],
+            },
+        )
+        .unwrap();
+    assert_eq!(v1.basis, SelectionBasis::DataAndBinary);
+    assert_eq!(v1.record.unwrap().game, "synthetic_v1");
+    assert_eq!(v1.profile.id, "synthetic-a");
+
+    let v2 = playback
+        .select(
+            None,
+            &Evidence {
+                start_script: Some(file("start.ps3", 9)),
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![file("cmvs64.exe", 5)],
+            },
+        )
+        .unwrap();
+    assert_eq!(v2.basis, SelectionBasis::DataAndBinary);
+    assert_eq!(v2.record.unwrap().game, "synthetic_v2");
+    assert_eq!(v2.profile.id, "synthetic-b");
+
+    // Mixing v1 start script with v2 executable is rejected.
+    assert!(matches!(
+        playback.select(
+            None,
+            &Evidence {
+                start_script: Some(file("start.ps3", 7)),
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![file("cmvs64.exe", 5)],
+            }
+        ),
+        Err(SelectionError::UnknownBinary { .. })
+    ));
+
+    // Shared archive alone is ambiguous without executables, but disambiguated by them.
+    assert!(matches!(
+        playback.select(
+            None,
+            &Evidence {
+                start_script: None,
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![],
+            }
+        ),
+        Err(SelectionError::UnknownGame(_))
+    ));
+    let by_archive_and_exe = playback
+        .select(
+            None,
+            &Evidence {
+                start_script: None,
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![file("cmvs64.exe", 5)],
+            },
+        )
+        .unwrap();
+    assert_eq!(by_archive_and_exe.basis, SelectionBasis::DataAndBinary);
+    assert_eq!(by_archive_and_exe.record.unwrap().game, "synthetic_v2");
+
+    // Modified startup script + unmodified shared archive + v2 executable selects v2.
+    let modified_start = playback
+        .select(
+            None,
+            &Evidence {
+                start_script: Some(file("start.ps3", 20)),
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![file("cmvs64.exe", 5)],
+            },
+        )
+        .unwrap();
+    assert_eq!(modified_start.basis, SelectionBasis::Binary);
+    assert_eq!(modified_start.record.unwrap().game, "synthetic_v2");
+    assert_eq!(modified_start.profile.id, "synthetic-b");
+
+    // v1 startup script + modified archive + v2 executable is still a conflict.
+    assert!(matches!(
+        playback.select(
+            None,
+            &Evidence {
+                start_script: Some(file("start.ps3", 7)),
+                script_archive: Some(file("script.cpz", 21)),
+                executables: vec![file("cmvs64.exe", 5)],
+            }
+        ),
+        Err(SelectionError::UnknownGame(_))
+    ));
+
+    // Explicit profile selection keeps the matching record when the archive is shared.
+    let explicit = playback
+        .select(
+            Some("synthetic-b"),
+            &Evidence {
+                start_script: None,
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![],
+            },
+        )
+        .unwrap();
+    assert_eq!(explicit.basis, SelectionBasis::Explicit);
+    assert_eq!(explicit.record.unwrap().game, "synthetic_v2");
+
+    // Sharing an archive with a different game_id, same profile, or missing executables is rejected.
+    let different_game_id = record_b.replace("0x12345678", "0x87654321");
+    assert!(
+        Registry::parse(
+            &[&root, &derived_a, &derived_b],
+            &format!("{record_a}{different_game_id}")
+        )
+        .is_err()
+    );
+    let same_profile = games(&[9; 32], &[8; 32], &[3; 32])
+        .replace("game synthetic", "game synthetic_v2")
+        .replace("profile synthetic-derived", "profile synthetic-a");
+    assert!(
+        Registry::parse(
+            &[&root, &derived_a, &derived_b],
+            &format!("{record_a}{same_profile}")
+        )
+        .is_err()
+    );
+    let without_exe = record_b
+        .lines()
+        .filter(|line| !line.starts_with("executable "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        Registry::parse(
+            &[&root, &derived_a, &derived_b],
+            &format!("{record_a}{without_exe}")
+        )
+        .is_err()
+    );
 }
 
 /// A machine stopped at the script's first system command, and that command's PC.

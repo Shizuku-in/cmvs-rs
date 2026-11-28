@@ -807,6 +807,7 @@ fn verified_startup_globals_are_zero_but_unverified_profiles_remain_unknown() {
         "cmvs-20150405",
         "cmvs-20160201",
         "cmvs-20171114",
+        "cmvs-20171129",
         "cmvs-20190305",
         "cmvs-20190405",
         "cmvs-20221105",

@@ -625,8 +625,6 @@ pub(super) static PROFILES: &[ProfileData] = &[
         binaries: &[
             BinaryData(Arch::X64, file("cmvs64.exe", "3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0")),
             BinaryData(Arch::X86, file("cmvs32.exe", "b1621c5b504a800344316d72dc4477fbf13a00f15f8308470952429f4013003a")),
-            BinaryData(Arch::X64, file("cmvs64.exe", "5f949df9b8aaa56c57594f317819b6f657f99393de65494873f08bebddb48b7f")),
-            BinaryData(Arch::X86, file("cmvs32.exe", "943a0f9e0a1b7ba420df16c6963d96a4da7be56a2ab504072272214115491631")),
         ],
         statuses: &statuses(b"\
             iuuuiuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuunuuuuuuuuuupuuuuuunuuunuuuuuuuuuuuuu\
@@ -643,6 +641,53 @@ pub(super) static PROFILES: &[ProfileData] = &[
             nnuuuuunuuunnnnnuunnnnnnuuunnnnnuuunnnnnunnnuuuuuuuunuuuuuuuuuuuuuuuuunn\
             uiunuuuuuuuunnnnuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuunuuunuuuuuuunnnuuuu\
             unnnununnnunnuniuuuunnnnuuunnnnnnnnnnnnnnnnnnnnnnnnnnnnn\
+        "),
+        variants: &[
+            (0x10b, VariantId::FontCells),
+            (0x11d, VariantId::FontCells),
+            (0x152, VariantId::FontCells),
+            (0x154, VariantId::FontCells),
+            (0x157, VariantId::FontCells),
+            (0x159, VariantId::FontCells),
+            (0x2a2, VariantId::FallingBillboards),
+            (0x2a5, VariantId::Particles),
+            (0x2a6, VariantId::CollisionParticles),
+            (0x2a8, VariantId::Fragments),
+            (0x2ed, VariantId::BackgroundAudio),
+            (0x330, VariantId::CollisionParticles),
+            (0x331, VariantId::CollisionParticles),
+            (0x332, VariantId::CollisionParticles),
+            (0x38b, VariantId::FontCells),
+            (0x3ac, VariantId::FontCells),
+            (0x3b8, VariantId::FontCells),
+            (0x3b9, VariantId::FontCells),
+            (0x3bb, VariantId::FontCells),
+        ],
+        maps: &[],
+    },
+    ProfileData {
+        id: "cmvs-20171129",
+        family: Family::Cmvs,
+        base: Some("cmvs-20160201"),
+        binaries: &[
+            BinaryData(Arch::X64, file("cmvs64.exe", "5f949df9b8aaa56c57594f317819b6f657f99393de65494873f08bebddb48b7f")),
+            BinaryData(Arch::X86, file("cmvs32.exe", "943a0f9e0a1b7ba420df16c6963d96a4da7be56a2ab504072272214115491631")),
+        ],
+        statuses: &statuses(b"\
+            uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuunuuuuuuuuuuuuuuuuunuuunuuuuuuuuuuuuu\
+            uuuuunuuuunnuuunuuuuuuuuuuuuuuuuuuuuuuuuuuuuuunnunnnnunnuuuunnnuuuuuunnu\
+            uuuuunnnuunnunnnuuuuuuuuuuuuuuuuuuuuuuuuuuunuunnuuunnnnnuuuuuunnuuuuuuuu\
+            uuuuunnnunnnunnnuunnunnuuuuuuuuuuuuuuunuuuuuuuuuuuuuuuuuuuuuuuuuuuunuuuu\
+            uuuunnunuuuuunuuuuuuuuuunnuuuunnuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu\
+            uunuuuuuuunnnnuuuuuuunuuuuuuuuuununununnuuuuuuuunnunuuuuuuuuununuuuuuuuu\
+            uuuuuuuuuuuuuunnuuuunuuuunuuuunuuuunuuuunnnnnnuuuuuuuuuuuuuuuuuuuuuuuuuu\
+            uuuuuunnnnnnnnnnnnnnunnnuuuuuuuuuuuunnnnuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu\
+            uuuuunnuuuuunnnuunnnnnnnnnnnnnnnuuuuunnnnnnnnnnnuuuuuunnnnnnnnnnuuuuuuuu\
+            uuuuuuunuuuuuuuunnnnuunnuuuuuuuuuunnnnuuuuuuuuuuuuuuuuunuunnuuuuuuuunuuu\
+            uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuunnunnnuunuuunnuuunuuuuuuuuuuuuuuuu\
+            nnuuuuunuuunnnnnuunnnnnnuuunnnnnuuunnnnnunnnuuuuuuuunuuuuuuuuuuuuuuuuunn\
+            uuunuuuuuuuunnnnuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuunuuunuuuuuuunnnuuuu\
+            unnnununnnunnunuuuuunnnnuuunnnnnnnnnnnnnnnnnnnnnnnnnnnnn\
         "),
         variants: &[
             (0x10b, VariantId::FontCells),
@@ -2504,13 +2549,24 @@ pub(super) static GAMES: &[GameData] = &[
         profile: "cmvs-20171114",
         start_scripts: &[
             file("data/pack/start.ps3", "10afc37c05c970a898ea263b2a45e553813be8753302754349d8b9c1b801f5fe"),
-            file("data/pack/start.ps3", "e24b8f6d2f2ab12858bf8c170f52ccb3f5122a3961e7489044e26a8fa330af51"),
         ],
         script_archive: file("data/pack/script.cpz", "d2a22d23d600a75ecbabef3c28fa9bdcbe69a33aed756487c9c515e021295cc7"),
         game_id: 0x1810a032,
         executables: &[
             file("cmvs64.exe", "3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0"),
             file("cmvs32.exe", "b1621c5b504a800344316d72dc4477fbf13a00f15f8308470952429f4013003a"),
+        ],
+        skip_auto_resume: None,
+    },
+    GameData {
+        game: "aoitori_103",
+        profile: "cmvs-20171129",
+        start_scripts: &[
+            file("data/pack/start.ps3", "e24b8f6d2f2ab12858bf8c170f52ccb3f5122a3961e7489044e26a8fa330af51"),
+        ],
+        script_archive: file("data/pack/script.cpz", "d2a22d23d600a75ecbabef3c28fa9bdcbe69a33aed756487c9c515e021295cc7"),
+        game_id: 0x1810a032,
+        executables: &[
             file("cmvs64.exe", "5f949df9b8aaa56c57594f317819b6f657f99393de65494873f08bebddb48b7f"),
             file("cmvs32.exe", "943a0f9e0a1b7ba420df16c6963d96a4da7be56a2ab504072272214115491631"),
         ],

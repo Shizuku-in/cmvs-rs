@@ -232,13 +232,21 @@ pub(crate) fn validate_registry(
         }
         let earlier = &games[..i];
         if earlier.iter().any(|g| {
+            let shared_archive_conflict = g.script_archive.sha256 == game.script_archive.sha256
+                && !(g.game_id == game.game_id
+                    && g.profile != game.profile
+                    && !g.executables.is_empty()
+                    && !game.executables.is_empty()
+                    && g.executables
+                        .iter()
+                        .all(|a| game.executables.iter().all(|b| a.sha256 != b.sha256)));
             g.game == game.game
                 || g.start_scripts.iter().any(|start| {
                     game.start_scripts
                         .iter()
                         .any(|other| other.sha256 == start.sha256)
                 })
-                || g.script_archive.sha256 == game.script_archive.sha256
+                || shared_archive_conflict
         }) {
             return Err(ProfileError::new(format!(
                 "game {} duplicates an earlier record",

@@ -84,7 +84,6 @@ impl ResearchProfile {
                     cases: dispatch.cases.clone(),
                 })
                 .collect(),
-            relocated_binaries: Vec::new(),
             statuses,
             proofs: Vec::new(),
             contracts: Vec::new(),
@@ -213,7 +212,8 @@ impl ResearchProfile {
             self.id.clone(),
             self.family,
             self.base.clone(),
-            self.binaries()
+            self.binaries
+                .iter()
                 .map(|binary| Binary {
                     arch: binary.arch,
                     file: binary.file.clone(),

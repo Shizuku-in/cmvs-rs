@@ -197,11 +197,11 @@ fn describe(kind: &str, file: &FileEvidence) -> String {
 }
 
 impl Registry {
-    pub fn select(
-        &self,
+    pub fn select<'a>(
+        &'a self,
         explicit: Option<&str>,
         evidence: &Evidence,
-    ) -> Result<ProfileSelection<'_>, SelectionError> {
+    ) -> Result<ProfileSelection<'a>, SelectionError> {
         let mut notes = Vec::new();
         notes.extend(evidence.start_script.iter().map(|f| describe("start", f)));
         notes.extend(
@@ -216,31 +216,68 @@ impl Registry {
                 .iter()
                 .map(|f| describe("executable", f)),
         );
-        let data =
+        let start_matches = |g: &GameRecord, file: &FileEvidence| {
+            g.start_scripts
+                .iter()
+                .any(|known| known.sha256 == file.sha256)
+        };
+        let executables_match = |g: &GameRecord| {
+            !evidence.executables.is_empty()
+                && evidence
+                    .executables
+                    .iter()
+                    .all(|exe| g.executables.iter().any(|known| known.sha256 == exe.sha256))
+        };
+        let data_matches: Vec<&GameRecord> =
             if evidence.start_script.is_none() && evidence.script_archive.is_none() {
-                None
+                Vec::new()
             } else {
-                self.games.iter().find(|g| {
-                    evidence.start_script.as_ref().is_none_or(|f| {
-                        g.start_scripts.iter().any(|start| f.sha256 == start.sha256)
-                    }) && evidence
-                        .script_archive
-                        .as_ref()
-                        .is_none_or(|f| f.sha256 == g.script_archive.sha256)
-                })
+                self.games
+                    .iter()
+                    .filter(|g| {
+                        evidence
+                            .start_script
+                            .as_ref()
+                            .is_none_or(|f| start_matches(g, f))
+                            && evidence
+                                .script_archive
+                                .as_ref()
+                                .is_none_or(|f| f.sha256 == g.script_archive.sha256)
+                    })
+                    .collect()
             };
-        if let Some(game) = data {
-            notes.push(format!(
-                "data matches game {} ({})",
-                game.game, game.profile
-            ));
-        }
+        let unique_data = |matches: &[&'a GameRecord]| -> Option<&'a GameRecord> {
+            if matches.len() == 1 {
+                Some(matches[0])
+            } else if matches.len() > 1 && !evidence.executables.is_empty() {
+                let mut narrowed = matches.iter().copied().filter(|g| executables_match(g));
+                narrowed.next().filter(|_| narrowed.next().is_none())
+            } else {
+                None
+            }
+        };
         if let Some(selector) = explicit {
             let profile = self
                 .resolve_profile(selector)
                 .ok_or_else(|| SelectionError::UnknownProfile(selector.to_owned()))?;
-            let record = data.filter(|g| g.profile == profile.id);
-            if data.is_some() && record.is_none() {
+            let matching_profile: Vec<&GameRecord> = data_matches
+                .iter()
+                .copied()
+                .filter(|g| g.profile == profile.id)
+                .collect();
+            let record = unique_data(&matching_profile);
+            if let Some(game) = record {
+                notes.push(format!(
+                    "data matches game {} ({})",
+                    game.game, game.profile
+                ));
+            } else if let Some(game) = unique_data(&data_matches) {
+                notes.push(format!(
+                    "data matches game {} ({})",
+                    game.game, game.profile
+                ));
+                notes.push("explicit profile differs; game record not applied".into());
+            } else if !data_matches.is_empty() {
                 notes.push("explicit profile differs; game record not applied".into());
             }
             return Ok(ProfileSelection {
@@ -250,34 +287,31 @@ impl Registry {
                 evidence: notes,
             });
         }
+        let data = unique_data(&data_matches);
+        if let Some(game) = data {
+            notes.push(format!(
+                "data matches game {} ({})",
+                game.game, game.profile
+            ));
+        }
         if evidence.start_script.is_none() && evidence.script_archive.is_none() {
             return Err(SelectionError::NoDataEvidence);
         }
         let game = match data {
             Some(game) => game,
             None => {
-                let mut candidates = self.games.iter().filter(|game| {
-                    !evidence.executables.is_empty()
-                        && evidence.executables.iter().all(|exe| {
-                            game.executables
-                                .iter()
-                                .any(|known| known.sha256 == exe.sha256)
-                        })
-                });
+                let mut candidates = self.games.iter().filter(|game| executables_match(game));
                 let game = candidates.next().filter(|_| candidates.next().is_none());
                 let game = game.ok_or_else(|| SelectionError::UnknownGame(notes.clone()))?;
-                // Modified hashes are expected; hashes identifying another game are not.
+                // Modified hashes are expected; hashes belonging only to another game are not.
                 let conflict = self.games.iter().any(|other| {
                     other.game != game.game
                         && (evidence.start_script.as_ref().is_some_and(|file| {
-                            other
-                                .start_scripts
-                                .iter()
-                                .any(|known| known.sha256 == file.sha256)
-                        }) || evidence
-                            .script_archive
-                            .as_ref()
-                            .is_some_and(|file| other.script_archive.sha256 == file.sha256))
+                            !start_matches(game, file) && start_matches(other, file)
+                        }) || evidence.script_archive.as_ref().is_some_and(|file| {
+                            game.script_archive.sha256 != file.sha256
+                                && other.script_archive.sha256 == file.sha256
+                        }))
                 });
                 if conflict {
                     return Err(SelectionError::UnknownGame(notes));

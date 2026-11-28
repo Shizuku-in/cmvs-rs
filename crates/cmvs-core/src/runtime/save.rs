@@ -194,9 +194,11 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
             | InspectedBuild::Cmvs20211006
             | InspectedBuild::Cmvs20221105,
         ) => Some(SnapshotLayout::TextV3SceneV4),
-        Some(InspectedBuild::Cmvs20160201 | InspectedBuild::Cmvs20171114) => {
-            Some(SnapshotLayout::TextV3)
-        }
+        Some(
+            InspectedBuild::Cmvs20160201
+            | InspectedBuild::Cmvs20171114
+            | InspectedBuild::Cmvs20171129,
+        ) => Some(SnapshotLayout::TextV3),
         Some(
             InspectedBuild::Cvns20040515
             | InspectedBuild::Cvns20040730
@@ -223,6 +225,7 @@ fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
                 | InspectedBuild::Cmvs20120309
                 | InspectedBuild::Cmvs20160201
                 | InspectedBuild::Cmvs20171114
+                | InspectedBuild::Cmvs20171129
                 | InspectedBuild::Cmvs20211006
                 | InspectedBuild::Cmvs20221105
         )
@@ -269,7 +272,7 @@ fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8])
             | InspectedBuild::Cmvs20120309
             | InspectedBuild::Cmvs20211006,
         ) => body.get(..4) == Some(&[1, 0, 5, 0]),
-        Some(InspectedBuild::Cmvs20171114) => true,
+        Some(InspectedBuild::Cmvs20171114 | InspectedBuild::Cmvs20171129) => true,
         _ => false,
     }
 }
@@ -1581,6 +1584,7 @@ mod layout_tests {
             ("cmvs-20140217", SnapshotLayout::TextV2),
             ("cmvs-20150405", SnapshotLayout::TextV2),
             ("cmvs-20171114", SnapshotLayout::TextV3),
+            ("cmvs-20171129", SnapshotLayout::TextV3),
             ("cmvs-20190305", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20190405", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20211006", SnapshotLayout::TextV3SceneV4),
@@ -1604,6 +1608,7 @@ mod layout_tests {
                         | "cmvs-20110525"
                         | "cmvs-20120309"
                         | "cmvs-20171114"
+                        | "cmvs-20171129"
                         | "cmvs-20160201"
                         | "cmvs-20211006"
                         | "cmvs-20221105"
