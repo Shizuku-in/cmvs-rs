@@ -1131,6 +1131,167 @@ fn startup_variants_keep_one_identity_with_known_executable_fallback() {
     assert!(Registry::parse(&[&root, &derived], &missing_start).is_err());
 }
 
+#[test]
+fn patched_builds_may_share_script_archive_across_distinct_profiles_and_executables() {
+    let root = build("synthetic-root", None, &[0, 1], 1).to_text();
+    let derived_a = build("synthetic-a", Some("synthetic-root"), &[0, 1], 3).to_text();
+    let derived_b = build("synthetic-b", Some("synthetic-root"), &[0, 1], 5).to_text();
+    let record_a = games(&[7; 32], &[8; 32], &[3; 32])
+        .replace("game synthetic", "game synthetic_v1")
+        .replace("profile synthetic-derived", "profile synthetic-a");
+    let record_b = games(&[9; 32], &[8; 32], &[5; 32])
+        .replace("game synthetic", "game synthetic_v2")
+        .replace("profile synthetic-derived", "profile synthetic-b");
+
+    let registry = Registry::parse(
+        &[&root, &derived_a, &derived_b],
+        &format!("{record_a}{record_b}"),
+    )
+    .unwrap();
+    let playback = registry.playback();
+
+    // Distinct start scripts disambiguate the shared archive directly.
+    let v1 = playback
+        .select(
+            None,
+            &Evidence {
+                start_script: Some(file("start.ps3", 7)),
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![file("cmvs64.exe", 3)],
+            },
+        )
+        .unwrap();
+    assert_eq!(v1.basis, SelectionBasis::DataAndBinary);
+    assert_eq!(v1.record.unwrap().game, "synthetic_v1");
+    assert_eq!(v1.profile.id, "synthetic-a");
+
+    let v2 = playback
+        .select(
+            None,
+            &Evidence {
+                start_script: Some(file("start.ps3", 9)),
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![file("cmvs64.exe", 5)],
+            },
+        )
+        .unwrap();
+    assert_eq!(v2.basis, SelectionBasis::DataAndBinary);
+    assert_eq!(v2.record.unwrap().game, "synthetic_v2");
+    assert_eq!(v2.profile.id, "synthetic-b");
+
+    // Mixing v1 start script with v2 executable is rejected.
+    assert!(matches!(
+        playback.select(
+            None,
+            &Evidence {
+                start_script: Some(file("start.ps3", 7)),
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![file("cmvs64.exe", 5)],
+            }
+        ),
+        Err(SelectionError::UnknownBinary { .. })
+    ));
+
+    // Shared archive alone is ambiguous without executables, but disambiguated by them.
+    assert!(matches!(
+        playback.select(
+            None,
+            &Evidence {
+                start_script: None,
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![],
+            }
+        ),
+        Err(SelectionError::UnknownGame(_))
+    ));
+    let by_archive_and_exe = playback
+        .select(
+            None,
+            &Evidence {
+                start_script: None,
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![file("cmvs64.exe", 5)],
+            },
+        )
+        .unwrap();
+    assert_eq!(by_archive_and_exe.basis, SelectionBasis::DataAndBinary);
+    assert_eq!(by_archive_and_exe.record.unwrap().game, "synthetic_v2");
+
+    // Modified startup script + unmodified shared archive + v2 executable selects v2.
+    let modified_start = playback
+        .select(
+            None,
+            &Evidence {
+                start_script: Some(file("start.ps3", 20)),
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![file("cmvs64.exe", 5)],
+            },
+        )
+        .unwrap();
+    assert_eq!(modified_start.basis, SelectionBasis::Binary);
+    assert_eq!(modified_start.record.unwrap().game, "synthetic_v2");
+    assert_eq!(modified_start.profile.id, "synthetic-b");
+
+    // v1 startup script + modified archive + v2 executable is still a conflict.
+    assert!(matches!(
+        playback.select(
+            None,
+            &Evidence {
+                start_script: Some(file("start.ps3", 7)),
+                script_archive: Some(file("script.cpz", 21)),
+                executables: vec![file("cmvs64.exe", 5)],
+            }
+        ),
+        Err(SelectionError::UnknownGame(_))
+    ));
+
+    // Explicit profile selection keeps the matching record when the archive is shared.
+    let explicit = playback
+        .select(
+            Some("synthetic-b"),
+            &Evidence {
+                start_script: None,
+                script_archive: Some(file("script.cpz", 8)),
+                executables: vec![],
+            },
+        )
+        .unwrap();
+    assert_eq!(explicit.basis, SelectionBasis::Explicit);
+    assert_eq!(explicit.record.unwrap().game, "synthetic_v2");
+
+    // Sharing an archive with a different game_id, same profile, or missing executables is rejected.
+    let different_game_id = record_b.replace("0x12345678", "0x87654321");
+    assert!(
+        Registry::parse(
+            &[&root, &derived_a, &derived_b],
+            &format!("{record_a}{different_game_id}")
+        )
+        .is_err()
+    );
+    let same_profile = games(&[9; 32], &[8; 32], &[3; 32])
+        .replace("game synthetic", "game synthetic_v2")
+        .replace("profile synthetic-derived", "profile synthetic-a");
+    assert!(
+        Registry::parse(
+            &[&root, &derived_a, &derived_b],
+            &format!("{record_a}{same_profile}")
+        )
+        .is_err()
+    );
+    let without_exe = record_b
+        .lines()
+        .filter(|line| !line.starts_with("executable "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        Registry::parse(
+            &[&root, &derived_a, &derived_b],
+            &format!("{record_a}{without_exe}")
+        )
+        .is_err()
+    );
+}
+
 /// A machine stopped at the script's first system command, and that command's PC.
 fn pending_machine(program: &cmvs_core::format::ps3::Script) -> (Machine, usize) {
     let mut vm = Machine::new(program).unwrap();

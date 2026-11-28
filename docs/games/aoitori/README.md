@@ -20,6 +20,25 @@
 
 两个 switch 各992项：734个处理入口、258个空桩。x64比较得到5条 `Inherited`、2条 `Presumed`、727条 `Unreviewed`；没有把研究运行升级为复核证明。x86仅核对身份和switch表，未做独立语义复核。
 
+## 1.03 补丁样本身份与差异
+
+| 字段 | 内容 |
+|---|---|
+| 发行版本与补丁 | 官方 1.03 更新（`update.log`: `UPDATE_VER=1.03`、`UPDATE_DAY=2018/01/19`；98 项 `cmvsCheck.cfg` MD5 全部校验通过） |
+| 引擎自报版本 | `cmvs system [ver3.44]` |
+| 游戏标识 | `aoitori_103` |
+| 构建档案 | `cmvs-20171129`，基准 `cmvs-20160201` |
+| x64 / image base | `cmvs64.exe` / `0x140000000`（PE 时间戳 `0x5a1e5b72`） |
+| x64 SHA-256 | `5f949df9b8aaa56c57594f317819b6f657f99393de65494873f08bebddb48b7f` |
+| x86 / image base | `cmvs32.exe` / `0x400000`（PE 时间戳 `0x5a1e5b29`） |
+| x86 SHA-256 | `943a0f9e0a1b7ba420df16c6963d96a4da7be56a2ab504072272214115491631` |
+| `data/pack/start.ps3` SHA-256 | `e24b8f6d2f2ab12858bf8c170f52ccb3f5122a3961e7489044e26a8fa330af51` |
+| `data/pack/script.cpz` SHA-256 | `d2a22d23d600a75ecbabef3c28fa9bdcbe69a33aed756487c9c515e021295cc7`（与初版一致） |
+| 脚本声明游戏 ID | `0x1810a032` |
+
+- **二进制差异（`cmvs-20171114` → `cmvs-20171129`）**：对 x64 `.pdata` 全量函数与反汇编对照确认，除版本字符串（`ver3.42` → `ver3.44`）及链接器重排 `0x29e00 → 0x2ad00`（指令未变）外，唯一实质性代码修改在字形缓存函数 `0x14005e020`（x86 对应 `0x455351`）：在 `GetGlyphOutlineA` 返回 `cjBuffer == 0` 的分支中为空格（`0x8140` / `0x20`）补充 `gmCellIncX`/cell 宽度填充，致使后续函数及全部 992 项分派入口统一偏移 `+0x90`。其余指令处理器、19 项变体绑定、全局变量零初始化与快照布局均与 `cmvs-20171114` 一致；命令状态保持 `Unreviewed`，未将本次对照升级为 `Inherited`/`Reviewed`。
+- **数据更新**：1.03 启动脚本将标题改为 `アオイトリ[ver.1.03]`，并在 `0x2010`（脚本）、`0x2014`（语音）、`0x2011`（图像）的 0 号槽注册 `data\pack\update.cpz`（CPZ7，含 729 张 `.pb3`、1 条 `.ogg` 与 8 个修正 `.ps3`：`intcode.ps3`、`sn302.ps3`、`sn307.ps3`、`sn308.ps3`、`sn402.ps3`、`sn603.ps3`、`sn605.ps3`、`snhsy4.ps3`）。
+
 ## 当前验证
 
 | 项目 | 结果与范围 |

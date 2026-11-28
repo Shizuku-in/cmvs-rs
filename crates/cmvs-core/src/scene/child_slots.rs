@@ -97,7 +97,7 @@ mod tests {
             );
             assert_eq!(scene.config.child_slots.count(), count);
 
-            for id in ["cmvs-20160201", "cmvs-20171114"] {
+            for id in ["cmvs-20160201", "cmvs-20171114", "cmvs-20171129"] {
                 assert_eq!(
                     ChildSlots::for_profile(registry.profile(id).unwrap()).count(),
                     768
