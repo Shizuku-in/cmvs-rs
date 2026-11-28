@@ -46,6 +46,7 @@ struct Player {
     startup: Runtime,
     backend: MobileBackend,
     scale_filter: Option<ScaleFilter>,
+    anti_aliasing: bool,
     touch: TouchInput,
     bindings: KeyBindings,
     resumed: bool,
@@ -96,6 +97,7 @@ impl Player {
         });
         let surface = instance.create_surface(window.clone())?;
         let (mut renderer, adapter) = Renderer::new(&instance, Some(&surface))?;
+        renderer.set_anti_aliasing(self.anti_aliasing);
         log::info!("GPU: {}", adapter.get_info().name);
         let presenter = Presenter::new(surface, &adapter, &renderer)?;
         // Restore the last completed frame into the new device after suspension.
@@ -359,6 +361,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     )?;
     let face = config.next().ok_or("no font collection index")?.parse()?;
     let scale_filter = config.next().filter(|s| !s.is_empty());
+    let anti_aliasing = config.next().filter(|s| !s.is_empty());
     let fs = Arc::new(AndroidHostFs);
     let bootstrap = GameBootstrap::load(fs, &root, None, EncodingPolicy::AutoDefaultShiftJis)?;
     let record = bootstrap
@@ -387,6 +390,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         },
     )?;
     let scale_filter = startup.scale_filter_override(scale_filter)?;
+    let anti_aliasing = startup.anti_aliasing_override(anti_aliasing)?;
     let audio = NativeAudio::new(&root)?;
     let audio_control = audio.host_control();
     audio_control.set_active(false);
@@ -409,6 +413,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         startup,
         backend,
         scale_filter,
+        anti_aliasing,
         touch: TouchInput::default(),
         bindings,
         resumed: false,

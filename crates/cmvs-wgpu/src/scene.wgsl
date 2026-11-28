@@ -20,10 +20,49 @@ fn sample_linear(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
     let q=uv-0.5; let f=fract(q); let xy=vec2<i32>(floor(q));
     return round(mix(mix(load(t,xy),load(t,xy+vec2<i32>(1,0)),f.x),mix(load(t,xy+vec2<i32>(0,1)),load(t,xy+vec2<i32>(1,1)),f.x),f.y));
 }
+fn load_premul(t: texture_2d<f32>, xy: vec2<i32>) -> vec4<f32> {
+    let c = load(t, xy);
+    return vec4<f32>(c.rgb * (c.a / 255.0), c.a);
+}
+fn sample_linear_premul(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
+    let q = uv - 0.5;
+    let f = fract(q);
+    let xy = vec2<i32>(floor(q));
+    return mix(
+        mix(load_premul(t, xy), load_premul(t, xy + vec2<i32>(1, 0)), f.x),
+        mix(load_premul(t, xy + vec2<i32>(0, 1)), load_premul(t, xy + vec2<i32>(1, 1)), f.x),
+        f.y
+    );
+}
+fn sample_aa_premul(t: texture_2d<f32>, uv: vec2<f32>, du: vec2<f32>, dv: vec2<f32>) -> vec4<f32> {
+    let step = max(length(du), length(dv));
+    if (step <= 1.05) {
+        return sample_linear_premul(t, uv);
+    }
+    if (step <= 2.5) {
+        let s0 = sample_linear_premul(t, uv + du * -0.375 + dv * -0.125);
+        let s1 = sample_linear_premul(t, uv + du * 0.125 + dv * -0.375);
+        let s2 = sample_linear_premul(t, uv + du * 0.375 + dv * 0.125);
+        let s3 = sample_linear_premul(t, uv + du * -0.125 + dv * 0.375);
+        return (s0 + s1 + s2 + s3) * 0.25;
+    }
+    var sum = vec4<f32>(0.0);
+    for (var yi = 0; yi < 4; yi += 1) {
+        let oy = (f32(yi) - 1.5) * 0.25;
+        for (var xi = 0; xi < 4; xi += 1) {
+            let ox = (f32(xi) - 1.5) * 0.25;
+            sum += sample_linear_premul(t, uv + du * ox + dv * oy);
+        }
+    }
+    return sum * 0.0625;
+}
 fn div255(x: f32) -> f32 {
     return floor(x / 255.0 + 0.001);
 }
 @fragment fn fs(in: Vertex) -> @location(0) vec4<f32> {
+    // Compute derivatives in uniform control flow before any conditional discard.
+    let du = dpdx(in.uv);
+    let dv = dpdy(in.uv);
     let flags=u32(p.v[4].w);
     var texel=vec4<f32>(p.v[4].xyz,255.0);
     if ((flags & 32u)!=0u) {
@@ -51,18 +90,30 @@ fn div255(x: f32) -> f32 {
         }
         return vec4<f32>(rgb/255.0,alpha/256.0);
     }
+    let aa = (flags & 1u) == 0u && p.v[0].w > 1.5;
     if ((flags & 1u)==0u) {
-        texel=load(image,vec2<i32>(floor(in.uv)));
-        if (p.v[0].w>0.0) { texel=sample_linear(image,in.uv); }
+        if (aa) {
+            let pm = sample_aa_premul(image, in.uv, du, dv);
+            if (pm.a > 0.0001) {
+                texel = vec4<f32>(clamp(pm.rgb * (255.0 / pm.a), vec3<f32>(0.0), vec3<f32>(255.0)), pm.a);
+            } else {
+                texel = vec4<f32>(0.0);
+            }
+        } else {
+            texel=load(image,vec2<i32>(floor(in.uv)));
+            if (p.v[0].w>0.0) { texel=sample_linear(image,in.uv); }
+        }
     }
-    var alpha=div255(texel.a*p.v[0].z+127.0);
+    var alpha = select(div255(texel.a * p.v[0].z + 127.0), texel.a * p.v[0].z / 255.0, aa);
     if ((flags & 4u)!=0u) {
         let green=u32(load(mask,vec2<i32>(floor(in.uv))).g);
-        alpha=round(alpha*p.v[6u+green/4u][green%4u]);
+        let cov = p.v[6u+green/4u][green%4u];
+        alpha = select(round(alpha * cov), alpha * cov, aa);
     }
     if ((flags & 8u)!=0u) {
         let uv=(in.position.xy-0.5)*vec2<f32>(textureDimensions(screen))/p.v[0].xy;
-        alpha=div255(alpha*sample_linear(screen,uv).g+127.0);
+        let sg = sample_linear(screen, uv).g;
+        alpha = select(div255(alpha * sg + 127.0), alpha * sg / 255.0, aa);
     }
     if ((flags & 2u)!=0u) { texel=vec4<f32>(0.0,0.0,0.0,texel.a); }
     return vec4<f32>(texel.rgb/255.0,alpha/255.0);

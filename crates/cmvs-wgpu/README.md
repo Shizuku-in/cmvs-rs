@@ -4,7 +4,7 @@ GPU backend that executes the `cmvs-core` draw queue with `wgpu` instead of the 
 
 ## API
 
-- `Renderer` checks the device, renders a `RenderFrame` into a `GpuFrame` and caches textures by content.
+- `Renderer` checks the device, renders a `RenderFrame` into a `GpuFrame` and caches textures by content. `Renderer::set_anti_aliasing` enables optional premultiplied supersampled filtering for scaled, projected, rotated, and billboarded sprites.
 - `GpuFrame::read` reads the logical frame back to RGBA. It is only called when the engine asks for a capture.
 - `Presenter` scales a `GpuFrame` to a window surface, separately from the logical canvas.
 - `Presenter::present` and `Renderer::render_image` accept `ScaleFilter` directly, including `Mitchell` and `Lanczos3 { anti_ringing }`.

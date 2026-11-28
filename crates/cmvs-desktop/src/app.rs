@@ -49,6 +49,7 @@ Text, audio and display:
   --renderer <cpu|wgpu>       cpu is the default; wgpu needs the wgpu-renderer feature
   --scale-filter <name>       game, nearest, bilinear, keys, mitchell, lanczos3,
                               lanczos3-anti-ringing, or lanczos4
+  --anti-aliasing <off|on>    smooth scaled/rotated GPU sprites (requires --renderer wgpu)
   --save-frame <new.png>      export the last fully presented frame to a new file on exit
   --image-archive <cpz> --preview-image <name>
                               preview an ASCII-named PB3 image
@@ -145,6 +146,7 @@ struct App {
     aspect_scaling: std::cell::Cell<bool>,
     render_mode: std::cell::Cell<RenderMode>,
     scale_filter: Option<ScaleFilter>,
+    anti_aliasing: bool,
     fullscreen_monitor: std::cell::RefCell<crate::FullscreenMonitor>,
     windowed_size: std::cell::Cell<[u32; 2]>,
 }
@@ -457,8 +459,12 @@ impl ApplicationHandler for App {
                     cmvs_wgpu::wgpu::InstanceDescriptor::new_without_display_handle().with_env(),
                 );
                 let surface = instance.create_surface(window.clone())?;
-                let (renderer, adapter) = cmvs_wgpu::Renderer::new(&instance, Some(&surface))?;
+                let (mut renderer, adapter) = cmvs_wgpu::Renderer::new(&instance, Some(&surface))?;
+                renderer.set_anti_aliasing(self.anti_aliasing);
                 println!("# GPU adapter {:?}", adapter.get_info());
+                if self.anti_aliasing {
+                    println!("# GPU sprite anti-aliasing enabled");
+                }
                 let presenter = cmvs_wgpu::Presenter::new(surface, &adapter, &renderer)?;
                 self.gpu = Some(GpuDesktop {
                     renderer,
@@ -921,6 +927,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut save_frame = None;
     let mut use_gpu = false;
     let mut scale_filter = None;
+    let mut anti_aliasing: Option<bool> = None;
     let mut native_audio = false;
     let mut native_input = true;
     let mut record_text = false;
@@ -974,6 +981,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             "--input",
             "--renderer",
             "--scale-filter",
+            "--anti-aliasing",
             "--audio",
         ]
         .iter()
@@ -1034,6 +1042,12 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         } else if flag == "--scale-filter" {
             scale_filter = Some(value.into_string().map_err(|_| "invalid scale filter")?);
+        } else if flag == "--anti-aliasing" {
+            anti_aliasing = Some(match value.to_str() {
+                Some("off" | "0" | "false") => false,
+                Some("on" | "1" | "true") => true,
+                _ => return Err("anti-aliasing must be off or on".into()),
+            });
         } else if flag == "--audio" {
             native_audio = match value.to_str() {
                 Some("native") => true,
@@ -1060,6 +1074,9 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
     if preview_name.is_some() != image_archive.is_some() {
         return Err("preview-image and image-archive must be supplied together".into());
+    }
+    if anti_aliasing == Some(true) && !use_gpu {
+        return Err("--anti-aliasing on requires --renderer wgpu".into());
     }
     let root = PathBuf::from(root).canonicalize()?;
     let fs = default_host_fs();
@@ -1198,6 +1215,8 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
     let display_preferences = startup.display_preferences();
     let scale_filter = startup.scale_filter_override(scale_filter.as_deref())?;
+    let anti_aliasing = startup
+        .anti_aliasing_override(anti_aliasing.map(|enabled| if enabled { "on" } else { "off" }))?;
     let fullscreen_monitor_mode = startup.platform().fullscreen_monitor_mode();
     let canvas = startup.screen_size();
     let mut game_input = GameInput::default();
@@ -1243,6 +1262,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         aspect_scaling: std::cell::Cell::new(display_preferences.aspect_scaling),
         render_mode: std::cell::Cell::new(RenderMode::try_from(display_preferences.render_mode)?),
         scale_filter,
+        anti_aliasing,
         fullscreen_monitor: std::cell::RefCell::new(crate::FullscreenMonitor::new(
             fullscreen_monitor_mode,
         )),

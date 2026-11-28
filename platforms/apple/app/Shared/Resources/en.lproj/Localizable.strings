@@ -31,6 +31,7 @@
 "Bilinear" = "Bilinear";
 "Keys Bicubic" = "Keys Bicubic";
 "Lanczos3 with Anti-Ringing" = "Lanczos3 with Anti-Ringing";
+"Anti-Aliasing" = "Anti-Aliasing";
 "Game Preference" = "Game Preference";
 "Original Size" = "Original Size";
 "Fit" = "Fit";

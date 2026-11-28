@@ -21,6 +21,7 @@ impl BrowserGpu {
     pub async fn new(
         canvas: OffscreenCanvas,
         size: [u32; 2],
+        anti_aliasing: bool,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         canvas.set_width(size[0]);
         canvas.set_height(size[1]);
@@ -30,7 +31,8 @@ impl BrowserGpu {
         });
         let surface =
             instance.create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()))?;
-        let (renderer, adapter) = Renderer::new_async(&instance, Some(&surface)).await?;
+        let (mut renderer, adapter) = Renderer::new_async(&instance, Some(&surface)).await?;
+        renderer.set_anti_aliasing(anti_aliasing);
         let presenter = Presenter::new(surface, &adapter, &renderer)?;
         Ok(Self {
             instance,

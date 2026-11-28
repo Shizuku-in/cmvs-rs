@@ -138,6 +138,7 @@ pub struct Renderer {
     clock: u64,
     frame_start: u64,
     errors: Arc<Mutex<Option<String>>>,
+    anti_aliasing: bool,
     pub uploaded_bytes: u64,
 }
 impl Renderer {
@@ -306,10 +307,19 @@ impl Renderer {
             clock: 0,
             frame_start: 0,
             errors,
+            anti_aliasing: false,
             uploaded_bytes: 0,
         };
         renderer.check()?;
         Ok((renderer, adapter))
+    }
+    /// Enables or disables premultiplied supersampled anti-aliasing for scaled, projected,
+    /// rotated, and billboarded sprites. Disabled by default to match original CMVS/CPU parity.
+    pub fn set_anti_aliasing(&mut self, enabled: bool) {
+        self.anti_aliasing = enabled;
+    }
+    pub fn anti_aliasing(&self) -> bool {
+        self.anti_aliasing
     }
     pub fn check(&self) -> Result<()> {
         if let Some(message) = self.errors.lock().expect("GPU error lock").take() {
@@ -507,7 +517,10 @@ impl Renderer {
         let mut draws = Vec::with_capacity(commands.len());
         let mut resolved = Vec::with_capacity(commands.len());
         for command in commands {
-            let draw = shader_draw(command, size);
+            let mut draw = shader_draw(command, size);
+            if self.anti_aliasing && draw.params[3] > 0.0 {
+                draw.params[3] = 2.0;
+            }
             for image in draw.textures.into_iter().flatten() {
                 self.touch(image);
             }
@@ -899,6 +912,244 @@ mod tests {
                 }
             }
         }
+        gpu.check().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a native GPU adapter; run explicitly"]
+    fn anti_aliasing_removes_dark_fringes_and_reduces_minification_shimmer() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
+        let (mut gpu, _) = Renderer::new(&instance, None).unwrap();
+        assert!(!gpu.anti_aliasing());
+
+        // 1. Premultiplied alpha eliminates dark halos on bright sprites bordered by [0,0,0,0].
+        let edge_sprite = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(2, 1, vec![255, 255, 255, 255, 0, 0, 0, 0]).unwrap(),
+        };
+        let render_edge = |gpu: &mut Renderer| {
+            gpu.compose(
+                [4, 1],
+                [200, 200, 200, 255],
+                &[Layer::Projected {
+                    image: &edge_sprite,
+                    rect: [0, 0, 2, 1],
+                    // x=1 samples uv.x=0.75 and x=2 samples uv.x=1.25 across the [255..255]/[0..0] border.
+                    quad: [-0.5, -0.5, 3.5, 0.5],
+                    alpha: 255,
+                    blend: Blend::Alpha,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap()
+        };
+        let off = render_edge(&mut gpu);
+        // Straight-alpha bilinear mixes the bright border with [0,0,0,0] and dips below background 200.
+        let off_min = off
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0])
+            .min()
+            .unwrap();
+        assert!(
+            off_min < 190,
+            "expected straight-alpha dark fringe below 190, got {off_min}"
+        );
+
+        gpu.set_anti_aliasing(true);
+        assert!(gpu.anti_aliasing());
+        let on = render_edge(&mut gpu);
+        let on_pixels: Vec<u8> = on
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0])
+            .collect();
+        assert!(
+            on_pixels.iter().all(|&v| v >= 200),
+            "premultiplied AA must not dip below background 200: {on_pixels:?}"
+        );
+        // x=1 (uv=0.75 -> 75% white over 200 -> 241), x=2 (uv=1.25 -> 25% white over 200 -> 214)
+        assert!((239..=243).contains(&on_pixels[1]), "got {on_pixels:?}");
+        assert!((212..=216).contains(&on_pixels[2]), "got {on_pixels:?}");
+
+        // 2. RGSS minification reduces sub-pixel vertical float shimmer on thin bright strands.
+        let mut strand_pixels = vec![0u8; 16 * 16 * 4];
+        for y in 0..16usize {
+            let alpha = match y {
+                6 | 7 => 255u8,
+                5 | 8 => 128u8,
+                _ => 0u8,
+            };
+            if alpha > 0 {
+                for x in 0..16usize {
+                    let i = (y * 16 + x) * 4;
+                    strand_pixels[i..i + 4].copy_from_slice(&[255, 255, 255, alpha]);
+                }
+            }
+        }
+        let strand = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(16, 16, strand_pixels).unwrap(),
+        };
+        let shimmer_range = |gpu: &mut Renderer| -> (f32, u8) {
+            let mut sums = Vec::new();
+            let mut min_channel = 255u8;
+            for step in 0..8 {
+                let dy = step as f32 * 0.125;
+                let frame = gpu
+                    .compose(
+                        [12, 12],
+                        [150, 150, 150, 255],
+                        &[Layer::Projected {
+                            image: &strand,
+                            rect: [0, 0, 16, 16],
+                            // 0.5x scale (step = 2.0 texels/px -> RGSS 4-tap path)
+                            quad: [1.5, 1.5 + dy, 9.5, 9.5 + dy],
+                            alpha: 255,
+                            blend: Blend::Alpha,
+                        }],
+                    )
+                    .unwrap()
+                    .read()
+                    .unwrap();
+                let mut total = 0f32;
+                for p in frame.pixels().as_chunks::<4>().0 {
+                    total += f32::from(p[0]);
+                    min_channel = min_channel.min(p[0]);
+                }
+                sums.push(total);
+            }
+            let min_s = sums.iter().copied().fold(f32::INFINITY, f32::min);
+            let max_s = sums.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            (max_s - min_s, min_channel)
+        };
+        gpu.set_anti_aliasing(false);
+        let (off_range, off_min_c) = shimmer_range(&mut gpu);
+        gpu.set_anti_aliasing(true);
+        let (on_range, on_min_c) = shimmer_range(&mut gpu);
+        assert!(
+            off_min_c < 150 && on_min_c >= 150,
+            "dark fringe check: off_min={off_min_c} on_min={on_min_c}"
+        );
+        assert!(
+            on_range < off_range * 0.35,
+            "expected AA to sharply reduce vertical shimmer: off={off_range} on={on_range}"
+        );
+
+        // 3. Strong minification (0.25x, step = 4.0 > 2.5 -> 4x4 16-tap path) averages checkerboard cleanly.
+        let mut checker_pixels = vec![0u8; 16 * 16 * 4];
+        for y in 0..16usize {
+            for x in 0..16usize {
+                let i = (y * 16 + x) * 4;
+                let color = if (x + y) % 2 == 0 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 255, 255]
+                };
+                checker_pixels[i..i + 4].copy_from_slice(&color);
+            }
+        }
+        let checker = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(16, 16, checker_pixels).unwrap(),
+        };
+        let minified = gpu
+            .compose(
+                [4, 4],
+                [0, 0, 0, 255],
+                &[Layer::Projected {
+                    image: &checker,
+                    rect: [0, 0, 16, 16],
+                    quad: [-0.5, -0.5, 3.5, 3.5],
+                    alpha: 255,
+                    blend: Blend::Replace,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        for p in minified.pixels().as_chunks::<4>().0 {
+            assert!(
+                (122..=134).contains(&p[0]) && p[1] == 0 && (122..=134).contains(&p[2]),
+                "expected averaged purple around [128, 0, 128], got {p:?}"
+            );
+        }
+
+        // 4. 1:1 Layer::Image stays bit-identical with AA on or off, and Additive/BlackAlpha/Rotated work cleanly.
+        let unscaled_on = gpu
+            .compose(
+                [2, 1],
+                [10, 20, 30, 255],
+                &[Layer::Image {
+                    image: &edge_sprite,
+                    rect: [0, 0, 2, 1],
+                    corner: [0, 0],
+                    alpha: 255,
+                    mask: None,
+                    screen_mask: None,
+                    blend: Blend::Alpha,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        gpu.set_anti_aliasing(false);
+        let unscaled_off = gpu
+            .compose(
+                [2, 1],
+                [10, 20, 30, 255],
+                &[Layer::Image {
+                    image: &edge_sprite,
+                    rect: [0, 0, 2, 1],
+                    corner: [0, 0],
+                    alpha: 255,
+                    mask: None,
+                    screen_mask: None,
+                    blend: Blend::Alpha,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        assert_eq!(unscaled_on, unscaled_off);
+
+        gpu.set_anti_aliasing(true);
+        let additive = gpu
+            .compose(
+                [4, 1],
+                [100, 100, 100, 255],
+                &[Layer::Projected {
+                    image: &edge_sprite,
+                    rect: [0, 0, 2, 1],
+                    quad: [-0.5, -0.5, 3.5, 0.5],
+                    alpha: 255,
+                    blend: Blend::Additive,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        // x=2 has 25% coverage of white (255) added onto 100 -> ~164 (straight-alpha would give ~116!).
+        let add_x2 = additive.pixels()[2 * 4];
+        assert!(
+            (160..=168).contains(&add_x2),
+            "expected premultiplied additive ~164 at x=2, got {add_x2}"
+        );
         gpu.check().unwrap();
     }
 }

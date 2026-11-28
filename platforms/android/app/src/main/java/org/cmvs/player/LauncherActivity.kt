@@ -9,6 +9,7 @@ import android.text.InputType
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -31,6 +32,7 @@ class LauncherActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var face: EditText
     private lateinit var scaleFilter: Spinner
+    private lateinit var antiAliasing: CheckBox
     private lateinit var gameButton: Button
     private lateinit var fontButton: Button
     private lateinit var startButton: Button
@@ -71,6 +73,10 @@ class LauncherActivity : Activity() {
         val savedFilter = settings.getString("scaleFilter", "")
         scaleFilter.setSelection(filters.indexOfFirst { it.first == savedFilter }.coerceAtLeast(0))
         layout.addView(scaleFilter)
+        antiAliasing = CheckBox(this)
+        antiAliasing.text = "抗锯齿"
+        antiAliasing.isChecked = settings.getBoolean("antiAliasing", false)
+        layout.addView(antiAliasing)
         startButton = button(layout, "启动") { launch() }
         cancelButton = button(layout, "取消导入") { cancelled.set(true) }
         status = text(layout, "")
@@ -102,6 +108,7 @@ class LauncherActivity : Activity() {
         fontButton.isEnabled = !busy
         face.isEnabled = !busy
         scaleFilter.isEnabled = !busy
+        antiAliasing.isEnabled = !busy
         startButton.isEnabled = !busy && selected("game").isDirectory && selected("font").isFile
         cancelButton.visibility = if (busy) View.VISIBLE else View.GONE
     }
@@ -160,8 +167,10 @@ class LauncherActivity : Activity() {
             val index = face.text.toString().toInt()
             if (index !in 0..1024) throw IllegalArgumentException()
             val filter = filters[scaleFilter.selectedItemPosition].first
-            settings.edit().putInt("face", index).putString("scaleFilter", filter).apply()
-            val config = "${settings.getString("game", "")}\n${settings.getString("font", "")}\n$index\n$filter\n"
+            val aa = if (antiAliasing.isChecked) "on" else ""
+            settings.edit().putInt("face", index).putString("scaleFilter", filter)
+                .putBoolean("antiAliasing", antiAliasing.isChecked).apply()
+            val config = "${settings.getString("game", "")}\n${settings.getString("font", "")}\n$index\n$filter\n$aa\n"
             val temporary = File(filesDir, "launch.tmp")
             Files.write(temporary.toPath(), config.toByteArray(StandardCharsets.UTF_8))
             Files.move(temporary.toPath(), File(filesDir, "launch.cfg").toPath(), StandardCopyOption.REPLACE_EXISTING)

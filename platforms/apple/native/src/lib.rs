@@ -41,6 +41,8 @@ struct Config {
     metal: bool,
     aspect: Option<u32>,
     scale_filter: Option<String>,
+    #[serde(default)]
+    anti_aliasing: Option<bool>,
     skip_auto_resume: bool,
     continue_without_snapshot: bool,
     block_presumed: bool,
@@ -56,6 +58,7 @@ struct Player {
     output_audio: Option<ios_audio::Output>,
     metal: Option<Metal>,
     use_metal: bool,
+    anti_aliasing: bool,
     touch: TouchInput,
     touching: bool,
     fresh_touch: bool,
@@ -103,6 +106,9 @@ impl Player {
         let scale_filter = session
             .runtime
             .scale_filter_override(c.scale_filter.as_deref())?;
+        let anti_aliasing = session
+            .runtime
+            .anti_aliasing_override(c.anti_aliasing.map(|v| if v { "on" } else { "off" }))?;
         #[cfg(target_os = "ios")]
         let mut output_audio = None;
         let audio = if c.native_audio {
@@ -152,6 +158,7 @@ impl Player {
             #[cfg(target_os = "ios")]
             output_audio,
             use_metal: c.metal,
+            anti_aliasing,
             metal: None,
             touch,
             touching: false,

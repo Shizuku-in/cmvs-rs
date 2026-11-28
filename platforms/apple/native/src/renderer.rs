@@ -26,10 +26,12 @@ impl Metal {
     #[cfg(target_vendor = "apple")]
     pub fn new(
         instance: &cmvs_wgpu::wgpu::Instance,
+        anti_aliasing: bool,
         create_surface: impl Fn() -> Result<cmvs_wgpu::wgpu::Surface<'static>> + 'static,
     ) -> Result<Self> {
         let surface = create_surface()?;
-        let (renderer, adapter) = Renderer::new(instance, Some(&surface))?;
+        let (mut renderer, adapter) = Renderer::new(instance, Some(&surface))?;
+        renderer.set_anti_aliasing(anti_aliasing);
         Ok(Self {
             presenter: Presenter::new(surface, &adapter, &renderer)?,
             renderer,

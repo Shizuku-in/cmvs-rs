@@ -542,6 +542,14 @@ private struct OptionsForm: View {
                 Text("Lanczos3 with Anti-Ringing").tag(Optional("lanczos3-anti-ringing"))
                 Text(verbatim: "Lanczos4").tag(Optional("lanczos4"))
             }
+            Toggle(
+                "Anti-Aliasing",
+                isOn: Binding(
+                    get: { options.anti_aliasing ?? false },
+                    set: { options.anti_aliasing = $0 }
+                )
+            )
+            .disabled(!options.metal)
             Toggle("Native Audio", isOn: $options.native_audio)
             #if os(macOS)
                 Toggle("Use Game Savedata Folder", isOn: $options.game_savedata)

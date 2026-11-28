@@ -62,6 +62,7 @@ async function start(message) {
   files.restore(saved);
   const backupPaths = message.backup ? files.snapshot().map(([path]) => path) : undefined;
   const candidate = new WebRuntime(new Uint8Array(await message.font.arrayBuffer()), message.face, message.profile, message.skip, message.scaleFilter || undefined, backupPaths);
+  if (message.antiAliasing) candidate.set_anti_aliasing(true);
   candidate.set_random_seed(Date.now() >>> 0);
   useGpu = Boolean(message.canvas);
   if (useGpu) await candidate.enable_gpu(message.canvas);

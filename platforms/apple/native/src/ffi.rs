@@ -142,17 +142,22 @@ extern "C" fn cmvs_apple_attach_metal_layer(
                 ..InstanceDescriptor::new_without_display_handle()
             });
             let surface_instance = instance.clone();
-            p.metal = Some(crate::renderer::Metal::new(&instance, move || {
-                // SAFETY: Swift retains the CAMetalLayer until synchronous detach.
-                Ok(unsafe {
-                    surface_instance
-                        .create_surface_unsafe(SurfaceTargetUnsafe::CoreAnimationLayer(layer))
-                }?)
-            })?);
+            p.metal = Some(crate::renderer::Metal::new(
+                &instance,
+                p.anti_aliasing,
+                move || {
+                    // SAFETY: Swift retains the CAMetalLayer until synchronous detach.
+                    Ok(unsafe {
+                        surface_instance
+                            .create_surface_unsafe(SurfaceTargetUnsafe::CoreAnimationLayer(layer))
+                    }?)
+                },
+            )?);
             Ok(0)
         }
         #[cfg(not(target_vendor = "apple"))]
         {
+            let _ = p.anti_aliasing;
             Err("Metal requires Apple hardware".into())
         }
     })

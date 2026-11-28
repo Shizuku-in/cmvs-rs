@@ -75,6 +75,29 @@ impl Runtime {
         }
     }
 
+    /// Resolve GPU sprite anti-aliasing, with a launch choice taking priority over `cmvs.cfg`.
+    pub fn anti_aliasing_override(&self, launch: Option<&str>) -> Result<bool, FormatError> {
+        let configured;
+        let value = match launch {
+            Some(value) => value.as_bytes(),
+            None => {
+                configured = profile_string(
+                    self.configuration.bytes(),
+                    "CMVS_RS_DISPLAY",
+                    "ANTI_ALIASING",
+                    b"off",
+                    16,
+                );
+                &configured
+            }
+        };
+        match value {
+            b"0" | b"off" | b"false" => Ok(false),
+            b"1" | b"on" | b"true" => Ok(true),
+            _ => Err(FormatError("ANTI_ALIASING must be off, on, 0, or 1")),
+        }
+    }
+
     /// Explicit graceful-exit save to the locked user directory. Each file replacement
     /// is atomic; CSS1 and INI are separate commits. No profile means no writes.
     pub fn save_preferences(

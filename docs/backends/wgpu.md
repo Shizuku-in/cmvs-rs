@@ -10,7 +10,7 @@ cargo run --offline --release --features wgpu-renderer --bin cmvs-desktop -- "<�
 
 `cmvs-wgpu` 依赖 core、wgpu 30.0.1、pollster 1.0.1，不向 core 引入图形依赖或 unsafe。共享 `prepare_scene` 完成所有语义校验、继承、投影与排序，GPU 严格依序执行 Image/Projected/Rotated/Solid/Fade，每条命令的着色器参数由 core 的 `scene_render::shader` 生成（Switch deko3d 后端共用同一布局）；换图、条带、震动及父子层次已在共享队列展开。遮罩覆盖率查找表、屏幕第二纹理、纹理减法与六种混合分支由着色器/混合状态执行。
 
-合成目标为逻辑尺寸的 RGBA8Unorm，以原有字节颜色空间计算。非旋转图像保留点采样，投影/缩放/旋转显式执行钳位双线性和8位取整；像素中心保留现有软件路径的半像素约定。窗口表面通过非 sRGB 视图呈现，避免合成结果再被隐式 gamma 编码。窗口比例由共享 Viewport 决定，点采样/线性、黑边与预览棋盘单独呈现。
+合成目标为逻辑尺寸的 RGBA8Unorm，以原有字节颜色空间计算。非旋转图像保留点采样，投影/缩放/旋转默认显式执行钳位双线性和8位取整以对齐原版与 CPU 参考路径；启用 `Renderer::set_anti_aliasing(true)`（桌面 `--anti-aliasing on` 或 `[CMVS_RS_DISPLAY] ANTI_ALIASING=1`）时，投影/缩放/旋转/公告板改为预乘 Alpha 加基于纹素导数自适应的旋转网格（RGSS 4-tap / 强缩小 4×4）超采样，消除透明黑边与缩小漂浮闪烁，1:1 图像层保持不变。像素中心保留现有软件路径的半像素约定。窗口表面通过非 sRGB 视图呈现，避免合成结果再被隐式 gamma 编码。窗口比例由共享 Viewport 决定，点采样/线性、黑边与预览棋盘单独呈现。
 
 纹理按128位像素内容摘要与尺寸缓存，留存上限128 MiB，LRU淘汰；超大单图仍受设备限制，超过缓存上限的纹理只供当次使用。缓存上限不是总显存或进程峰值保证。相同静态纹理不重复上传；文件名不作为缓存身份。不可变 RgbaImage 首次计算后缓存内容摘要，缓存状态不参与图像相等性；后续帧复用摘要。每帧仍需生成参数和命令，不承诺一定快于 CPU。影片解码与字形光栅化留在 CPU，图像/字形合成、影片缩放和窗口显示在 GPU。
 

@@ -25,6 +25,7 @@ All players also read this setting from the user's `cmvs.cfg` or `cvns.cfg`. Swi
 ```ini
 [CMVS_RS_DISPLAY]
 SCALE_FILTER=mitchell
+ANTI_ALIASING=1
 ```
 
-Launch choices take priority. `game` follows the original in-game draw mode.
+Launch choices take priority. `game` follows the original in-game draw mode. `ANTI_ALIASING` (`off`/`on`/`0`/`1`, default `off`; Desktop `--anti-aliasing <off|on>`, Apple Metal, Android, and WebGPU toggles) enables premultiplied adaptive supersampling on scaled, projected, and rotated GPU sprites to remove dark edge fringes and minification shimmer without changing 1:1 layers.

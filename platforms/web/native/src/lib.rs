@@ -29,6 +29,7 @@ pub struct WebRuntime {
     session: HostSession,
     backend: BrowserBackend,
     scale_filter: Option<ScaleFilter>,
+    anti_aliasing: bool,
     output: [u32; 2],
 }
 #[wasm_bindgen]
@@ -67,12 +68,18 @@ impl WebRuntime {
             return Err(js_error("WebGPU is already initialized"));
         }
         self.backend.gpu = Some(
-            gpu::BrowserGpu::new(canvas, self.backend.size)
+            gpu::BrowserGpu::new(canvas, self.backend.size, self.anti_aliasing)
                 .await
                 .map_err(js_error)?,
         );
         self.backend.frame = None;
         Ok(())
+    }
+    pub fn set_anti_aliasing(&mut self, enabled: bool) {
+        self.anti_aliasing = enabled;
+    }
+    pub fn anti_aliasing(&self) -> bool {
+        self.anti_aliasing
     }
     /// An immediate screenshot suspends at its pending command until mapping completes.
     #[cfg(target_arch = "wasm32")]
@@ -364,11 +371,13 @@ impl WebRuntime {
             session.runtime.machine().text_encoding(),
         )?;
         let scale_filter = session.runtime.scale_filter_override(scale_filter)?;
+        let anti_aliasing = session.runtime.anti_aliasing_override(None)?;
         let output = backend.size;
         Ok(Self {
             session,
             backend,
             scale_filter,
+            anti_aliasing,
             output,
         })
     }
