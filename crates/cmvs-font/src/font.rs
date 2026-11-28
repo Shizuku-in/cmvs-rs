@@ -99,6 +99,7 @@ pub struct FontRenderer {
     library: Arc<Mutex<FontLibrary>>,
     library_generation: Arc<AtomicU64>,
     cached_generation: u64,
+    raster_scale: f32,
     cache: GlyphCache,
     scene_cache: Option<CachedGlyphScene>,
     scene_used_transient_fallback: bool,
@@ -109,13 +110,17 @@ pub struct FontRenderer {
 }
 
 // ab_glyph expresses PxScale relative to ascent minus descent.
-fn em_scale(font: &FontVec, size: u32) -> Result<PxScale, &'static str> {
+fn em_scale_f32(font: &FontVec, size: f32) -> Result<PxScale, &'static str> {
     let em = font.units_per_em().ok_or("invalid font em size")?;
     let height = font.height_unscaled();
     if !height.is_finite() || height <= 0.0 {
         return Err("invalid font height");
     }
-    Ok(PxScale::from(size as f32 * height / em))
+    Ok(PxScale::from(size * height / em))
+}
+
+fn em_scale(font: &FontVec, size: u32) -> Result<PxScale, &'static str> {
+    em_scale_f32(font, size as f32)
 }
 
 fn be_u16(bytes: &[u8], at: usize) -> Option<u16> {
@@ -242,14 +247,18 @@ fn typographic_vertical_metrics(font: &FontVec) -> Option<(f32, f32)> {
         .map(|(asc, desc)| (f32::from(asc), f32::from(desc)))
 }
 
-fn em_baseline(font: &FontVec, size: u32) -> Result<f32, &'static str> {
+fn em_baseline_f32(font: &FontVec, size: f32) -> Result<f32, &'static str> {
     let (ascent, descent) = typographic_vertical_metrics(font)
         .unwrap_or_else(|| (font.ascent_unscaled(), font.descent_unscaled()));
     let height = ascent - descent;
     if !height.is_finite() || height <= 0.0 {
         return Err("invalid font height");
     }
-    Ok(size as f32 * (ascent / height).clamp(0.0, 1.0))
+    Ok(size * (ascent / height).clamp(0.0, 1.0))
+}
+
+fn em_baseline(font: &FontVec, size: u32) -> Result<f32, &'static str> {
+    em_baseline_f32(font, size as f32)
 }
 
 struct PreviewMetrics(Arc<Mutex<FontLibrary>>, TextEncoding);
@@ -412,9 +421,18 @@ fn revise_alpha(alpha: u8) -> u8 {
 /// Preview weight synthesis: extend ink by one pixel to the right before painting
 /// gradients and outlines. This is not GDI's weight-600 rasterizer.
 fn embolden(mask: &mut [u8], side: usize) {
+    embolden_by(mask, side, 1);
+}
+
+fn embolden_by(mask: &mut [u8], side: usize, width: usize) {
     for row in mask.chunks_exact_mut(side) {
         for x in (1..side).rev() {
-            row[x] = row[x].max(row[x - 1]);
+            let start = x.saturating_sub(width);
+            let mut max_v = row[x];
+            for &v in &row[start..x] {
+                max_v = max_v.max(v);
+            }
+            row[x] = max_v;
         }
     }
 }
@@ -498,6 +516,71 @@ fn paint(
     RgbaImage::new(side as u32, side as u32, pixels)
 }
 
+/// High-DPI variant of [`paint`]: scales outline radius with circular dilation and maps
+/// gradient coordinates back to the logical glyph grid.
+fn paint_scaled(
+    mask: &[u8],
+    side: usize,
+    logical_size: usize,
+    exact_scale: f32,
+    colors: [u32; 2],
+    gradient: u32,
+    outline: [u32; 2],
+) -> Result<RgbaImage, FormatError> {
+    let radius = match outline[0] {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        _ => return Err(FormatError("unsupported glyph outline mode")),
+    };
+    let mut dilation = vec![0u8; mask.len()];
+    if radius != 0 {
+        let r_f = radius as f32 * exact_scale;
+        let r_ceil = r_f.ceil() as usize;
+        let r2 = (r_f + 0.35) * (r_f + 0.35);
+        for y in 0..side {
+            for x in 0..side {
+                let value = mask[y * side + x];
+                if value == 0 {
+                    continue;
+                }
+                for yy in y.saturating_sub(r_ceil)..=(y + r_ceil).min(side - 1) {
+                    let dy = yy as f32 - y as f32;
+                    for xx in x.saturating_sub(r_ceil)..=(x + r_ceil).min(side - 1) {
+                        let dx = xx as f32 - x as f32;
+                        if dx * dx + dy * dy <= r2 {
+                            dilation[yy * side + xx] = dilation[yy * side + xx].max(value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let pad = 2.0 * exact_scale;
+    let bg = rgb(outline[1]);
+    let mut pixels = Vec::with_capacity(mask.len() * 4);
+    for (index, (a, b)) in mask.iter().zip(dilation).enumerate() {
+        let px = (index % side) as f32;
+        let py = (index / side) as f32;
+        let x = (((px - pad) / exact_scale).floor().max(0.0) as usize).min(logical_size - 1);
+        let y = (((py - pad) / exact_scale).floor().max(0.0) as usize).min(logical_size - 1);
+        let fg = gradient_color(colors, gradient, logical_size, x, y);
+        let a = u32::from(*a);
+        let b = u32::from(b);
+        let behind = (b * (255 - a) + 127) / 255;
+        let alpha = a + behind;
+        for c in 0..3 {
+            pixels.push(
+                (u32::from(fg[c]) * a + u32::from(bg[c]) * behind + alpha / 2)
+                    .checked_div(alpha)
+                    .unwrap_or(0) as u8,
+            );
+        }
+        pixels.push(alpha as u8);
+    }
+    RgbaImage::new(side as u32, side as u32, pixels)
+}
+
 impl FontRenderer {
     pub fn read(path: &Path, face: u32) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut bytes = Vec::new();
@@ -517,6 +600,7 @@ impl FontRenderer {
             library: Arc::new(Mutex::new(FontLibrary::new(Arc::new(font)))),
             library_generation: Arc::new(AtomicU64::new(0)),
             cached_generation: 0,
+            raster_scale: 1.0,
             cache: GlyphCache::default(),
             scene_cache: None,
             scene_used_transient_fallback: false,
@@ -547,6 +631,7 @@ impl FontRenderer {
             library: Arc::new(Mutex::new(library)),
             library_generation: Arc::new(AtomicU64::new(0)),
             cached_generation: 0,
+            raster_scale: 1.0,
             cache: GlyphCache::default(),
             scene_cache: None,
             scene_used_transient_fallback: false,
@@ -566,6 +651,23 @@ impl FontRenderer {
         self.cache = GlyphCache::default();
         self.scene_cache = None;
         self
+    }
+    /// Sets the vector glyph rasterization density (clamped to `1.0..=4.0`, quantized
+    /// to quarter-steps) for high-resolution GPU compositing. Layout metrics remain at 1x.
+    pub fn set_raster_scale(&mut self, scale: f32) {
+        let clamped = if scale.is_finite() {
+            scale.clamp(1.0, 4.0)
+        } else {
+            1.0
+        };
+        let quantized = (clamped * 4.0).round() / 4.0;
+        if quantized.to_bits() != self.raster_scale.to_bits() {
+            self.raster_scale = quantized;
+            self.scene_cache = None;
+        }
+    }
+    pub fn raster_scale(&self) -> f32 {
+        self.raster_scale
     }
     fn sync_library_generation(&mut self) {
         let generation = self.library_generation.load(Ordering::Relaxed);
@@ -672,6 +774,7 @@ impl FontRenderer {
         &mut self,
         glyph: &RecordedGlyph,
         external: Option<&GlyphMask>,
+        raster_scale: f32,
     ) -> Result<RgbaImage, FormatError> {
         self.sync_library_generation();
         if !(1..=128).contains(&glyph.size) {
@@ -683,6 +786,12 @@ impl FontRenderer {
         if glyph.outline[0] > 2 {
             return Err(FormatError("unsupported glyph outline mode"));
         }
+        let scale = if external.is_some() || raster_scale <= 1.0 {
+            1.0
+        } else {
+            raster_scale
+        };
+        let scale_key = (scale * 100.0).round() as u32;
         let key = [
             u32::from(glyph.code),
             glyph.size,
@@ -693,6 +802,7 @@ impl FontRenderer {
             glyph.outline[1],
             u32::from(glyph.bold),
             u32::from(glyph.revision_alpha),
+            scale_key,
         ];
         let key = (
             glyph.face.clone(),
@@ -703,35 +813,111 @@ impl FontRenderer {
             return Ok(image.clone());
         }
         let size = glyph.size as usize;
-        let side = size + 4;
-        let mut mask = vec![0u8; side * side];
-        let cacheable = if let Some(external) = external {
-            let coverage = external.coverage();
-            if coverage.len() != size * size {
-                return Err(FormatError("bitmap glyph coverage does not match its size"));
-            }
-            for (y, row) in coverage.chunks_exact(size).enumerate() {
-                let start = (y + 2) * side + 2;
-                mask[start..start + size].copy_from_slice(row);
-            }
-            true
+        let logical_side = size + 4;
+        let (image, cacheable) = if scale > 1.0 {
+            let side = ((logical_side as f32) * scale).round() as usize;
+            let exact_scale = side as f32 / logical_side as f32;
+            let mut mask = vec![0u8; side * side];
+            let cacheable = self.outline_mask_scaled(glyph, side, exact_scale, &mut mask)?;
+            let image = paint_scaled(
+                &mask,
+                side,
+                size,
+                exact_scale,
+                glyph.colors,
+                glyph.gradient,
+                glyph.outline,
+            )?;
+            (image, cacheable)
         } else {
-            self.outline_mask(glyph, side, &mut mask)?
+            let side = logical_side;
+            let mut mask = vec![0u8; side * side];
+            let cacheable = if let Some(external) = external {
+                let coverage = external.coverage();
+                if coverage.len() != size * size {
+                    return Err(FormatError("bitmap glyph coverage does not match its size"));
+                }
+                for (y, row) in coverage.chunks_exact(size).enumerate() {
+                    let start = (y + 2) * side + 2;
+                    mask[start..start + size].copy_from_slice(row);
+                }
+                true
+            } else {
+                self.outline_mask(glyph, side, &mut mask)?
+            };
+            let image = paint(
+                &mask,
+                side,
+                glyph.colors,
+                glyph.gradient,
+                glyph.outline,
+                external.is_some(),
+            )?;
+            (image, cacheable)
         };
-        let image = paint(
-            &mask,
-            side,
-            glyph.colors,
-            glyph.gradient,
-            glyph.outline,
-            external.is_some(),
-        )?;
         if cacheable {
             self.cache.insert(key, image.clone());
         } else {
             self.scene_used_transient_fallback = true;
         }
         Ok(image)
+    }
+
+    fn outline_mask_scaled(
+        &self,
+        glyph: &RecordedGlyph,
+        side: usize,
+        exact_scale: f32,
+        mask: &mut [u8],
+    ) -> Result<bool, FormatError> {
+        let ch = character(self.encoding, glyph.code)?;
+        let (font, primary, cacheable) = self
+            .library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?
+            .resolve_character(&glyph.face, self.encoding, ch);
+        let id = font.glyph_id(ch);
+        let size_px = glyph.size as f32 * exact_scale;
+        let pad = 2.0 * exact_scale;
+        let scale = em_scale_f32(&font, size_px).map_err(FormatError)?;
+        let baseline = em_baseline_f32(&primary, size_px)
+            .or_else(|_| em_baseline_f32(&font, size_px))
+            .map_err(FormatError)?;
+        if let Some(outline) =
+            font.outline_glyph(id.with_scale_and_position(scale, point(pad, pad + baseline)))
+        {
+            let bounds = outline.px_bounds();
+            let cap = size_px * 4.0 + 16.0 * exact_scale;
+            if ![bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y]
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= cap)
+            {
+                return Err(FormatError("glyph outline exceeds preview bounds"));
+            }
+            let min_x = bounds.min.x.floor() as i32;
+            let min_y = bounds.min.y.floor() as i32;
+            outline.draw(|x, y, coverage| {
+                let x = x as i32 + min_x;
+                let y = y as i32 + min_y;
+                if x >= 0 && y >= 0 && x < side as i32 && y < side as i32 {
+                    mask[y as usize * side + x as usize] =
+                        (coverage * 255.0).round().clamp(0.0, 255.0) as u8;
+                }
+            });
+        } else if !ch.is_whitespace() {
+            return Err(FormatError(
+                "selected font lacks a supported outline for a character",
+            ));
+        }
+        if glyph.revision_alpha {
+            for alpha in mask.iter_mut() {
+                *alpha = revise_alpha(*alpha);
+            }
+        }
+        if glyph.bold {
+            embolden_by(mask, side, exact_scale.round().max(1.0) as usize);
+        }
+        Ok(cacheable)
     }
 
     fn outline_mask(
@@ -794,9 +980,13 @@ impl FontRenderer {
         cameras: &CameraHost,
         messages: &MessageHost,
     ) -> Result<RgbaImage, FormatError> {
-        self.compose(scene, cameras, messages)?
-            .prepare()?
-            .render_cpu()
+        let saved = self.raster_scale;
+        self.set_raster_scale(1.0);
+        let result = self
+            .compose(scene, cameras, messages)
+            .and_then(|c| c.prepare()?.render_cpu());
+        self.set_raster_scale(saved);
+        result
     }
 
     /// Combine scene state, rasterized glyphs and visible message windows.
@@ -852,9 +1042,13 @@ impl FontRenderer {
 
     fn glyph_scene_fingerprint(&self, messages: &MessageHost) -> Option<u128> {
         let mut h = GlyphSceneHasher::new();
+        let is_cvns = messages.cvns().is_some();
+        let effective_scale = if is_cvns { 1.0f32 } else { self.raster_scale };
         (
             self.encoding,
             self.library_generation.load(Ordering::Relaxed),
+            effective_scale.to_bits(),
+            is_cvns,
             messages.screen_size(),
             messages.allows_logical_text_scale(),
         )
@@ -961,7 +1155,15 @@ impl FontRenderer {
 
 impl GlyphRasterizer for FontRenderer {
     fn rasterize_glyph(&mut self, glyph: &RecordedGlyph) -> Result<RgbaImage, FormatError> {
-        self.glyph(glyph, None)
+        let scale = self.raster_scale;
+        self.glyph(glyph, None, scale)
+    }
+
+    fn rasterize_glyph_unscaled(
+        &mut self,
+        glyph: &RecordedGlyph,
+    ) -> Result<RgbaImage, FormatError> {
+        self.glyph(glyph, None, 1.0)
     }
 
     fn rasterize_bitmap_glyph(
@@ -969,7 +1171,7 @@ impl GlyphRasterizer for FontRenderer {
         glyph: &RecordedGlyph,
         mask: &GlyphMask,
     ) -> Result<RgbaImage, FormatError> {
-        self.glyph(glyph, Some(mask))
+        self.glyph(glyph, Some(mask), 1.0)
     }
 }
 
@@ -1148,6 +1350,25 @@ mod tests {
         let mut mask = vec![0, 180, 0, 0, 0, 0, 0, 0, 0];
         embolden(&mut mask, 3);
         assert_eq!(mask, [0, 180, 180, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn scaled_paint_expands_outline_circularly_without_corner_artifacts() {
+        let side = 20usize;
+        let mut mask = vec![0u8; side * side];
+        mask[10 * side + 10] = 255;
+        let image = paint_scaled(&mask, side, 6, 2.0, [0xffffff; 2], 0, [1, 0x0010_2030]).unwrap();
+        assert_eq!([image.width(), image.height()], [20, 20]);
+        // Center pixel keeps white foreground; 2px axial neighbor is outlined; diagonal (2,2) stays clear.
+        assert_eq!(
+            &image.pixels()[(10 * side + 10) * 4..][..4],
+            &[255, 255, 255, 255]
+        );
+        assert_eq!(
+            &image.pixels()[(10 * side + 12) * 4..][..4],
+            &[0x10, 0x20, 0x30, 255]
+        );
+        assert_eq!(image.pixels()[(12 * side + 12) * 4 + 3], 0);
     }
     #[test]
     fn glyph_codes_decode_strictly_including_sign_extended_halfwidth() {
@@ -1819,6 +2040,75 @@ mod tests {
         let reshown_objs = font.prepare_objects(&messages).unwrap();
         assert_eq!(font.glyph_build_calls, 8);
         assert_eq!(reshown_objs, visible_objs);
+    }
+
+    #[test]
+    fn cvns_vector_glyphs_stay_at_logical_resolution_under_high_raster_scale() {
+        use cmvs_core::{
+            host::input::ActionInput,
+            profile::Semantics,
+            vm::dispatch::{self, Hosts},
+            vm::machine::{Machine, Step},
+        };
+
+        let mut font =
+            FontRenderer::from_bytes(crate::font_library::tests::minimal_ttf("CvnsFont"), 0)
+                .unwrap();
+        let mut messages = MessageHost::default();
+        messages.set_glyph_metrics(font.metrics());
+        messages.set_record_output(true);
+
+        let mut code = Vec::new();
+        push_call(&mut code, 0x215d, &[720, 1280, 120, 400, 0, 0, 7, 0]);
+        push_call(&mut code, 0x214e, &[1, 0]);
+        push_call(&mut code, 0x2152, &[0, u32::MAX, 0]);
+        let script = ps2_script(&code, b"AA\0");
+        let mut vm = Machine::new(&script).unwrap();
+
+        for _ in 0..2 {
+            while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            let mut hosts = Hosts {
+                messages: Some(&mut messages),
+                ..Hosts::default()
+            };
+            assert!(
+                dispatch::run(Semantics::Root, &mut vm, &mut hosts)
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let mut input = ActionInput::default();
+        messages
+            .try_record_output(&mut vm, &mut input, Default::default())
+            .unwrap()
+            .unwrap();
+        messages.advance_frame(1000);
+
+        font.set_raster_scale(2.0);
+        let cmvs_objs = font.prepare_objects(&messages).unwrap();
+        let cmvs_child = &cmvs_objs[0].children[&0];
+        let cmvs_pixels = &cmvs_child.image.as_ref().unwrap().pixels;
+        let cmvs_draw = cmvs_child.draw.as_ref().unwrap();
+        let glyph_size = messages.text(7).unwrap().glyphs[0].size;
+        let logical_side = glyph_size + 4;
+        assert_eq!(cmvs_pixels.height(), logical_side * 2);
+        assert_eq!(cmvs_draw.source_rect()[3], logical_side * 2);
+        assert_eq!(cmvs_draw.scale(), [0.5, 0.5]);
+
+        // CVNS copies glyph children as 1:1 tiles onto a 1x target, ignoring words 18..20.
+        messages.enable_cvns();
+        let cvns_objs = font.prepare_objects(&messages).unwrap();
+        for child in cvns_objs[0].children.values() {
+            let pixels = &child.image.as_ref().unwrap().pixels;
+            let draw = child.draw.as_ref().unwrap();
+            assert_eq!(
+                [pixels.width(), pixels.height()],
+                [logical_side, logical_side]
+            );
+            assert_eq!(draw.source_rect()[2..4], [logical_side, logical_side]);
+            assert_eq!(draw.scale(), [1.0, 1.0]);
+        }
     }
 }
 

@@ -32,6 +32,8 @@ struct Options: Codable, Equatable {
     var font = ""
     var aspect: Int?
     var scale_filter: String?
+    var render_scale: String?
+    var anti_aliasing: Bool?
     var metal = true
     var native_audio = true
     var game_savedata = false

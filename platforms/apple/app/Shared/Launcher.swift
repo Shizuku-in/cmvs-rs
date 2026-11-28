@@ -542,6 +542,32 @@ private struct OptionsForm: View {
                 Text("Lanczos3 with Anti-Ringing").tag(Optional("lanczos3-anti-ringing"))
                 Text(verbatim: "Lanczos4").tag(Optional("lanczos4"))
             }
+            Picker(selection: $options.render_scale) {
+                Text("Automatic").tag(nil as String?)
+                Text("Original (1×)").tag(Optional("1x"))
+                Text("Match Screen").tag(Optional("auto"))
+                Text(verbatim: "1.5×").tag(Optional("1.5x"))
+                Text(verbatim: "2×").tag(Optional("2x"))
+                Text(verbatim: "3×").tag(Optional("3x"))
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Render Scale")
+                    Text("Experimental")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color.orange)
+                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.15), in: Capsule())
+                }
+            }
+            .disabled(!options.metal)
+            Picker("Anti-Aliasing", selection: $options.anti_aliasing) {
+                Text("Automatic").tag(nil as Bool?)
+                Text("Off").tag(Optional(false))
+                Text("On").tag(Optional(true))
+            }
+            .disabled(!options.metal)
             Toggle("Native Audio", isOn: $options.native_audio)
             #if os(macOS)
                 Toggle("Use Game Savedata Folder", isOn: $options.game_savedata)

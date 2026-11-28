@@ -25,6 +25,8 @@ All players also read this setting from the user's `cmvs.cfg` or `cvns.cfg`. Swi
 ```ini
 [CMVS_RS_DISPLAY]
 SCALE_FILTER=mitchell
+RENDER_SCALE=auto
+ANTI_ALIASING=1
 ```
 
-Launch choices take priority. `game` follows the original in-game draw mode.
+Launch choices take priority. `game` follows the original in-game draw mode. `ANTI_ALIASING` (`off`/`on`/`0`/`1`, default `off`; Desktop `--anti-aliasing <off|on>`, Apple Metal, Android, and WebGPU toggles) enables premultiplied adaptive supersampling on scaled, projected, and rotated GPU sprites to remove dark edge fringes and minification shimmer without changing 1:1 layers. `RENDER_SCALE` (`1x`/`auto`/`1.5x`/`2x`/`3x`, default `1x`; Desktop `--render-scale <mode>`, Apple Metal, Android, and WebGPU pickers) renders CMVS scenes directly at a higher internal GPU resolution (matching the physical viewport up to 3× in `auto`) together with native HiDPI OpenType glyph rasterization, while logical readbacks and save captures remain at the game's original canvas size.

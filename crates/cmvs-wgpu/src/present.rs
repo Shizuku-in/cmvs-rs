@@ -307,7 +307,7 @@ impl Presenter {
                 return Err("GPU surface validation failed".into());
             }
         };
-        let view = Viewport::new(frame.size, size, aspect_mode)?;
+        let view = Viewport::new(frame.logical_size, size, aspect_mode)?;
         let target = output.texture.create_view(&Default::default());
         self.scaling.draw(
             &renderer.device,
@@ -449,6 +449,7 @@ pub(crate) fn scale_image(
         device: renderer.device.clone(),
         queue: renderer.queue.clone(),
         size,
+        logical_size: size,
     })
 }
 
@@ -512,6 +513,7 @@ mod tests {
                         device: gpu.device.clone(),
                         queue: gpu.queue.clone(),
                         size,
+                        logical_size: size,
                     },
                     &image,
                     mode,
@@ -543,6 +545,7 @@ mod tests {
             GpuFrame {
                 target,
                 size,
+                logical_size: size,
                 device: gpu.device.clone(),
                 queue: gpu.queue.clone(),
             },

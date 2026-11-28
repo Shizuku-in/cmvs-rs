@@ -1,6 +1,8 @@
 use crate::encoding::EncodingChoice;
 use crate::game_input::{GameInput, event_key};
 use crate::{DesktopInput, InputEvent, NativeBackend, TextEncoding};
+#[cfg(feature = "wgpu-renderer")]
+use cmvs_core::render::raster::RenderScale;
 use cmvs_core::render::raster::{RgbaImage, ScaleFilter};
 use cmvs_core::{
     format::cpz::ArchiveIndex, format::cursor::CursorBitmap, format::pb3, host::input::KeyBindings,
@@ -49,6 +51,9 @@ Text, audio and display:
   --renderer <cpu|wgpu>       cpu is the default; wgpu needs the wgpu-renderer feature
   --scale-filter <name>       game, nearest, bilinear, keys, mitchell, lanczos3,
                               lanczos3-anti-ringing, or lanczos4
+  --anti-aliasing <off|on>    smooth scaled/rotated GPU sprites (requires --renderer wgpu)
+  --render-scale <mode>       1x, auto, 1.5x, 2x, or 3x internal GPU resolution
+                              (requires --renderer wgpu when above 1x)
   --save-frame <new.png>      export the last fully presented frame to a new file on exit
   --image-archive <cpz> --preview-image <name>
                               preview an ASCII-named PB3 image
@@ -145,6 +150,10 @@ struct App {
     aspect_scaling: std::cell::Cell<bool>,
     render_mode: std::cell::Cell<RenderMode>,
     scale_filter: Option<ScaleFilter>,
+    #[cfg(feature = "wgpu-renderer")]
+    anti_aliasing: bool,
+    #[cfg(feature = "wgpu-renderer")]
+    render_scale: RenderScale,
     fullscreen_monitor: std::cell::RefCell<crate::FullscreenMonitor>,
     windowed_size: std::cell::Cell<[u32; 2]>,
 }
@@ -258,6 +267,11 @@ impl App {
         if let Some(image) = &self.preview_image {
             return renderer.preview_image(image);
         }
+        let logical = self.startup.screen_size();
+        let render_size = renderer.resolved_render_size(logical);
+        if let Some(font) = self.font.as_mut() {
+            font.set_raster_scale(RenderScale::font_scale(logical, render_size));
+        }
         cmvs_host::with_gpu_target(
             &self.startup,
             self.font.as_mut(),
@@ -282,15 +296,6 @@ impl App {
         if u64::from(size.width) * u64::from(size.height) > 16 * 1024 * 1024 {
             return Err("desktop surface exceeds research pixel limit".into());
         }
-        let frame = self.gpu_frame()?;
-        let gpu = self.gpu.as_mut().ok_or("GPU is not initialized")?;
-        if gpu.presenter.lost {
-            gpu.presenter = cmvs_wgpu::Presenter::new(
-                gpu.instance.create_surface(window.clone())?,
-                &gpu.adapter,
-                &gpu.renderer,
-            )?;
-        }
         let (aspect_mode, filter) = if self.preview_image.is_some() {
             (1, ScaleFilter::Nearest)
         } else {
@@ -305,6 +310,27 @@ impl App {
                     .unwrap_or_else(|| self.render_mode.get().filter()),
             )
         };
+        if self.preview_image.is_none()
+            && let Some(gpu) = self.gpu.as_mut()
+        {
+            let viewport = cmvs_core::render::viewport::Viewport::new(
+                self.startup.screen_size(),
+                [size.width, size.height],
+                aspect_mode,
+            )
+            .ok()
+            .map(|view| [view.width, view.height]);
+            gpu.renderer.set_viewport_size(viewport);
+        }
+        let frame = self.gpu_frame()?;
+        let gpu = self.gpu.as_mut().ok_or("GPU is not initialized")?;
+        if gpu.presenter.lost {
+            gpu.presenter = cmvs_wgpu::Presenter::new(
+                gpu.instance.create_surface(window.clone())?,
+                &gpu.adapter,
+                &gpu.renderer,
+            )?;
+        }
         if gpu.presenter.present(
             &gpu.renderer,
             &frame,
@@ -457,8 +483,16 @@ impl ApplicationHandler for App {
                     cmvs_wgpu::wgpu::InstanceDescriptor::new_without_display_handle().with_env(),
                 );
                 let surface = instance.create_surface(window.clone())?;
-                let (renderer, adapter) = cmvs_wgpu::Renderer::new(&instance, Some(&surface))?;
+                let (mut renderer, adapter) = cmvs_wgpu::Renderer::new(&instance, Some(&surface))?;
+                renderer.set_anti_aliasing(self.anti_aliasing);
+                renderer.set_render_scale(self.render_scale);
                 println!("# GPU adapter {:?}", adapter.get_info());
+                if self.anti_aliasing {
+                    println!("# GPU sprite anti-aliasing enabled");
+                }
+                if self.render_scale != RenderScale::Original {
+                    println!("# GPU internal render scale={:?}", self.render_scale);
+                }
                 let presenter = cmvs_wgpu::Presenter::new(surface, &adapter, &renderer)?;
                 self.gpu = Some(GpuDesktop {
                     renderer,
@@ -921,6 +955,8 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut save_frame = None;
     let mut use_gpu = false;
     let mut scale_filter = None;
+    let mut anti_aliasing: Option<bool> = None;
+    let mut render_scale: Option<String> = None;
     let mut native_audio = false;
     let mut native_input = true;
     let mut record_text = false;
@@ -974,6 +1010,8 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             "--input",
             "--renderer",
             "--scale-filter",
+            "--anti-aliasing",
+            "--render-scale",
             "--audio",
         ]
         .iter()
@@ -1034,6 +1072,31 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         } else if flag == "--scale-filter" {
             scale_filter = Some(value.into_string().map_err(|_| "invalid scale filter")?);
+        } else if flag == "--anti-aliasing" {
+            anti_aliasing = Some(match value.to_str() {
+                Some("off" | "0" | "false") => false,
+                Some("on" | "1" | "true") => true,
+                _ => return Err("anti-aliasing must be off or on".into()),
+            });
+        } else if flag == "--render-scale" {
+            let text = value.into_string().map_err(|_| "invalid render scale")?;
+            if !matches!(
+                text.as_str(),
+                "1x" | "1"
+                    | "original"
+                    | "game"
+                    | "auto"
+                    | "native"
+                    | "1.5x"
+                    | "1.5"
+                    | "2x"
+                    | "2"
+                    | "3x"
+                    | "3"
+            ) {
+                return Err("render-scale must be 1x, auto, 1.5x, 2x, or 3x".into());
+            }
+            render_scale = Some(text);
         } else if flag == "--audio" {
             native_audio = match value.to_str() {
                 Some("native") => true,
@@ -1060,6 +1123,16 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
     if preview_name.is_some() != image_archive.is_some() {
         return Err("preview-image and image-archive must be supplied together".into());
+    }
+    if anti_aliasing == Some(true) && !use_gpu {
+        return Err("--anti-aliasing on requires --renderer wgpu".into());
+    }
+    if render_scale
+        .as_deref()
+        .is_some_and(|v| !matches!(v, "1x" | "1" | "original" | "game"))
+        && !use_gpu
+    {
+        return Err("--render-scale requires --renderer wgpu".into());
     }
     let root = PathBuf::from(root).canonicalize()?;
     let fs = default_host_fs();
@@ -1198,6 +1271,11 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
     let display_preferences = startup.display_preferences();
     let scale_filter = startup.scale_filter_override(scale_filter.as_deref())?;
+    let anti_aliasing = startup
+        .anti_aliasing_override(anti_aliasing.map(|enabled| if enabled { "on" } else { "off" }))?;
+    let render_scale = startup.render_scale_override(render_scale.as_deref())?;
+    #[cfg(not(feature = "wgpu-renderer"))]
+    let _ = (anti_aliasing, render_scale);
     let fullscreen_monitor_mode = startup.platform().fullscreen_monitor_mode();
     let canvas = startup.screen_size();
     let mut game_input = GameInput::default();
@@ -1243,6 +1321,10 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         aspect_scaling: std::cell::Cell::new(display_preferences.aspect_scaling),
         render_mode: std::cell::Cell::new(RenderMode::try_from(display_preferences.render_mode)?),
         scale_filter,
+        #[cfg(feature = "wgpu-renderer")]
+        anti_aliasing,
+        #[cfg(feature = "wgpu-renderer")]
+        render_scale,
         fullscreen_monitor: std::cell::RefCell::new(crate::FullscreenMonitor::new(
             fullscreen_monitor_mode,
         )),

@@ -6,9 +6,16 @@ use android_activity::{
 };
 use cmvs_audio::{HostAudioControl, NativeAudio};
 use cmvs_core::{
-    host::filesystem::resolve_under, host::input::KeyBindings, render::raster::ScaleFilter,
-    runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime,
-    runtime::RuntimeEvent, runtime::SaveStorage,
+    host::filesystem::resolve_under,
+    host::input::KeyBindings,
+    render::raster::{RenderScale, ScaleFilter},
+    render::viewport::Viewport as CoreViewport,
+    runtime::FrameBudget,
+    runtime::FrameDriver,
+    runtime::FrameOutcome,
+    runtime::Runtime,
+    runtime::RuntimeEvent,
+    runtime::SaveStorage,
 };
 use cmvs_font::font::FontRenderer;
 use cmvs_host::{
@@ -46,6 +53,8 @@ struct Player {
     startup: Runtime,
     backend: MobileBackend,
     scale_filter: Option<ScaleFilter>,
+    anti_aliasing: bool,
+    render_scale: RenderScale,
     touch: TouchInput,
     bindings: KeyBindings,
     resumed: bool,
@@ -96,6 +105,8 @@ impl Player {
         });
         let surface = instance.create_surface(window.clone())?;
         let (mut renderer, adapter) = Renderer::new(&instance, Some(&surface))?;
+        renderer.set_anti_aliasing(self.anti_aliasing);
+        renderer.set_render_scale(self.render_scale);
         log::info!("GPU: {}", adapter.get_info().name);
         let presenter = Presenter::new(surface, &adapter, &renderer)?;
         // Restore the last completed frame into the new device after suspension.
@@ -128,6 +139,14 @@ impl Player {
     fn render_game(&mut self) -> Result<Arc<GpuFrame>> {
         let graphics = self.graphics.as_mut().ok_or("no graphics device")?;
         let mut font = self.backend.font.borrow_mut();
+        let logical = self.startup.screen_size();
+        let viewport =
+            CoreViewport::new(logical, graphics.window.dimensions(), self.backend.mode())
+                .ok()
+                .map(|view| [view.width, view.height]);
+        graphics.renderer.set_viewport_size(viewport);
+        let render_size = graphics.renderer.resolved_render_size(logical);
+        font.set_raster_scale(RenderScale::font_scale(logical, render_size));
         let frame = with_gpu_target(
             &self.startup,
             Some(&mut *font),
@@ -359,6 +378,8 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     )?;
     let face = config.next().ok_or("no font collection index")?.parse()?;
     let scale_filter = config.next().filter(|s| !s.is_empty());
+    let anti_aliasing = config.next().filter(|s| !s.is_empty());
+    let render_scale = config.next().filter(|s| !s.is_empty());
     let fs = Arc::new(AndroidHostFs);
     let bootstrap = GameBootstrap::load(fs, &root, None, EncodingPolicy::AutoDefaultShiftJis)?;
     let record = bootstrap
@@ -387,6 +408,8 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         },
     )?;
     let scale_filter = startup.scale_filter_override(scale_filter)?;
+    let anti_aliasing = startup.anti_aliasing_override(anti_aliasing)?;
+    let render_scale = startup.render_scale_override(render_scale)?;
     let audio = NativeAudio::new(&root)?;
     let audio_control = audio.host_control();
     audio_control.set_active(false);
@@ -409,6 +432,8 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         startup,
         backend,
         scale_filter,
+        anti_aliasing,
+        render_scale,
         touch: TouchInput::default(),
         bindings,
         resumed: false,

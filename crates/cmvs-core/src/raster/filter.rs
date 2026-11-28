@@ -1,5 +1,98 @@
 use super::RgbaImage;
-use crate::{FormatError, viewport::Viewport};
+use crate::{FormatError, MAX_PAYLOAD, viewport::Viewport};
+
+/// Internal GPU scene resolution scaling policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RenderScale {
+    /// Render at the game's logical canvas size (1x, original parity).
+    #[default]
+    Original,
+    /// Match the presentation viewport up to 3x logical size (never below 1x).
+    Auto,
+    /// Fixed 1.5x logical resolution (e.g. 1280x720 -> 1920x1080).
+    X1_5,
+    /// Fixed 2x logical resolution (e.g. 1280x720 -> 2560x1440).
+    X2,
+    /// Fixed 3x logical resolution (e.g. 1280x720 -> 3840x2160).
+    X3,
+}
+
+impl RenderScale {
+    /// Maximum automatic/internal scale relative to logical dimensions.
+    const MAX_FACTOR: f64 = 3.0;
+
+    /// Computes the clamped internal render target size for a logical canvas and optional
+    /// physical presentation viewport, bounded by `max_dim` and `MAX_PAYLOAD / 4` pixels.
+    pub fn resolve(self, logical: [u32; 2], viewport: Option<[u32; 2]>, max_dim: u32) -> [u32; 2] {
+        let [lw, lh] = logical;
+        let max_pixels = (MAX_PAYLOAD / 4) as u64;
+        if lw == 0
+            || lh == 0
+            || max_dim == 0
+            || lw > max_dim
+            || lh > max_dim
+            || u64::from(lw) * u64::from(lh) > max_pixels
+        {
+            return logical;
+        }
+        let [lw64, lh64] = [u64::from(lw), u64::from(lh)];
+        let requested = match self {
+            Self::Original => return logical,
+            Self::Auto => match viewport {
+                Some([vw, vh]) if vw > lw || vh > lh => {
+                    [u64::from(vw.max(lw)), u64::from(vh.max(lh))]
+                }
+                _ => return logical,
+            },
+            Self::X1_5 => [(lw64 * 3).div_ceil(2), (lh64 * 3).div_ceil(2)],
+            Self::X2 => [lw64 * 2, lh64 * 2],
+            Self::X3 => [lw64 * 3, lh64 * 3],
+        };
+        let [rw, rh] = requested.map(|v| v as f64);
+        let factor_cap = Self::MAX_FACTOR / (rw / lw64 as f64).max(rh / lh64 as f64);
+        let dim_cap = f64::from(max_dim) / rw.max(rh);
+        let pixel_cap = (max_pixels as f64 / (rw * rh)).sqrt();
+        let clamp = factor_cap.min(dim_cap).min(pixel_cap).min(1.0);
+        let max_w = (lw64 * 3).min(u64::from(max_dim));
+        let max_h = (lh64 * 3).min(u64::from(max_dim));
+        let mut w = if clamp >= 1.0 {
+            requested[0]
+        } else {
+            (rw * clamp).floor() as u64
+        }
+        .clamp(lw64, max_w);
+        let mut h = if clamp >= 1.0 {
+            requested[1]
+        } else {
+            (rh * clamp).floor() as u64
+        }
+        .clamp(lh64, max_h);
+        // Raising one axis back to its logical floor (or float rounding) can push w * h
+        // above max_pixels; enforce the budget against the final dimensions.
+        if w * h > max_pixels {
+            if w == lw64 {
+                h = (max_pixels / w).clamp(lh64, max_h);
+            } else if h == lh64 {
+                w = (max_pixels / h).clamp(lw64, max_w);
+            } else {
+                h = (max_pixels / w).clamp(lh64, max_h);
+                if w * h > max_pixels {
+                    w = (max_pixels / h).clamp(lw64, max_w);
+                }
+            }
+        }
+        [w as u32, h as u32]
+    }
+
+    /// Vector glyph rasterization scale corresponding to an internal render target.
+    pub fn font_scale(logical: [u32; 2], render: [u32; 2]) -> f32 {
+        if logical.contains(&0) || render == logical {
+            return 1.0;
+        }
+        ((render[0] as f32 / logical[0] as f32).max(render[1] as f32 / logical[1] as f32))
+            .clamp(1.0, 4.0)
+    }
+}
 
 /// Sampling algorithm for image resizing and presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -2,7 +2,7 @@
 use cmvs_core::render::raster::RgbaImage;
 use std::{collections::HashMap, sync::Arc};
 
-type Key = (Arc<[u8]>, [u32; 9], Option<u128>);
+type Key = (Arc<[u8]>, [u32; 10], Option<u128>);
 // A full page may have 512 distinct visible glyph styles. A smaller LRU can miss
 // on every glyph when that page is visited in the same order on successive frames.
 const CAPACITY: usize = 512;
@@ -121,7 +121,7 @@ mod tests {
     use super::*;
 
     fn key(code: u32) -> Key {
-        let mut style = [0; 9];
+        let mut style = [0; 10];
         style[0] = code;
         (Arc::from(&b"test face"[..]), style, None)
     }

@@ -109,6 +109,42 @@ assert.equal(resumed.pixels().length,64*48*4);
 assert.equal(resumed.tick(16,new Uint8Array(),-1,-1,true),1);
 assert.ok(fs.size('/user/system.bak')>0);
 resumed.free();
+
+// Launch overrides for anti-aliasing and render scale apply during construction before
+// validating cmvs.cfg values, and explicit "off" overrides ANTI_ALIASING=1 in cmvs.cfg.
+const withCfg = cfg => {
+  const copy = new BrowserFiles(bytes => bytes);
+  for (const [path, file] of fs.files) {
+    const rel = path.slice('/game/'.length);
+    if (rel !== 'cmvs.cfg') copy.mount(rel, file);
+  }
+  mount('cmvs.cfg', new TextEncoder().encode(cfg), copy);
+  return copy;
+};
+globalThis.cmvsFs = withCfg('[WINDOW_RESOLVING]\nBASE=64,48\n[CMVS_RS_DISPLAY]\nANTI_ALIASING=1\nRENDER_SCALE=bogus\n');
+assert.throws(
+  () => new WebRuntime(new Uint8Array(readFileSync(font)), 0, profile, false),
+  /RENDER_SCALE/,
+);
+const overridden = new WebRuntime(
+  new Uint8Array(readFileSync(font)),
+  0,
+  profile,
+  false,
+  undefined,
+  undefined,
+  'off',
+  '2x',
+);
+assert.equal(overridden.anti_aliasing(), false);
+assert.equal(overridden.set_anti_aliasing, undefined);
+assert.equal(overridden.set_render_scale, undefined);
+overridden.free();
+globalThis.cmvsFs = withCfg('[WINDOW_RESOLVING]\nBASE=64,48\n[CMVS_RS_DISPLAY]\nANTI_ALIASING=1\nRENDER_SCALE=2x\n');
+const inherited = new WebRuntime(new Uint8Array(readFileSync(font)), 0, profile, false);
+assert.equal(inherited.anti_aliasing(), true);
+inherited.free();
+globalThis.cmvsFs = fs;
 console.log('Wasm smoke passed: archive I/O, budget slices, text output, complete frame, CSS1 writes/backups, preferences, restart, streaming BGM/SE/voice, refill, quit, drop');
 
 const commentFiles = new BrowserFiles(bytes => bytes);

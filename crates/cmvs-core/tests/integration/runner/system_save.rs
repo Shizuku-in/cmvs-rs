@@ -2,7 +2,10 @@ use super::*;
 
 #[test]
 fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
-    use cmvs_core::{host::settings::DisplayPreferences, render::raster::ScaleFilter};
+    use cmvs_core::{
+        host::settings::DisplayPreferences,
+        render::raster::{RenderScale, ScaleFilter},
+    };
     let mut code = vec![];
     for (op, value) in [
         (0x22e1, 7),
@@ -18,7 +21,7 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     }
     code.extend(0x2000u16.to_le_bytes());
     let root = Root::new("preferences", &code, b"");
-    let original = b"[SOUND_INFO]\nINACTIVE_SOUND_PLAY=0\n[MESSAGE_INFO]\nTEXT_WAIT=2\nTEXT_BOLD=0\nTEXT_REVISION_ALPHA=1\n[CMVS_RS_DISPLAY]\nSCALE_FILTER=lanczos4\n[FUTURE]\nUNKNOWN=\x82\xa0\n";
+    let original = b"[SOUND_INFO]\nINACTIVE_SOUND_PLAY=0\n[MESSAGE_INFO]\nTEXT_WAIT=2\nTEXT_BOLD=0\nTEXT_REVISION_ALPHA=1\n[CMVS_RS_DISPLAY]\nSCALE_FILTER=lanczos4\nANTI_ALIASING=1\nRENDER_SCALE=2x\n[FUTURE]\nUNKNOWN=\x82\xa0\n";
     fs::write(root.0.join("cmvs.cfg"), original).unwrap();
     let directory = crate::support::temp_dir::TempPath::in_target_tmp("preferences");
     let script = root.script();
@@ -50,6 +53,53 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
         assert_eq!(run.scale_filter_override(Some(name)).unwrap(), Some(filter));
     }
     assert!(run.scale_filter_override(Some("Typo")).is_err());
+    assert!(run.anti_aliasing_override(None).unwrap());
+    assert!(!run.anti_aliasing_override(Some("off")).unwrap());
+    assert!(!run.anti_aliasing_override(Some("0")).unwrap());
+    assert!(run.anti_aliasing_override(Some("on")).unwrap());
+    assert!(run.anti_aliasing_override(Some("1")).unwrap());
+    assert!(run.anti_aliasing_override(Some("Typo")).is_err());
+    assert_eq!(run.render_scale_override(None).unwrap(), RenderScale::X2);
+    for (name, scale) in [
+        ("1x", RenderScale::Original),
+        ("auto", RenderScale::Auto),
+        ("1.5x", RenderScale::X1_5),
+        ("2x", RenderScale::X2),
+        ("3x", RenderScale::X3),
+    ] {
+        assert_eq!(run.render_scale_override(Some(name)).unwrap(), scale);
+    }
+    assert!(run.render_scale_override(Some("Typo")).is_err());
+    assert_eq!(
+        RenderScale::Auto.resolve([1280, 720], Some([2388, 1343]), 8192),
+        [2388, 1343]
+    );
+    assert_eq!(
+        RenderScale::Auto.resolve([1280, 720], Some([5120, 2880]), 8192),
+        [3840, 2160]
+    );
+    assert_eq!(
+        RenderScale::Auto.resolve([1280, 720], Some([960, 540]), 8192),
+        [1280, 720]
+    );
+    assert_eq!(
+        RenderScale::X1_5.resolve([1280, 720], None, 8192),
+        [1920, 1080]
+    );
+    // Applying logical-size floors in Auto mode must never exceed the MAX_PAYLOAD / 4 pixel budget.
+    assert_eq!(
+        RenderScale::Auto.resolve([4096, 2048], Some([2048, 8192]), 8192),
+        [4096, 4096]
+    );
+    assert_eq!(
+        RenderScale::Auto.resolve([2048, 4096], Some([8192, 2048]), 8192),
+        [4096, 4096]
+    );
+    let capped_4k = RenderScale::X2.resolve([3840, 2160], None, 8192);
+    assert!(
+        u64::from(capped_4k[0]) * u64::from(capped_4k[1]) <= (cmvs_core::MAX_PAYLOAD / 4) as u64
+    );
+    assert!(capped_4k[0] >= 3840 && capped_4k[1] >= 2160);
     let mut backend = RecordingBackend::default();
     let mut yielded = false;
     for _ in 0..100 {

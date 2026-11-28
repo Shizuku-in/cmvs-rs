@@ -267,10 +267,21 @@ pub trait GlyphMetrics: std::fmt::Debug + Send {
 /// in straight-alpha RGBA, matching the engine's glyph-cell convention.
 pub trait GlyphRasterizer {
     /// Rasterize `glyph` into an [`RgbaImage`](crate::raster::RgbaImage).
+    /// High-DPI backends may return a proportionally larger square bitmap whose side exceeds
+    /// `glyph.size + 4`; callers scale the resulting quad back to logical pixels.
     fn rasterize_glyph(
         &mut self,
         glyph: &RecordedGlyph,
     ) -> Result<crate::raster::RgbaImage, crate::FormatError>;
+
+    /// Rasterize `glyph` strictly at 1x logical pixels (`glyph.size + 4`). Used for glyphs
+    /// bound to screen-space second-texture masks, which require unscaled `Layer::Image` draws.
+    fn rasterize_glyph_unscaled(
+        &mut self,
+        glyph: &RecordedGlyph,
+    ) -> Result<crate::raster::RgbaImage, crate::FormatError> {
+        self.rasterize_glyph(glyph)
+    }
 
     /// Draw a glyph whose coverage comes from a game-supplied bitmap.
     fn rasterize_bitmap_glyph(
@@ -599,11 +610,21 @@ impl MessageHost {
                 visible_glyphs += 1;
                 let pixels = match self.glyph_mask(glyph) {
                     Some(mask) => rasterizer.rasterize_bitmap_glyph(glyph, mask)?,
+                    None if self.cvns.is_some() => rasterizer.rasterize_glyph_unscaled(glyph)?,
                     None => rasterizer.rasterize_glyph(glyph)?,
                 };
                 let mut draw = crate::scene::DrawState::default();
-                draw.words[4] = glyph.reveal_width.min(pixels.width());
-                draw.words[5] = pixels.height();
+                let logical_side = glyph.size + 4;
+                if pixels.height() > logical_side {
+                    let exact_scale = pixels.height() as f32 / logical_side as f32;
+                    draw.words[4] = ((glyph.reveal_width as f32 * exact_scale).round() as u32)
+                        .min(pixels.width());
+                    draw.words[5] = pixels.height();
+                    draw.words[18..20].fill((1.0 / exact_scale).to_bits());
+                } else {
+                    draw.words[4] = glyph.reveal_width.min(pixels.width());
+                    draw.words[5] = pixels.height();
+                }
                 draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
                 draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
                 draw.words[10] = text.layer as u32;
@@ -647,7 +668,7 @@ impl MessageHost {
                 ..SceneObject::default()
             };
             for glyph in group.attached_glyphs() {
-                let pixels = rasterizer.rasterize_glyph(&RecordedGlyph {
+                let recorded = RecordedGlyph {
                     snapshot_indices: None,
                     face: glyph.face.clone(),
                     bold: false,
@@ -666,10 +687,20 @@ impl MessageHost {
                     opacity: 255,
                     reveal_mode: 0,
                     reveal_width: glyph.size + 4,
-                })?;
+                };
+                let pixels = if group.secondary_image.is_some() || self.cvns.is_some() {
+                    rasterizer.rasterize_glyph_unscaled(&recorded)?
+                } else {
+                    rasterizer.rasterize_glyph(&recorded)?
+                };
                 let mut draw = crate::scene::DrawState::default();
+                let logical_side = glyph.size + 4;
                 draw.words[4] = pixels.width();
                 draw.words[5] = pixels.height();
+                if pixels.height() > logical_side {
+                    let exact_scale = pixels.height() as f32 / logical_side as f32;
+                    draw.words[18..20].fill((1.0 / exact_scale).to_bits());
+                }
                 draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
                 draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
                 draw.words[10] = glyph.layer;
